@@ -2,8 +2,8 @@ import csv
 import io
 import urllib
 
-import DerivativeUtils as outil
-import Utils as util
+import TradingScripts.DerivativeUtils as outil
+import TradingScripts.Utils as util
 import requests
 from urllib.request import Request, urlopen
 import json

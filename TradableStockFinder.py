@@ -2,8 +2,8 @@ import traceback
 import urllib.parse
 import GenericStatPrinter as gstats
 import DerivativeUtils as outil
-import ScrapUtils as sutils
-import Utils as util
+import TradingScripts.ScrapUtils as sutils
+import TradingScripts.Utils as util
 import os
 from datetime import datetime
 

@@ -1,15 +1,18 @@
 import os
 import traceback
-from datetime import datetime
-
-import Utils as util
+from datetime import datetime, timedelta, date, time
+import time
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-import ScrapUtils as sutils
+import TradingScripts.ScrapUtils as sutils
+import TradingScripts.Utils as util
 from mpl_finance import candlestick_ohlc
+from TradingScripts.ZerodhaInstMap import instruments_map
 
-max_data_len = 60
+kite = util.intialize_kite_api()
+
+max_data_len = 120
 today_date_str = datetime.now().strftime ('%b-%d-%Y')
 tradable_stocks = sutils.get_nse_fo_stocks()
 # tradable_stocks = sutils.get_tradable_stocks_ids()
@@ -17,7 +20,7 @@ tradable_stocks = sutils.get_nse_fo_stocks()
 # tradable_stocks.extend(top_20_traded_stocks)
 # tradable_stocks = sutils.get_all_nse_stocks_ids()
 
-candle_stick_chart_dir = ['G:', 'F:'][os.path.exists('F:')] + '/CandleSticks/'
+candle_stick_chart_dir = ['G:', 'D:'][os.path.exists('D:')] + '/CandleSticks/'
 
 counter = 1
 for stock in tradable_stocks:
@@ -29,7 +32,11 @@ for stock in tradable_stocks:
             print(stock[sutils.STOCK_ID] + ' candles already printed.')
             continue
 
-        stock_datas = util.get_equity_historical_data (stock[sutils.STOCK_ID])
+        if stock[sutils.STOCK_ID] not in instruments_map:
+            print(stock[sutils.STOCK_ID] + ' not in map.')
+            continue
+
+        stock_datas = kite.historical_data(instruments_map[stock[sutils.STOCK_ID]], date.today() - timedelta(max_data_len), date.today(), 'day')
 
         lows = []
         opens = []
@@ -94,6 +101,8 @@ for stock in tradable_stocks:
         fig.clf()
         plt.close()
         ax.cla()
+
+        time.sleep(1)
 
     except Exception:
         print(traceback.format_exc())

@@ -7,21 +7,21 @@ import time
 import traceback
 from datetime import timedelta
 
-import DerivativeUtils as d_util
+import TradingScripts.DerivativeUtils as d_util
 # import Indicators as ind
-import ScrapUtils as sutils
+import TradingScripts.ScrapUtils as sutils
 import pandas as pd
-from PatternRecognition import *
+from TradingScripts.PatternRecognition import *
 from dateutil import parser
 from kiteconnect import KiteConnect
-from upstox_api.api import *
+# from upstox_api.api import *
 import tempfile
 NSE = 'NSE:'
 NFO = 'NFO:'
 
 UPSTOX_API_KEY = '5LfPWD6ZJh8MqTeHvikvU6USVnK6w1uk7imllV2z'
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_API_SECRET = '0xvd7sw5e1gr631zk1or01k16ljyrhjv'
+KITE_API_SECRET = 'c15l0pcg2gvuw70e4i45pdmur9y1sztc'
 
 STOCK_DATA_OBJ_FILE = 'F:/Trading_Responses/StockDataObj'
 INSTRUMENT_LATEST_DATA_FILE = 'F:/IntrumentLatestDataFileName.txt'
@@ -206,16 +206,16 @@ def calculate_last_10_days_average_volume(last_10_day_stock_data):
     return sum (stock['volume'] for stock in last_10_day_stock_data) / len (last_10_day_stock_data)
 
 
-def intialize_upstox_api(contracts):
-    with open (UPSTOX_LATEST_ACCESS_CODE_FILE, 'r') as the_file:
-        upstox_latest_access_code = the_file.readline ()
-
-    upstox_api = Upstox (UPSTOX_API_KEY, upstox_latest_access_code)
-
-    for contract in contracts:
-        upstox_api.get_master_contract (contract)
-
-    return upstox_api
+# def intialize_upstox_api(contracts):
+#     with open (UPSTOX_LATEST_ACCESS_CODE_FILE, 'r') as the_file:
+#         upstox_latest_access_code = the_file.readline ()
+#
+#     upstox_api = Upstox (UPSTOX_API_KEY, upstox_latest_access_code)
+#
+#     for contract in contracts:
+#         upstox_api.get_master_contract (contract)
+#
+#     return upstox_api
 
 
 def intialize_kite_api():
@@ -245,58 +245,58 @@ def trim_date(end_date):
     return new_date
 
 
-def get_stock_latest_data(stock_id, upstox_api, start_date, end_date, exchange, stocks_data_obj=None,
-                          fetch_livefeed=True, interval=OHLCInterval.Day_1):
-    stock_data = None
-
-    end_date = trim_date (end_date)
-    if stocks_data_obj is not None:
-        stocks_data_obj_key = get_stock_date_str_for_pickle(stock_id, end_date)
-        if stocks_data_obj_key in stocks_data_obj:
-            stock_data = stocks_data_obj[stocks_data_obj_key]
-
-    if stock_data is None:
-        print('Empty cache for stock', stock_id)
-        stock_data = upstox_api.get_ohlc (upstox_api.get_instrument_by_symbol (exchange, stock_id), interval,
-                                          start_date, end_date)
-
-        if stocks_data_obj is not None:
-            stocks_data_obj_key = get_stock_date_str_for_pickle (stock_id,
-                                                                 get_date_from_timestamp(
-                                                                     int(stock_data[-1]['timestamp'])))
-            stocks_data_obj[stocks_data_obj_key] = stock_data
-            pickle.dump (stocks_data_obj, open (STOCK_DATA_OBJ_FILE, 'wb'))
-
-    if fetch_livefeed:
-        stock_live_feed_data = upstox_api.get_live_feed (upstox_api.get_instrument_by_symbol (exchange, stock_id),
-                                                         LiveFeedType.Full)
-
-        live_feed_date = datetime.datetime.fromtimestamp(stock_live_feed_data['timestamp'] / 1000)
-        if live_feed_date.date () == datetime.datetime.today ().date ():
-            volume = 0
-            if 'vtt' in stock_live_feed_data:
-                volume = stock_live_feed_data['vtt']
-
-            stock_data.append({'timestamp': stock_live_feed_data['timestamp'], 'open': stock_live_feed_data['open'],
-                               'high': stock_live_feed_data['high'], 'low': stock_live_feed_data['low'],
-                               'close': stock_live_feed_data['ltp'], 'volume': volume,
-                               'cp': stock_live_feed_data['ltp'], 'yearly_low': stock_live_feed_data['yearly_low'],
-                               'yearly_high': stock_live_feed_data['yearly_high']})
-
-        for stock in stock_data:
-            stock.update(
-                {'yearly_low': stock_live_feed_data['yearly_low'], 'yearly_high': stock_live_feed_data['yearly_high']})
-
-    for stock in stock_data:
-        stock['close'] = float(stock['close'])
-        stock['open'] = float(stock['open'])
-        stock['high'] = float(stock['high'])
-        stock['low'] = float(stock['low'])
-        stock['timestamp'] = int(stock['timestamp'])
-        if 'volume' in stock:
-            stock['volume'] = int(stock['volume'])
-
-    return stock_data
+# def get_stock_latest_data(stock_id, upstox_api, start_date, end_date, exchange, stocks_data_obj=None,
+#                           fetch_livefeed=True, interval=OHLCInterval.Day_1):
+#     stock_data = None
+#
+#     end_date = trim_date (end_date)
+#     if stocks_data_obj is not None:
+#         stocks_data_obj_key = get_stock_date_str_for_pickle(stock_id, end_date)
+#         if stocks_data_obj_key in stocks_data_obj:
+#             stock_data = stocks_data_obj[stocks_data_obj_key]
+#
+#     if stock_data is None:
+#         print('Empty cache for stock', stock_id)
+#         stock_data = upstox_api.get_ohlc (upstox_api.get_instrument_by_symbol (exchange, stock_id), interval,
+#                                           start_date, end_date)
+#
+#         if stocks_data_obj is not None:
+#             stocks_data_obj_key = get_stock_date_str_for_pickle (stock_id,
+#                                                                  get_date_from_timestamp(
+#                                                                      int(stock_data[-1]['timestamp'])))
+#             stocks_data_obj[stocks_data_obj_key] = stock_data
+#             pickle.dump (stocks_data_obj, open (STOCK_DATA_OBJ_FILE, 'wb'))
+#
+#     if fetch_livefeed:
+#         stock_live_feed_data = upstox_api.get_live_feed (upstox_api.get_instrument_by_symbol (exchange, stock_id),
+#                                                          LiveFeedType.Full)
+#
+#         live_feed_date = datetime.datetime.fromtimestamp(stock_live_feed_data['timestamp'] / 1000)
+#         if live_feed_date.date () == datetime.datetime.today ().date ():
+#             volume = 0
+#             if 'vtt' in stock_live_feed_data:
+#                 volume = stock_live_feed_data['vtt']
+#
+#             stock_data.append({'timestamp': stock_live_feed_data['timestamp'], 'open': stock_live_feed_data['open'],
+#                                'high': stock_live_feed_data['high'], 'low': stock_live_feed_data['low'],
+#                                'close': stock_live_feed_data['ltp'], 'volume': volume,
+#                                'cp': stock_live_feed_data['ltp'], 'yearly_low': stock_live_feed_data['yearly_low'],
+#                                'yearly_high': stock_live_feed_data['yearly_high']})
+#
+#         for stock in stock_data:
+#             stock.update(
+#                 {'yearly_low': stock_live_feed_data['yearly_low'], 'yearly_high': stock_live_feed_data['yearly_high']})
+#
+#     for stock in stock_data:
+#         stock['close'] = float(stock['close'])
+#         stock['open'] = float(stock['open'])
+#         stock['high'] = float(stock['high'])
+#         stock['low'] = float(stock['low'])
+#         stock['timestamp'] = int(stock['timestamp'])
+#         if 'volume' in stock:
+#             stock['volume'] = int(stock['volume'])
+#
+#     return stock_data
 
 
 def get_future_historical_data(stock_id, future_current_month_historical_data, future_near_month_historical_data,

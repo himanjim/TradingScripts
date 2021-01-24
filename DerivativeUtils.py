@@ -16,7 +16,7 @@ import Utils as util
 import requests
 from bs4 import BeautifulSoup
 from dateutil.relativedelta import relativedelta, TH
-from upstox_api.api import TransactionType, OrderType, ProductType, DurationType
+# from upstox_api.api import TransactionType, OrderType, ProductType, DurationType
 
 max_pain_safety_buffer = .05
 max_liquidity_margin = .2
@@ -199,16 +199,16 @@ def run_fetch_options(options, fetched_options, today_date):
     loop.run_until_complete(fetch_options(options, fetched_options, today_date))
 
 
-def buy_instrument(upstox_api, symbol, exchange, price, lot_size, orderType=OrderType.Limit, stoploss=None):
-    if buy_sell_enabled:
-        upstox_api.place_order(TransactionType.Buy, upstox_api.get_instrument_by_symbol(exchange, symbol), lot_size,
-                               orderType, ProductType.Delivery, price, None, None, DurationType.DAY, stoploss, None)
-
-
-def sell_instrument(upstox_api, symbol, exchange, price, lot_size, orderType=OrderType.Limit, stoploss=None):
-    if buy_sell_enabled:
-        upstox_api.place_order(TransactionType.Sell, upstox_api.get_instrument_by_symbol(exchange, symbol), lot_size,
-                               orderType, ProductType.Delivery, price, None, None, DurationType.DAY, stoploss, None)
+# def buy_instrument(upstox_api, symbol, exchange, price, lot_size, orderType=OrderType.Limit, stoploss=None):
+#     if buy_sell_enabled:
+#         upstox_api.place_order(TransactionType.Buy, upstox_api.get_instrument_by_symbol(exchange, symbol), lot_size,
+#                                orderType, ProductType.Delivery, price, None, None, DurationType.DAY, stoploss, None)
+#
+#
+# def sell_instrument(upstox_api, symbol, exchange, price, lot_size, orderType=OrderType.Limit, stoploss=None):
+#     if buy_sell_enabled:
+#         upstox_api.place_order(TransactionType.Sell, upstox_api.get_instrument_by_symbol(exchange, symbol), lot_size,
+#                                orderType, ProductType.Delivery, price, None, None, DurationType.DAY, stoploss, None)
 
 
 def is_option_outside_1_sd(stock_price_range, strike_price):

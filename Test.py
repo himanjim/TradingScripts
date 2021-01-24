@@ -13,17 +13,27 @@ import traceback
 from urllib.request import Request, urlopen
 
 # import face_recognition
-import DerivativeUtils as dutil
-import GenericStatPrinter as gstats
-import ScrapUtils as sUtils
-import Utils as util
-from UpDownGapUtils import get_fo_stock_ids
+import TradingScripts.DerivativeUtils as dutil
+# import TradingScripts.GenericStatPrinter as gstats
+import TradingScripts.ScrapUtils as sUtils
+import TradingScripts.Utils as util
+from TradingScripts.UpDownGapUtils import get_fo_stock_ids
 from pytz import timezone, utc
-kite = util.intialize_kite_api()
-print(kite.quote('NSE:HDFC'))
-exit(0)
+# kite = util.intialize_kite_api()
+# print(kite.historical_data(260105, datetime.datetime(2021, 1, 1), datetime.datetime(2021, 1, 1), 'day'))
+# exit(0)
+#
+# print(int(round(19249 / 100.0) * 100))
 
-print(int(round(19249 / 100.0) * 100))
+instruments_map = {}
+with open('C:/Users/himan/Downloads/NSE_small.csv') as csv_file:
+    csv_reader = csv.reader(csv_file, delimiter=',')
+    line_count = 0
+    for row in csv_reader:
+        instruments_map[row[1]] = row[0]
+
+print(instruments_map)
+
 exit(0)
 # lines_to_write = '####Bought:' + ' at CE:' + ' and PE:'
 # lines_to_write += '####Bought:'
