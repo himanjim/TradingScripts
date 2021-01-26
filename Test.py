@@ -19,11 +19,32 @@ import TradingScripts.ScrapUtils as sUtils
 import TradingScripts.Utils as util
 from TradingScripts.UpDownGapUtils import get_fo_stock_ids
 from pytz import timezone, utc
-# kite = util.intialize_kite_api()
-# print(kite.historical_data(260105, datetime.datetime(2021, 1, 1), datetime.datetime(2021, 1, 1), 'day'))
-# exit(0)
+
+x = datetime.datetime(2018, 9, 15)
+
+print(x.strftime("%b %d %Y %H:%M:%S"))
+
+exit(0)
+
+kite = util.intialize_kite_api()
+# print(kite.instruments())
+print(kite.historical_data(260105, datetime.datetime(2021, 1, 22), datetime.datetime(2021, 1, 25), '3minute'))
+exit(0)
 #
 # print(int(round(19249 / 100.0) * 100))
+
+timestamp = datetime.datetime(2021, 1, 25, 15, 10, 6)
+print(timestamp.hour)
+print(timestamp.minute)
+hr = 9
+min =18
+print(int((hr * 60) + (int(min/3) * 3)))
+candles = {}
+candles[123] = {'1': 12, 'LOW': 13}
+print(candles)
+candles[123]['LOW'] = 14
+print(candles)
+exit(0)
 
 instruments_map = {}
 with open('C:/Users/himan/Downloads/NSE_small.csv') as csv_file:

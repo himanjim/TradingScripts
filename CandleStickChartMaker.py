@@ -14,7 +14,7 @@ kite = util.intialize_kite_api()
 
 max_data_len = 120
 today_date_str = datetime.now().strftime ('%b-%d-%Y')
-tradable_stocks = sutils.get_nse_fo_stocks()
+tradable_stocks = sutils.get_all_nse200_stocks_ids()
 # tradable_stocks = sutils.get_tradable_stocks_ids()
 # top_20_traded_stocks = sutils.get_top_20_nse_traded_stocks(tradable_stocks)
 # tradable_stocks.extend(top_20_traded_stocks)

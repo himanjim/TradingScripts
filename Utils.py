@@ -6,7 +6,7 @@ import pickle
 import time
 import traceback
 from datetime import timedelta
-
+from kiteconnect import KiteTicker
 import TradingScripts.DerivativeUtils as d_util
 # import Indicators as ind
 import TradingScripts.ScrapUtils as sutils
@@ -232,6 +232,15 @@ def intialize_kite_api():
         raise
 
     return kite
+
+
+def intialize_kite_ticker():
+    with open (KITE_LATEST_ACCESS_CODE_FILE, 'r') as the_file:
+        kite_latest_access_code = the_file.readline ()
+
+    kite = KiteConnect (api_key=KITE_API_KEY)
+
+    return KiteTicker(KITE_API_KEY, kite_latest_access_code)
 
 
 def trim_date(end_date):

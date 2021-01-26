@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 NSE_CSV_FILE_URL='https://www1.nseindia.com/content/equities/EQUITY_L.csv'
 BSE_CSV_FILE_LOCATION='C:/Users/Admin/Desktop/ListOfScrips.csv'
 NIFTY100_STOCKS_URL='https://www.nseindia.com/content/indices/ind_nifty100list.csv'
+NIFTY200_STOCKS_URL='https://www1.nseindia.com/content/indices/ind_nifty200list.csv'
 NIFTY50_STOCKS_URL = 'https://www.nseindia.com/content/indices/ind_nifty50list.csv'
 NSE_FO_STOCKS_URL = 'https://www1.nseindia.com/content/fo/fo_mktlots.csv'
 TRADABLE_EXCEL_LOCATION = 'C:/Users/Admin/Desktop/TradableStocks.csv'
@@ -106,6 +107,23 @@ def get_top_20_nse_traded_stocks(tradable_stocks):
         top_20_traded_stocks.append ({STOCK_ID: stock_id.replace('NSE:', ''), EXCHANGE: NSE, NSE_FO: ''})
 
     return top_20_traded_stocks
+
+
+def get_all_nse200_stocks_ids():
+    nse_stocks = []
+    res = requests.get (NIFTY200_STOCKS_URL, headers=outil.FUTURE_HEADERS)
+
+    with res as csv_file:
+        csv_reader = csv.reader (io.StringIO (csv_file.text), delimiter=',')
+        line_count = 0
+        for row in csv_reader:
+            if line_count > 0 and row[3] == 'EQ':
+                nse_stocks.append ({STOCK_ID: (row[2]).strip (), EXCHANGE: NSE, NSE_FO: ''})
+
+            line_count += 1
+
+    return nse_stocks
+
 
 
 def get_all_nse_stocks_ids():
