@@ -53,7 +53,7 @@ if __name__ == '__main__':
     ####################################
     DRIVE = 'E:'
     files_pattern = DRIVE + '/BN OLD DATA/*.csv'
-    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042015to20032024.csv'
+    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042015to04042024.csv'
     UNDERLYING = 'BN'
     NO_DAYS_TO_EXPIRY = 2
     HEDGE_STRIKE_DIFFERENCE = 1000
@@ -108,8 +108,8 @@ if __name__ == '__main__':
                 buy_call_entry_price = float(df_part.loc[(df_part['Strike Price  '] == buy_call_strike) & (df_part['Option type  '] == 'CE')]['Close  '].iloc[0])
 
                 df_part = df.loc[(df['Date  '] == expiry_date_str) & (df['Expiry  '] == expiry_date_str)]
-                buy_put_exit_price = float(df_part.loc[(df_part['Strike Price  '] == buy_put_strike) & (df_part['Option type  '] == 'PE')]['Close  '].iloc[0])
-                buy_call_exit_price = float(df_part.loc[(df_part['Strike Price  '] == buy_call_strike) & (df_part['Option type  '] == 'CE')]['Close  '].iloc[0])
+                buy_put_exit_price = float(df_part.loc[(df_part['Strike Price  '] == buy_put_strike) & (df_part['Option type  '] == 'PE')]['Open  '].iloc[0])
+                buy_call_exit_price = float(df_part.loc[(df_part['Strike Price  '] == buy_call_strike) & (df_part['Option type  '] == 'CE')]['Open  '].iloc[0])
 
                 p_l = (buy_call_exit_price + buy_put_exit_price) - (buy_put_entry_price + buy_call_entry_price)
 

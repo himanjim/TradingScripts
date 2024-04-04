@@ -92,7 +92,7 @@ def find_second_trade_pl(df_, sell_call_strike_, sell_call_entry_price_, sell_pu
             unavoidable_loss = sell_call_entry_price_ + sell_put_entry_price_ - sell_call_open_price - sell_put_open_price
             p_l_f_strangle_, p_l_, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_ = second_trade_pl_calculations(under_lying_value_open, df_part_, trading_date_, expiry_date_str_, strike_difference_)
 
-            return unavoidable_loss, under_lying_value_open, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, p_l_, p_l_f_strangle_, trading_date_
+            return unavoidable_loss, under_lying_value_open, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, p_l_, p_l_f_strangle_, datetime.strptime(trading_date_, '%d-%b-%Y')
 
         sell_call_high_price = float(df_part_.loc[(df_part_['Strike Price  '] == sell_call_strike_) & (df_part_['Option type  '] == 'CE') & (df_part_['Date  '] == trading_date_)]['High  '].iloc[0])
         sell_call_low_price = float(df_part_.loc[(df_part_['Strike Price  '] == sell_call_strike_) & (df_part_['Option type  '] == 'CE') & (df_part_['Date  '] == trading_date_)]['Low  '].iloc[0])
@@ -112,7 +112,7 @@ def find_second_trade_pl(df_, sell_call_strike_, sell_call_entry_price_, sell_pu
                 p_l_f_strangle_ =  calculate_expiry_day_strangle_pl(under_lying_value_orig_new_, df_part_, expiry_date_str_)
                 p_l_f_strangle_ = maximum_beareable_loss if p_l_f_strangle_ < maximum_beareable_loss else p_l_f_strangle_
 
-            return None, under_lying_value_close, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, p_l_, p_l_f_strangle_, trading_date_
+            return None, under_lying_value_close, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, p_l_, p_l_f_strangle_, datetime.strptime(trading_date_, '%d-%b-%Y')
 
         if (sell_call_entry_price_ + sell_put_entry_price_ - sell_put_high_price - sell_call_low_price) < maximum_beareable_loss:
             p_l_f_strangle_, p_l_, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_ = second_trade_pl_calculations(under_lying_value_close, df_part_, trading_date_, expiry_date_str_, strike_difference_)
@@ -123,7 +123,7 @@ def find_second_trade_pl(df_, sell_call_strike_, sell_call_entry_price_, sell_pu
                 under_lying_value_orig_new_ = round(under_lying_value_orig_new_ / 100) * 100
                 p_l_f_strangle_ =  calculate_expiry_day_strangle_pl(under_lying_value_orig_new_, df_part_, expiry_date_str_)
 
-            return None, under_lying_value_close, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, p_l_, p_l_f_strangle_, trading_date_
+            return None, under_lying_value_close, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, p_l_, p_l_f_strangle_, datetime.strptime(trading_date_, '%d-%b-%Y')
 
     return None, None, None, None, None, None, 0, 0, None
 
@@ -133,7 +133,7 @@ if __name__ == '__main__':
     ####################################
     DRIVE = 'E:'
     files_pattern = DRIVE + '/BN OLD DATA/*.csv'
-    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042015to20032024.csv'
+    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042015to04042024.csv'
     UNDERLYING = 'BN'
     STRIKE_DIFF_PERCENT = .0
     NO_DAYS_TO_EXPIRY = 2
@@ -251,23 +251,23 @@ if __name__ == '__main__':
         print("Strike Difference:", STRIKE_DIFF_PERCENT)
         print("Days to expiry:", NO_DAYS_TO_EXPIRY)
 
-        print("\n P/L year wise \n:", excel_df.groupby(pd.Grouper(key='TRADE DATE', freq='Y'))['P/L'].sum().reset_index())
+        print("\n P/L year wise \n:", excel_df.groupby(pd.Grouper(key='TRADE DATE', freq='YE'))['P/L'].sum().reset_index())
         print("Total P/L:", round(excel_df['P/L'].sum(), 1))
         print("Accuracy(P/L):", round(excel_df['PROFIT'].sum() / excel_df.shape[0], 3))
 
-        print("\n MGD PROFIT year wise: \n", excel_df.groupby(pd.Grouper(key='TRADE DATE', freq='Y'))['MGD PROFIT'].sum().reset_index())
+        print("\n MGD PROFIT year wise: \n", excel_df.groupby(pd.Grouper(key='TRADE DATE', freq='YE'))['MGD PROFIT'].sum().reset_index())
         print("MGD PROFIT:", round(excel_df['MGD PROFIT'].sum(), 1))
         print("Accuracy(MGD PROFIT):", round(excel_df['MGD P/L'].sum() / excel_df.shape[0], 3))
 
         print("\n STRANGLE PROFIT:", excel_df['STRANGLE P/L'].sum())
         print("Accuracy(STRANGLE PROFIT):", round(excel_df['STRANGLE SELL PROFIT'].sum() / len(excel_df[excel_df['MGD P/L'] == 0]), 3))
         print("\n STRANGLE P/L MGD:", excel_df['STRANGLE P/L MGD'].sum())
-        print("\n STRANGLE PROFIT MGD year wise: \n", excel_df.groupby(pd.Grouper(key='TRADE DATE', freq='Y'))['STRANGLE P/L MGD'].sum().reset_index())
+        print("\n STRANGLE PROFIT MGD year wise: \n", excel_df.groupby(pd.Grouper(key='TRADE DATE', freq='YE'))['STRANGLE P/L MGD'].sum().reset_index())
 
         print("\n FULL STRANGLE PROFIT:", excel_df['FULL STRANGLE P/L'].sum())
         print("Accuracy(FULL STRANGLE PROFIT):", round(excel_df['FULL STRANGLE SELL PROFIT'].sum() / len(excel_df[excel_df['MGD P/L'] == 0]), 3))
         print("\n FULL STRANGLE P/L MGD:", excel_df['FULL STRANGLE P/L MGD'].sum())
-        print("\n FULL STRANGLE PROFIT MGD year wise: \n", excel_df.groupby(pd.Grouper(key='TRADE DATE', freq='Y'))['FULL STRANGLE P/L MGD'].sum().reset_index())
+        print("\n FULL STRANGLE PROFIT MGD year wise: \n", excel_df.groupby(pd.Grouper(key='TRADE DATE', freq='YE'))['FULL STRANGLE P/L MGD'].sum().reset_index())
 
         print("\n Total Unavoidable losses:", excel_df['UNAVOID. LOSS'].sum())
         print('\n###################')
