@@ -131,9 +131,9 @@ def find_second_trade_pl(df_, sell_call_strike_, sell_call_entry_price_, sell_pu
 if __name__ == '__main__':
 
     ####################################
-    DRIVE = 'E:'
+    DRIVE = 'D:'
     files_pattern = DRIVE + '/BN OLD DATA/*.csv'
-    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042015to04042024.csv'
+    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042017to17042024.csv'
     UNDERLYING = 'BN'
     STRIKE_DIFF_PERCENT = .0
     NO_DAYS_TO_EXPIRY = 2
