@@ -54,14 +54,14 @@ def calculate_expiry_day_strangle_pl(under_lying_value_orig_new__, df_part__, tr
         minimum_pe_short_premium__ = min(df_part__.loc[(df_part__['Strike Price  '] == under_lying_value_orig_new__) & (df_part__['Option type  '] == 'PE') & (df_part__['Expiry  '] == expiry_date_str__) & (df_part__['date_obj'] >= trading_date_obj__)]['Low  '].apply(float))
 
         if max_prem_type__ == 'CE':
-            if (sell_put_open_price_ + sell_call_open_price_ - maximum_ce_short_premium__) < -100:
-                p_l_ = -100
+            if (sell_put_open_price_ + sell_call_open_price_ - maximum_ce_short_premium__) < (maximum_beareable_loss / 2):
+                p_l_ = (maximum_beareable_loss / 2)
             else:
                 # p_l_ = sell_put_open_price_ - sell_put_exit_price_
                 p_l_ = sell_call_open_price_ + sell_put_open_price_ - sell_call_exit_price_ - sell_put_exit_price_
         else:
-            if (sell_call_open_price_ + sell_put_open_price_ - maximum_pe_short_premium__) < -100:
-                p_l_ = -100
+            if (sell_call_open_price_ + sell_put_open_price_ - maximum_pe_short_premium__) < (maximum_beareable_loss / 2):
+                p_l_ = (maximum_beareable_loss / 2)
             else:
                 # p_l_ = sell_call_open_price_ - sell_call_exit_price_
                 p_l_ = sell_call_open_price_ + sell_put_open_price_ - sell_call_exit_price_ - sell_put_exit_price_
@@ -72,7 +72,7 @@ def calculate_expiry_day_strangle_pl(under_lying_value_orig_new__, df_part__, tr
 
     except Exception as e:
         print(traceback.format_exc())
-        return None
+        return None, None, None, None, None, None, None, None, None
 
 
 def find_second_trade_pl(df_, sell_call_strike_, sell_call_entry_price_, sell_put_strike_, sell_put_entry_price_, trading_date_obj_, expiry_date_str_, strike_difference_, under_lying_value_orig_):
@@ -88,17 +88,20 @@ def find_second_trade_pl(df_, sell_call_strike_, sell_call_entry_price_, sell_pu
         sell_put_high_price = float(df_part_.loc[(df_part_['Strike Price  '] == sell_put_strike_) & (df_part_['Option type  '] == 'PE') & (df_part_['Date  '] == trading_date_)]['High  '].iloc[0])
         sell_put_low_price = float(df_part_.loc[(df_part_['Strike Price  '] == sell_put_strike_) & (df_part_['Option type  '] == 'PE') & (df_part_['Date  '] == trading_date_)]['Low  '].iloc[0])
 
+        if (trading_date_ == '26-Apr-2024'):
+            pass
+
         if (sell_call_entry_price_ + sell_put_entry_price_ - sell_call_high_price - sell_put_low_price) < maximum_beareable_loss:
             under_lying_value_orig_new_ = sell_call_strike + (
                         (sell_put_entry_price + sell_call_entry_price - maximum_beareable_loss) * .9)
             under_lying_value_orig_new_ = round(under_lying_value_orig_new_ / 100) * 100
             p_l_f_strangle_, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, maximum_ce_short_premium_, maximum_pe_short_premium_, minimum_ce_short_premium_, minimum_pe_short_premium_ = calculate_expiry_day_strangle_pl(
                 under_lying_value_orig_new_, df_part_, trading_date_, expiry_date_str_, 'CE')
-            p_l_f_strangle_ = -100 if p_l_f_strangle_ < -100 else p_l_f_strangle_
-            p_l_ = p_l_f_strangle_
-            under_lying_value_close = under_lying_value_orig_new_
 
-            return None, under_lying_value_close, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, p_l_, p_l_f_strangle_, datetime.strptime(trading_date_, '%d-%b-%Y'), maximum_ce_short_premium_, maximum_pe_short_premium_, minimum_ce_short_premium_, minimum_pe_short_premium_
+            if p_l_f_strangle_ is not None:
+                p_l_f_strangle_ = (maximum_beareable_loss / 2) if p_l_f_strangle_ < (maximum_beareable_loss / 2) else p_l_f_strangle_
+
+            return None, under_lying_value_orig_new_, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, p_l_f_strangle_, p_l_f_strangle_, datetime.strptime(trading_date_, '%d-%b-%Y'), maximum_ce_short_premium_, maximum_pe_short_premium_, minimum_ce_short_premium_, minimum_pe_short_premium_
 
         if (sell_call_entry_price_ + sell_put_entry_price_ - sell_put_high_price - sell_call_low_price) < maximum_beareable_loss:
             # if trading_date_ == expiry_date_str_ and expiry_date_str_ == '17-Jan-2024':
@@ -108,14 +111,12 @@ def find_second_trade_pl(df_, sell_call_strike_, sell_call_entry_price_, sell_pu
             p_l_f_strangle_, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, maximum_ce_short_premium_, maximum_pe_short_premium_, minimum_ce_short_premium_, minimum_pe_short_premium_ = calculate_expiry_day_strangle_pl(
                 under_lying_value_orig_new_, df_part_, trading_date_, expiry_date_str_, 'PE')
 
-            p_l_f_strangle_ = -100 if p_l_f_strangle_ < -100 else p_l_f_strangle_
-            p_l_ = p_l_f_strangle_
-            under_lying_value_close = under_lying_value_orig_new_
-
+            if p_l_f_strangle_ is not None:
+                p_l_f_strangle_ = (maximum_beareable_loss / 2) if p_l_f_strangle_ < (maximum_beareable_loss / 2) else p_l_f_strangle_
                 # if p_l_f_strangle_ != p_l_:
                 #     pass
 
-            return None, under_lying_value_close, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, p_l_, p_l_f_strangle_, datetime.strptime(trading_date_, '%d-%b-%Y'), maximum_ce_short_premium_, maximum_pe_short_premium_, minimum_ce_short_premium_, minimum_pe_short_premium_
+            return None, under_lying_value_orig_new_, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, p_l_f_strangle_, p_l_f_strangle_, datetime.strptime(trading_date_, '%d-%b-%Y'), maximum_ce_short_premium_, maximum_pe_short_premium_, minimum_ce_short_premium_, minimum_pe_short_premium_
 
     return None, None, None, None, None, None, 0, 0, None, None, None, None, None
 
@@ -129,7 +130,7 @@ if __name__ == '__main__':
     UNDERLYING = 'BN'
     STRIKE_DIFF_PERCENT = 0.00
     NO_DAYS_TO_EXPIRY = 2
-    maximum_beareable_loss = -200
+    maximum_beareable_loss_per = -0.00416666666
     open_or_close = 'Open'
     ####################################
 
@@ -210,6 +211,8 @@ if __name__ == '__main__':
                 print(traceback.format_exc())
                 continue
 
+            maximum_beareable_loss = maximum_beareable_loss_per * under_lying_value
+
             max_short_premium =  maximum_ce_short_premium if maximum_ce_short_premium >= maximum_pe_short_premium else maximum_pe_short_premium
 
             maximum_loss = maximum_loss if max_short_premium != 0 else 0
@@ -229,7 +232,7 @@ if __name__ == '__main__':
                 managed_profit = unavoidable_loss
                 # managed_profit = p_l if p_l > maximum_beareable_loss else maximum_beareable_loss
 
-            trading_outputs.append([UNDERLYING, under_lying_value, trading_date_obj, expiry_date_obj, sell_put_strike, sell_put_entry_price, sell_put_exit_price, sell_call_strike, sell_call_entry_price, sell_call_exit_price, p_l, 1 if p_l > 0 else 0, managed_profit, 1 if managed_profit > 0 else 0, maximum_loss, max_short_premium, max_premium_type, under_lying_value_strangle, second_trading_date, strangle_call_open_price, strangle_call_exit_price, strangle_put_open_price, strangle_put_exit_price, strangle_p_l, 1 if strangle_p_l > 0 else 0, maximum_beareable_loss if strangle_p_l < maximum_beareable_loss else strangle_p_l, full_strangle_p_l, 1 if full_strangle_p_l > 0 else 0, maximum_beareable_loss if full_strangle_p_l < maximum_beareable_loss else full_strangle_p_l,1 if unavoidable_loss is not None else 0, second_maximum_ce_short_premium, second_maximum_pe_short_premium, second_minimum_ce_short_premium, second_minimum_pe_short_premium])
+            trading_outputs.append([UNDERLYING, under_lying_value, trading_date_obj, expiry_date_obj, sell_put_strike, sell_put_entry_price, sell_put_exit_price, sell_call_strike, sell_call_entry_price, sell_call_exit_price, p_l, 1 if p_l > 0 else 0, managed_profit, 1 if managed_profit > 0 else 0, maximum_loss, max_short_premium, max_premium_type, under_lying_value_strangle, second_trading_date, strangle_call_open_price, strangle_call_exit_price, strangle_put_open_price, strangle_put_exit_price, strangle_p_l, 1 if (strangle_p_l !=None and strangle_p_l > 0) else 0, strangle_p_l, full_strangle_p_l, 1 if (full_strangle_p_l is not None and full_strangle_p_l > 0) > 0 else 0, full_strangle_p_l, 1 if unavoidable_loss is not None else 0, second_maximum_ce_short_premium, second_maximum_pe_short_premium, second_minimum_ce_short_premium, second_minimum_pe_short_premium])
 
 
     if len(trading_outputs) > 0:
