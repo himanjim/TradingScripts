@@ -92,7 +92,7 @@ def find_second_trade_pl(df_, sell_call_strike_, sell_call_entry_price_, sell_pu
             pass
 
         if (sell_call_entry_price_ + sell_put_entry_price_ - sell_call_high_price - sell_put_low_price) < maximum_beareable_loss:
-            under_lying_value_orig_new_ = sell_call_strike + (
+            under_lying_value_orig_new_ = sell_call_strike_ + (
                         (sell_put_entry_price + sell_call_entry_price - maximum_beareable_loss) * .9)
             under_lying_value_orig_new_ = round(under_lying_value_orig_new_ / 100) * 100
             p_l_f_strangle_, strangle_call_open_price_, strangle_call_exit_price_, strangle_put_open_price_, strangle_put_exit_price_, maximum_ce_short_premium_, maximum_pe_short_premium_, minimum_ce_short_premium_, minimum_pe_short_premium_ = calculate_expiry_day_strangle_pl(
