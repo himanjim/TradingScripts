@@ -27,7 +27,9 @@ def nearest_expiry(df, current_trading_date_obj):
 
 
 def get_trading_outputs(df_part_, under_lying_value_rnd_, second_trade_, trading_days_diff_):
-    sell_put_strike_ = sell_call_strike_ = under_lying_value_rnd_
+
+    sell_call_strike_ = round((under_lying_value_rnd_ + (STRIKE_DIFF_PERCENT * under_lying_value_rnd_)) / 100) * 100
+    sell_put_strike_ = round((under_lying_value_rnd_ - (STRIKE_DIFF_PERCENT * under_lying_value_rnd_)) / 100) * 100
 
     if second_trade_ is False:
         sell_put_entry_price_ = float(df_part_.loc[(df_part_['Strike Price  '] == sell_put_strike_) & (df_part_['Option type  '] == 'PE')]['Open  '].iloc[0])
@@ -49,9 +51,9 @@ def get_trading_outputs(df_part_, under_lying_value_rnd_, second_trade_, trading
                 sell_call_entry_price_ + sell_put_entry_price_ - maximum_pe_short_premium_)
 
     if second_trade_ is False:
-        maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/4
+        maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/80
     else:
-        maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/4
+        maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/80
 
     # if (trading_days_diff_ == 0) or (trading_days_diff_ == 1):
     #     maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/1
@@ -66,10 +68,11 @@ def get_trading_outputs(df_part_, under_lying_value_rnd_, second_trade_, trading
 if __name__ == '__main__':
 
     ####################################
-    DRIVE = 'E:'
+    DRIVE = 'D:'
     files_pattern = DRIVE + '/BN OLD DATA/*.csv'
-    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042017to30042024.csv'
+    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042017to08052024.csv'
     UNDERLYING = 'BN'
+    STRIKE_DIFF_PERCENT = 0.00
     maximum_beareable_loss_per = -0.00416666666
     ####################################
 
@@ -169,7 +172,7 @@ if __name__ == '__main__':
         print('\n###################')
         #############
 
-        excel_df.to_excel(DRIVE + "".join(("/", str(UNDERLYING), "_IronCondor_Same_Day_2_attempts.xlsx")), index=False)
+        excel_df.to_excel(DRIVE + "".join(("/", str(UNDERLYING), '_', str(STRIKE_DIFF_PERCENT), str(maximum_beareable_loss), '_IronCondor_Same_Day_2_attempts.xlsx')), index=False)
         # print_statistics(trading_outputs, DRIVE +"/" + UNDERLYING + "_IronCondor.xlsx")
     else:
         print('No results')
