@@ -51,9 +51,9 @@ def get_trading_outputs(df_part_, under_lying_value_rnd_, second_trade_, trading
                 sell_call_entry_price_ + sell_put_entry_price_ - maximum_pe_short_premium_)
 
     if second_trade_ is False:
-        maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/80
+        maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/2
     else:
-        maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/80
+        maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/2
 
     # if (trading_days_diff_ == 0) or (trading_days_diff_ == 1):
     #     maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/1
@@ -70,7 +70,7 @@ if __name__ == '__main__':
     ####################################
     DRIVE = 'D:'
     files_pattern = DRIVE + '/BN OLD DATA/*.csv'
-    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042017to08052024.csv'
+    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042017to27052024.csv'
     UNDERLYING = 'BN'
     STRIKE_DIFF_PERCENT = 0.00
     maximum_beareable_loss_per = -0.00416666666
@@ -120,7 +120,14 @@ if __name__ == '__main__':
 
                 under_lying_value_rnd = round(under_lying_value / 100) * 100
 
-                trading_days_diff = (expiry_date_obj - trading_date_obj).days
+                trading_days_diff = 0
+                temp_trading_date_obj = trading_date_obj
+                while temp_trading_date_obj < expiry_date_obj:
+                    temp_trading_date_obj += timedelta(days=1)
+
+                    # if trading_date_obj in df['date_obj'].values:
+                    if df['date_obj'].isin([temp_trading_date_obj]).any():
+                        trading_days_diff += 1
 
                 sell_put_strike, sell_put_entry_price, sell_put_exit_price, sell_call_strike, sell_call_entry_price, sell_call_exit_price, p_l, managed_profit , max_short_premium_ce, max_short_premium_pe, max_premium_type, maximum_beareable_loss, maximum_loss = get_trading_outputs(df_part, under_lying_value_rnd, False, trading_days_diff)
 
@@ -154,11 +161,11 @@ if __name__ == '__main__':
         print('###################\n')
         print("Total no. of trades:", excel_df.shape[0])
 
-        print("\n P/L year wise \n:", excel_df.groupby(pd.Grouper(key='TRADE DATE', freq='YE'))['P/L'].sum().reset_index())
+        print("\n P/L year wise \n:", excel_df.groupby([pd.Grouper(key='TRADE DATE', freq='YE'), 'DIFF. DAYS'])['P/L'].sum().reset_index())
         print("Total P/L:", round(excel_df['P/L'].sum(), 1))
         print("Accuracy(P/L):", round(excel_df['PROFIT'].sum() / excel_df.shape[0], 3))
 
-        print("\n MGD PROFIT year wise: \n", excel_df.groupby(pd.Grouper(key='TRADE DATE', freq='YE'))['MGD PROFIT'].sum().reset_index())
+        print("\n MGD PROFIT year wise: \n", excel_df.groupby([pd.Grouper(key='TRADE DATE', freq='YE'), 'DIFF. DAYS'])['MGD PROFIT'].sum().reset_index())
         print("MGD PROFIT:", round(excel_df['MGD PROFIT'].sum(), 1))
         print("Accuracy(MGD PROFIT):", round(excel_df['MGD P/L'].sum() / excel_df.shape[0], 3))
 
