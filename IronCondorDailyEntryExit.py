@@ -44,16 +44,18 @@ def get_trading_outputs(df_part_, under_lying_value_rnd_, second_trade_, trading
     p_l_ = (sell_put_entry_price_ + sell_call_entry_price_) - (sell_put_exit_price_ + sell_call_exit_price_)
 
     maximum_ce_short_premium_ = float(df_part_.loc[(df_part_['Strike Price  '] == sell_call_strike_) & (df_part_['Option type  '] == 'CE')]['High  '].iloc[0])
+    minimum_ce_short_premium_ = float(df_part_.loc[(df_part_['Strike Price  '] == sell_call_strike_) & (df_part_['Option type  '] == 'CE')]['Low  '].iloc[0])
 
     maximum_pe_short_premium_ = float(df_part_.loc[(df_part_['Strike Price  '] == sell_put_strike_) & (df_part_['Option type  '] == 'PE')]['High  '].iloc[0])
+    minimum_pe_short_premium_ = float(df_part_.loc[(df_part_['Strike Price  '] == sell_put_strike_) & (df_part_['Option type  '] == 'PE')]['Low  '].iloc[0])
 
-    maximum_loss_ = (sell_call_entry_price_ + sell_put_entry_price_ - maximum_ce_short_premium_) if maximum_ce_short_premium_ >= maximum_pe_short_premium_ else (
-                sell_call_entry_price_ + sell_put_entry_price_ - maximum_pe_short_premium_)
+    maximum_loss_ = (sell_call_entry_price_ + sell_put_entry_price_ - maximum_ce_short_premium_ - minimum_pe_short_premium_) if maximum_ce_short_premium_ >= maximum_pe_short_premium_ else (
+                sell_call_entry_price_ + sell_put_entry_price_ - maximum_pe_short_premium_ - minimum_ce_short_premium_)
 
     if second_trade_ is False:
-        maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/2
+        maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/4
     else:
-        maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/2
+        maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/4
 
     # if (trading_days_diff_ == 0) or (trading_days_diff_ == 1):
     #     maximum_beareable_loss_ = maximum_beareable_loss_per * under_lying_value_rnd_/1
