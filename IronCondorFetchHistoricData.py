@@ -29,7 +29,7 @@ if __name__ == '__main__':
 
     df['Strike Price  '] = df['Strike Price  '].round(0).astype(int)
 
-    df_part = df.loc[(df['Date  '] == '29-May-2024') & (df['Expiry  '] == '29-May-2024') & (df['Strike Price  '] == 48800) & (df['Option type  '] == 'PE')]
+    df_part = df.loc[(df['Date  '] == '16-May-2024') & (df['Expiry  '] == '22-May-2024') & (df['Strike Price  '] == 47400) & ((df['Option type  '] == 'PE') | (df['Option type  '] == 'CE'))]
 
     df_part = df_part[['Symbol  ', 'Date  ', 'Expiry  ', 'Option type  ', 'Strike Price  ', 'Open  ', 'High  ', 'Low  ', 'Close  ', 'Underlying Value  ']]
 
