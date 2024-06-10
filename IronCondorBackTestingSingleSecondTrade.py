@@ -126,7 +126,7 @@ if __name__ == '__main__':
     ####################################
     DRIVE = 'D:'
     files_pattern = DRIVE + '/BN OLD DATA/*.csv'
-    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042017to29052024.csv'
+    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042017to05062024.csv'
     UNDERLYING = 'BN'
     STRIKE_DIFF_PERCENT = 0.00
     NO_DAYS_TO_EXPIRY = 2
@@ -233,7 +233,6 @@ if __name__ == '__main__':
                 # managed_profit = p_l if p_l > maximum_beareable_loss else maximum_beareable_loss
 
             trading_outputs.append([UNDERLYING, under_lying_value, trading_date_obj, expiry_date_obj, sell_put_strike, sell_put_entry_price, sell_put_exit_price, sell_call_strike, sell_call_entry_price, sell_call_exit_price, p_l, 1 if p_l > 0 else 0, managed_profit, 1 if managed_profit > 0 else 0, maximum_loss, max_short_premium, max_premium_type, under_lying_value_strangle, second_trading_date, strangle_call_open_price, strangle_call_exit_price, strangle_put_open_price, strangle_put_exit_price, strangle_p_l, 1 if (strangle_p_l !=None and strangle_p_l > 0) else 0, strangle_p_l, full_strangle_p_l, 1 if (full_strangle_p_l is not None and full_strangle_p_l > 0) > 0 else 0, full_strangle_p_l, 1 if unavoidable_loss is not None else 0, second_maximum_ce_short_premium, second_maximum_pe_short_premium, second_minimum_ce_short_premium, second_minimum_pe_short_premium])
-
 
     if len(trading_outputs) > 0:
         trading_outputs = sorted(trading_outputs, key=lambda x: x[3])
