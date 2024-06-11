@@ -1,6 +1,8 @@
 # from scipy.signal import argrelmax,argrelmin
 # import ta as tech_ana
+code = input("Enter Python code to execute (or 'exit' to quit): ")
 
+exit(0)
 import csv
 import datetime
 import io
