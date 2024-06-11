@@ -1,7 +1,8 @@
-from datetime import datetime, time
-import pytz
-import concurrent.futures
 import time as tm
+from datetime import datetime
+
+import pytz
+
 import Utils as util
 
 if __name__ == '__main__':
@@ -35,8 +36,6 @@ if __name__ == '__main__':
     end_time = tm.time()
 
     print('Orders executed in time(secs):', (end_time - start_time), ' at time: ', datetime.now(indian_timezone).time())
-
-    orders = kite.orders()
 
     code = input('Press ENTER to modify orders as MARKET')
 
