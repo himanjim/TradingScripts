@@ -1,7 +1,12 @@
 # from scipy.signal import argrelmax,argrelmin
 # import ta as tech_ana
-code = input("Enter Python code to execute (or 'exit' to quit): ")
+import time as tm
 
+start_time = tm.time()
+tm.sleep(.1)
+end_time = tm.time()
+
+print('Orders executed in time(secs):', (end_time - start_time))
 exit(0)
 import csv
 import datetime
