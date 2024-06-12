@@ -48,3 +48,5 @@ if __name__ == '__main__':
 
     if order_id is not None:
         kite.modify_order(kite.VARIETY_REGULAR, order_id, order_type=kite.ORDER_TYPE_MARKET)
+
+
