@@ -1,12 +1,15 @@
 # from scipy.signal import argrelmax,argrelmin
 # import ta as tech_ana
 import time as tm
+from datetime import datetime
 
 start_time = tm.time()
 tm.sleep(.1)
 end_time = tm.time()
 
 print('Orders executed in time(secs):', (end_time - start_time))
+
+print(datetime.now().time())
 exit(0)
 import csv
 import datetime

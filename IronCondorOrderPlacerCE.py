@@ -14,7 +14,7 @@ if __name__ == '__main__':
     today_date = datetime.now(indian_timezone).date()
     testing = False
 
-    symbol = 'BANKNIFTY2461249900CE'
+    symbol = 'BANKNIFTY2461950200CE'
     nse_symbol = kite.EXCHANGE_NFO + ':' + symbol
 
     while datetime.now(indian_timezone).time() < util.MARKET_START_TIME and testing is False:
@@ -43,6 +43,14 @@ if __name__ == '__main__':
     end_time = tm.time()
 
     print('Orders executed in time(secs):', (end_time - start_time), ' at time: ', datetime.now(indian_timezone).time())
+
+    tm.sleep(1.5)
+
+    try:
+        if order_id is not None:
+            kite.modify_order(kite.VARIETY_REGULAR, order_id, order_type=kite.ORDER_TYPE_MARKET)
+    except Exception as e:
+        print(f"Order modification for {symbol} failed with error: {e}")
 
     code = input('Press ENTER to modify orders as MARKET')
 
