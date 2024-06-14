@@ -4,7 +4,7 @@ from datetime import datetime
 import pytz
 
 if __name__ == '__main__':
-    MAX_PROFIT = 10000
+    MAX_PROFIT = 15000
     MAX_LOSS = -10000
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
