@@ -72,7 +72,7 @@ if __name__ == '__main__':
     ####################################
     DRIVE = 'D:'
     files_pattern = DRIVE + '/BN OLD DATA/*.csv'
-    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042017to05062024.csv'
+    underlying_file = DRIVE + '/NIFTY BANK_Historical_PR_01042017to14062024.csv'
     UNDERLYING = 'BN'
     STRIKE_DIFF_PERCENT = 0.0000
     maximum_beareable_loss_per = -0.00416666666

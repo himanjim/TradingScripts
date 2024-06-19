@@ -4,11 +4,14 @@ from datetime import datetime
 import pytz
 
 if __name__ == '__main__':
-    MAX_PROFIT = 15000
+    MAX_PROFIT = 35000
     MAX_LOSS = -10000
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
     kite = util.intialize_kite_api()
+
+    # kite.exit_order('regular', 240619201195882)
+    # exit(0)
 
     while True:
         positions = kite.positions()

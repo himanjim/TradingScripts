@@ -1,44 +1,31 @@
 import time as tm
 from datetime import datetime
+import IronCondorOrderPlacerUtils as ironCondorOrderPlacerUtils
 
 import pytz
 
 import Utils as util
 
 if __name__ == '__main__':
-    LIMIT_PTS = 8
-    NO_OF_LOTS = 105
 
     kite = util.intialize_kite_api()
     indian_timezone = pytz.timezone('Asia/Calcutta')
-    today_date = datetime.now(indian_timezone).date()
+
     testing = False
 
-    symbol = 'BANKNIFTY2461950000PE'
-    nse_symbol = kite.EXCHANGE_NFO + ':' + symbol
+    underlying_open = 50100
+    underlying_open_round = round(underlying_open / 100) * 100
 
-    while datetime.now(indian_timezone).time() < util.MARKET_START_TIME and testing is False:
+    symbol = 'BANKNIFTY24619' + underlying_open_round + 'PE'
+
+    while datetime.now(indian_timezone).time() < util.TRADE_START_TIME and testing is False:
         pass
+
+    ironCondorOrderPlacerUtils.check_trade_start_time_condition(kite, underlying_open_round)
 
     start_time = tm.time()
 
-    while True:
-        try:
-            stocks_live_data = kite.quote(nse_symbol)
-            order_id = kite.place_order(tradingsymbol=symbol,
-                                        variety=kite.VARIETY_REGULAR,
-                                        exchange=kite.EXCHANGE_NFO,
-                                        transaction_type=kite.TRANSACTION_TYPE_SELL,
-                                        quantity=NO_OF_LOTS,
-                                        order_type=kite.ORDER_TYPE_LIMIT,
-                                        product=kite.PRODUCT_MIS,
-                                        price=stocks_live_data[nse_symbol]['last_price'] - LIMIT_PTS,
-                                        )
-            break
-
-        except Exception as e:
-            print(f"Order for {symbol} failed with error: {e}")
-            tm.sleep(.1)
+    order_id = ironCondorOrderPlacerUtils.order_placer(kite, symbol)
 
     end_time = tm.time()
 
@@ -46,24 +33,4 @@ if __name__ == '__main__':
 
     tm.sleep(1.0)
 
-    order_modification_attempts = 0
-    while True:
-        if order_modification_attempts >= 6:
-            break
-
-        try:
-            if order_id is not None:
-                kite.modify_order(kite.VARIETY_REGULAR, order_id, order_type=kite.ORDER_TYPE_MARKET)
-                break
-            else:
-                print('No order ID exists.')
-                break
-        except Exception as e:
-            print(f"Order modification for {symbol} failed with error: {e}")
-            tm.sleep(.5)
-            order_modification_attempts += 1
-
-    code = input('Press ENTER to modify orders as MARKET')
-
-    if order_id is not None:
-        kite.modify_order(kite.VARIETY_REGULAR, order_id, order_type=kite.ORDER_TYPE_MARKET)
+    ironCondorOrderPlacerUtils.modify_order(kite, order_id, symbol)

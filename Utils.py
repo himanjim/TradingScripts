@@ -40,7 +40,7 @@ min_tick_size = .05
 #
 MARKET_START_TIME = datetime.time (9, 15, 0, 100)
 MARKET_END_TIME = datetime.time (15, 30, 0)
-TRADE_START_TIME = datetime.time (9, 15, 7)
+TRADE_START_TIME = datetime.time (9, 20, 0)
 # oco_future_expenses = 500
 #
 #
