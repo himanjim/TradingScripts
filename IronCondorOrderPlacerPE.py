@@ -13,10 +13,10 @@ if __name__ == '__main__':
 
     testing = False
 
-    underlying_open = 50100
+    underlying_open = 51700
     underlying_open_round = round(underlying_open / 100) * 100
 
-    symbol = 'BANKNIFTY24619' + underlying_open_round + 'PE'
+    symbol = 'BANKNIFTY24626' + underlying_open_round + 'PE'
 
     while datetime.now(indian_timezone).time() < util.TRADE_START_TIME and testing is False:
         pass
