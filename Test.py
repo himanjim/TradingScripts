@@ -1,5 +1,81 @@
 # from scipy.signal import argrelmax,argrelmin
 # import ta as tech_ana
+
+import shapegeocode
+gc = shapegeocode.geocoder("C:/Users/USER/Downloads/archive/DISTRICT_BOUNDARY.shp")
+print(gc.geocode(22.5726, 88.3639))
+exit(0)
+
+
+import geopandas as gpd
+from shapely.geometry import Point
+
+def load_shapefile(file_path):
+    # Load the shapefile using GeoPandas
+    shapefile = gpd.read_file(file_path)
+    return shapefile
+
+def reverse_geocode(lat, lon, shapefile):
+    # Create a point from the latitude and longitude
+    point = Point(lon, lat)
+
+    # Find the polygon that contains the point
+    for _, row in shapefile.iterrows():
+        print(row)
+        if row['geometry'].contains(point):
+            state = row.get('STATE_NAME', 'State not found')
+            district = row.get('DISTRICT', 'District not found')
+            return state, district
+    return 'State not found', 'District not found'
+
+# Load the Indian map shapefile
+shapefile_path = "C:/Users/USER/Downloads/archive/DISTRICT_BOUNDARY.shp"  # Update with your actual shapefile path
+shapefile = load_shapefile(shapefile_path)
+
+# Example usage
+latitude = 28.6587281718668
+longitude = 77.24002669000699
+
+state, district = reverse_geocode(latitude, longitude, shapefile)
+print(f"State: {state}, District: {district}")
+
+exit(0)
+
+
+from geopy.geocoders import OpenCage
+
+def reverse_geocode(lat, lon, api_key):
+    # Initialize the geolocator with OpenCage API key
+    geolocator = OpenCage(api_key)
+
+    # Get location from coordinates
+    location = geolocator.reverse((lat, lon), exactly_one=True)
+
+    if location and location.raw:
+        address = location.raw.get('components', {})
+        state = address.get('state', 'State not found')
+        district = address.get('county', 'District not found')
+    else:
+        state = 'State not found'
+        district = 'District not found'
+
+    return state, district
+
+# Example usage
+api_key = 'a2747abe1d62485892fd3c50360e0bb6'  # Replace with your actual OpenCage API key
+latitude = 28.6139
+longitude = 77.2090
+
+state, district = reverse_geocode(latitude, longitude, api_key)
+print(f"State: {state}, District: {district}")
+
+
+
+exit(0)
+import shapefile
+shape_file = shapefile.Reader("Igismap/Indian_States.shp")
+
+
 import time as tm
 from datetime import datetime
 
