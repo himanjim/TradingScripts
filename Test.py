@@ -1,5 +1,71 @@
+import pandas as pd
+
+# Load the data into a Pandas DataFrame
+file_path = 'C:/Users/USER/Downloads/Signal Sudhaar.xlsx'
+df = pd.read_excel(file_path, sheet_name='download(1)')
+
+
+# Number of unique locations (latitude and longitude)
+unique_locations = df[['Latitude', 'Longitude']].drop_duplicates()
+num_unique_locations = unique_locations.shape[0]
+print(f'Number of unique locations: {num_unique_locations}')
+
+
+# Filter locations where 'Signal Strength' is less than -110
+filtered_df = df[df['Signal Strength'] < -110]
+
+print(df['Operator Name'].unique())
+exit(0)
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Convert 'Operator Name' and 'Generation' to string
+filtered_df['Operator Name'] = filtered_df['Operator Name'].astype(str)
+filtered_df['Generation'] = filtered_df['Generation'].astype(str)
+# Combine 'Operator Name' and 'Generation' into a single column for hue
+filtered_df['Operator_Generation'] = filtered_df['Operator Name'] + ' (' + filtered_df['Generation'] + ')'
+
+# Set up the matplotlib figure
+plt.figure(figsize=(14, 8))
+
+# Create the plot
+plot = sns.countplot(data=filtered_df, x='Dtname', hue='Operator_Generation', palette='Set2')
+
+# Add title and labels
+plot.set_title('Distribution of Dtname with Signal Strength < -110 by Operator Name and Generation')
+plot.set_xlabel('Dtname')
+plot.set_ylabel('Count')
+plt.xticks(rotation=90)
+plt.legend(title='Operator Name and Generation')
+
+# Show the plot
+plt.tight_layout()
+plt.show()
+
+
+exit(0)
+
+
 # from scipy.signal import argrelmax,argrelmin
 # import ta as tech_ana
+from datetime import datetime
+import pytz
+
+# Original date string
+date_string = 'Fri Jun 30 2023 12:25:00 GMT+0530 (India Standard Time)'
+
+# Remove the timezone abbreviation for simplicity
+date_string = date_string.replace(' (India Standard Time)', '')
+
+# Parse the string into a datetime object
+date_time_obj = datetime.strptime(date_string, '%a %b %d %Y %H:%M:%S GMT%z')
+
+# Verify the result
+print(date_time_obj.minute)
+
+exit(0)
+
 
 import shapegeocode
 gc = shapegeocode.geocoder("C:/Users/USER/Downloads/archive/DISTRICT_BOUNDARY.shp")

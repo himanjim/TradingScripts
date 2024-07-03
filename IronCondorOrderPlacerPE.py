@@ -13,7 +13,7 @@ if __name__ == '__main__':
 
     testing = False
 
-    underlying_open = 51900
+    underlying_open = 52800
     underlying_open_round = round(underlying_open / 100) * 100
 
     symbol = 'BANKNIFTY24JUN' + str(underlying_open_round) + 'PE'

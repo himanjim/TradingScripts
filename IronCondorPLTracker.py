@@ -6,7 +6,7 @@ from datetime import datetime
 import pytz
 
 if __name__ == '__main__':
-    MAX_PROFIT = 35000
+    MAX_PROFIT = 20000
     MAX_LOSS = -10000
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -23,6 +23,10 @@ if __name__ == '__main__':
     max_pl = None
     min_pl = None
     while True:
+
+        if datetime.now(indian_timezone).time() > util.MARKET_END_TIME:
+            print(f"Market is closed. Hence exiting.")
+            exit(0)
 
         live_quotes = kite.quote(symbols)
 
@@ -43,7 +47,7 @@ if __name__ == '__main__':
         elif net_pl < min_pl:
             min_pl = net_pl
 
-        print(f"Net P/L: {net_pl}. Maximum P/L: {max_pl}. Maximum P/L: {min_pl}.")
+        print(f"Net P/L: {net_pl}. Maximum Profit: {max_pl}. Maximum Loss: {min_pl}.")
 
         if net_pl >= MAX_PROFIT or net_pl <= MAX_LOSS:
             # if net_pl >= MAX_PROFIT:
