@@ -6,7 +6,7 @@ from datetime import datetime
 import pytz
 
 if __name__ == '__main__':
-    MAX_PROFIT = 20000
+    MAX_PROFIT = 15000
     MAX_LOSS = -10000
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -22,6 +22,11 @@ if __name__ == '__main__':
 
     max_pl = None
     min_pl = None
+
+    if len(symbols) == 0:
+        print(f"No active position. Hence exiting.")
+        exit(0)
+
     while True:
 
         if datetime.now(indian_timezone).time() > util.MARKET_END_TIME:
