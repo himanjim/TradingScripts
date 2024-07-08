@@ -6,7 +6,7 @@ from datetime import datetime
 import pytz
 
 if __name__ == '__main__':
-    MAX_PROFIT = 15000
+    MAX_PROFIT = 20000
     MAX_LOSS = -10000
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -21,7 +21,7 @@ if __name__ == '__main__':
             sell_price += (position['sell_quantity'] * position['sell_price'])
 
     max_pl = None
-    min_pl = None
+    min_pl = 0
 
     if len(symbols) == 0:
         print(f"No active position. Hence exiting.")
@@ -47,9 +47,7 @@ if __name__ == '__main__':
         elif net_pl > max_pl:
             max_pl = net_pl
 
-        if min_pl is None:
-            min_pl = net_pl
-        elif net_pl < min_pl:
+        if net_pl < 0 and net_pl < min_pl:
             min_pl = net_pl
 
         print(f"Net P/L: {net_pl}. Maximum Profit: {max_pl}. Maximum Loss: {min_pl}.")
