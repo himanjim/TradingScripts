@@ -6,8 +6,8 @@ from datetime import datetime
 import pytz
 
 if __name__ == '__main__':
-    MAX_PROFIT = 20000
-    MAX_LOSS = -10000
+    MAX_PROFIT = 15000
+    MAX_LOSS = -9800
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
     kite = util.intialize_kite_api()
@@ -50,7 +50,7 @@ if __name__ == '__main__':
         if net_pl < 0 and net_pl < min_pl:
             min_pl = net_pl
 
-        print(f"Net P/L: {net_pl}. Maximum Profit: {max_pl}. Maximum Loss: {min_pl}.")
+        print(f"Net P/L: {net_pl}. Maximum Profit: {max_pl}. Maximum Loss: {min_pl} at {datetime.now(indian_timezone).time()}.")
 
         if net_pl >= MAX_PROFIT or net_pl <= MAX_LOSS:
             # if net_pl >= MAX_PROFIT:
