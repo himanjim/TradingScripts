@@ -9,6 +9,8 @@ if __name__ == '__main__':
     MAX_PROFIT = 10000
     MAX_LOSS = -9800
     sleep_time = 1
+    part_symbol = 'BANKNIFTY24626'
+    under_lying_symbol = kite.EXCHANGE_NSE + ':NIFTY BANK'
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -62,7 +64,7 @@ if __name__ == '__main__':
         if net_pl >= MAX_PROFIT or net_pl <= MAX_LOSS:
             # if net_pl >= MAX_PROFIT:
 
-            orders = kite.orders()
+            # orders = kite.orders()
 
             for position in positions['day']:
                 if position['average_price'] != 0:
@@ -78,6 +80,31 @@ if __name__ == '__main__':
                     print(f"Position of instrument {position['tradingsymbol']} exited.")
 
             print(f"All postions exited at P/L {net_pl} at {datetime.now(indian_timezone).time()}")
+
+            underlying_live_data = kite.quote(under_lying_symbol)
+            underlying_live_ltp = underlying_live_data[under_lying_symbol]['last_price']
+
+            underlying_round = round(underlying_live_ltp / 100) * 100
+
+            kite.place_order(tradingsymbol=part_symbol + underlying_round + 'CE',
+                             variety=kite.VARIETY_REGULAR,
+                             exchange=kite.EXCHANGE_NFO,
+                             transaction_type=kite.TRANSACTION_TYPE_BUY,
+                             quantity=position['sell_quantity'],
+                             order_type=kite.ORDER_TYPE_MARKET,
+                             product=kite.PRODUCT_MIS,
+                             )
+
+            kite.place_order(tradingsymbol=part_symbol + underlying_round + 'PE',
+                             variety=kite.VARIETY_REGULAR,
+                             exchange=kite.EXCHANGE_NFO,
+                             transaction_type=kite.TRANSACTION_TYPE_BUY,
+                             quantity=position['sell_quantity'],
+                             order_type=kite.ORDER_TYPE_MARKET,
+                             product=kite.PRODUCT_MIS,
+                             )
+
+            print(f"Buy orders placed at under_lying {underlying_live_ltp} at {datetime.now(indian_timezone).time()}")
 
             break
 
