@@ -6,10 +6,9 @@ from datetime import datetime
 import pytz
 
 if __name__ == '__main__':
-    MAX_PROFIT = 15000
-    MAX_LOSS = -9800
+    MAX_PROFIT = 10000
+    MAX_LOSS = -14000
     sleep_time = 2
-    part_symbol = 'BANKNIFTY24807'
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -23,7 +22,7 @@ if __name__ == '__main__':
     for position in positions['day']:
         if position['average_price'] != 0:
             symbols.append(position['exchange'] + ':' + position['tradingsymbol'])
-            sell_price += (position['sell_quantity'] * position['sell_price'])
+            sell_price += (position['buy_quantity'] * position['buy_price'])
 
     max_pl = 0
     min_pl = 0
@@ -43,9 +42,9 @@ if __name__ == '__main__':
         present_value = 0
 
         for trading_symbol, live_quote in live_quotes.items():
-            present_value += (live_quote['last_price'] * position['sell_quantity'])
+            present_value += (live_quote['last_price'] * position['buy_quantity'])
 
-        net_pl = sell_price - present_value
+        net_pl = present_value - sell_price
 
         if net_pl > 0 and net_pl > max_pl:
             max_pl = net_pl
@@ -67,8 +66,8 @@ if __name__ == '__main__':
                     kite.place_order(tradingsymbol=position['tradingsymbol'],
                                      variety=kite.VARIETY_REGULAR,
                                      exchange=kite.EXCHANGE_NFO,
-                                     transaction_type=kite.TRANSACTION_TYPE_BUY,
-                                     quantity=position['sell_quantity'],
+                                     transaction_type=kite.TRANSACTION_TYPE_SELL,
+                                     quantity=position['buy_quantity'],
                                      order_type=kite.ORDER_TYPE_MARKET,
                                      product=kite.PRODUCT_MIS,
                                      )
@@ -80,31 +79,7 @@ if __name__ == '__main__':
             underlying_live_data = kite.quote(under_lying_symbol)
             underlying_live_ltp = underlying_live_data[under_lying_symbol]['last_price']
 
-            if net_pl <= MAX_LOSS:
-                underlying_round = round(underlying_live_ltp / 100) * 100
-
-                kite.place_order(tradingsymbol=part_symbol + str(underlying_round) + 'CE',
-                                 variety=kite.VARIETY_REGULAR,
-                                 exchange=kite.EXCHANGE_NFO,
-                                 transaction_type=kite.TRANSACTION_TYPE_BUY,
-                                 quantity=position['sell_quantity'],
-                                 order_type=kite.ORDER_TYPE_MARKET,
-                                 product=kite.PRODUCT_MIS,
-                                 )
-
-                kite.place_order(tradingsymbol=part_symbol + str(underlying_round) + 'PE',
-                                 variety=kite.VARIETY_REGULAR,
-                                 exchange=kite.EXCHANGE_NFO,
-                                 transaction_type=kite.TRANSACTION_TYPE_BUY,
-                                 quantity=position['sell_quantity'],
-                                 order_type=kite.ORDER_TYPE_MARKET,
-                                 product=kite.PRODUCT_MIS,
-                                 )
-
-                print(f"Buy orders placed at under_lying {underlying_live_ltp} at {datetime.now(indian_timezone).time()}")
-
-            else:
-                print(f"Under_lying is {underlying_live_ltp} at {datetime.now(indian_timezone).time()}")
+            print(f"Under_lying is {underlying_live_ltp} at {datetime.now(indian_timezone).time()}")
 
             break
 
