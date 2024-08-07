@@ -6,8 +6,8 @@ from datetime import datetime
 import pytz
 
 if __name__ == '__main__':
-    MAX_PROFIT = 10000
-    MAX_LOSS = -14000
+    MAX_PROFIT = 8000
+    MAX_LOSS = -7000
     sleep_time = 2
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
@@ -65,11 +65,11 @@ if __name__ == '__main__':
                 if position['average_price'] != 0:
                     kite.place_order(tradingsymbol=position['tradingsymbol'],
                                      variety=kite.VARIETY_REGULAR,
-                                     exchange=kite.EXCHANGE_NFO,
+                                     exchange=position['exchange'],
                                      transaction_type=kite.TRANSACTION_TYPE_SELL,
                                      quantity=position['buy_quantity'],
                                      order_type=kite.ORDER_TYPE_MARKET,
-                                     product=kite.PRODUCT_MIS,
+                                     product=position['product'],
                                      )
 
                     print(f"Position of instrument {position['tradingsymbol']} exited.")
