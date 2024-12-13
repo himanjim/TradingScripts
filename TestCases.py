@@ -1,49 +1,27 @@
-import yfinance as yf
-import mplfinance as mpf
-import matplotlib.pyplot as plt
-from PIL import Image
-import pandas as pd
 import os
-
-# List of NIFTY50 stock symbols
-nifty50_symbols = [
-    'RELIANCE.NS', 'TCS.NS', 'INFY.NS', 'HDFCBANK.NS', 'ICICIBANK.NS', 'HINDUNILVR.NS',
-    'HDFC.NS', 'BAJFINANCE.NS', 'KOTAKBANK.NS', 'LT.NS', 'AXISBANK.NS', 'ITC.NS',
-    # Add more NIFTY50 symbols here
-]
+import pandas as pd
+import mplfinance as mpf
+import yfinance as yf
+from PIL import Image
 
 
 # Step 1: Fetch the 1-minute data for today for each stock
 def fetch_data(symbol):
-    data = yf.download(tickers=symbol, interval='5m', period='1d')
-
-    # Clean the data by dropping any rows with missing or NaN values
-    data.dropna(inplace=True)
-
-    # Ensure all relevant columns ('Open', 'High', 'Low', 'Close', 'Volume') are float types
-    numeric_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-
-    # # Convert to numeric (float), force errors to NaN, then drop rows with NaN
-    for col in numeric_columns:
-        # data[col] = pd.to_numeric(data[col], errors='coerce')
-        data[col] = data[col].apply(pd.to_numeric, errors='coerce')
-
-    # Drop any rows with NaN values
-    data.dropna(inplace=True)
-
+    ticker_data = yf.Ticker(symbol)
+    data = ticker_data.history(interval='5m', period='1d')
     return data
 
 
 # Step 2: Generate candlestick charts and save as images
 def save_candlestick_chart(data, symbol):
     if not data.empty:
-        mpf.plot(data, type='candle', style='charles', title=symbol, savefig=f"{symbol}.png")
+        mpf.plot(data, type='candle', style='charles', title=symbol, savefig=f"C:/Users/USER/Downloads/Collages/{symbol}.png")
     else:
         print(f"No valid data for {symbol}")
 
 
 # Step 3: Create a collage of the charts
-def create_collage(image_folder, output_image, grid_size=(5, 10), image_size=(300, 300)):
+def create_collage(image_folder, output_image, grid_size=(5, 10), image_size=(300, 300), nifty50_symbols= None):
     images = []
 
     # Load images from folder
@@ -73,12 +51,17 @@ def create_collage(image_folder, output_image, grid_size=(5, 10), image_size=(30
 # Main function to run the process
 def main():
     # Step 1: Fetch data and generate charts for all stocks
+    file_path = 'C:/Users/USER/Downloads/ind_nifty50list.csv'
+    df = pd.read_csv(file_path)
+
+    nifty50_symbols = [symbol + '.NS' for symbol in df['Symbol']]
+
     for symbol in nifty50_symbols:
         data = fetch_data(symbol)
         save_candlestick_chart(data, symbol)
 
     # Step 2: Create the collage of all candlestick charts
-    create_collage(image_folder=".", output_image="nifty50_collage.png")
+    create_collage(image_folder="C:/Users/USER/Downloads/Collages", output_image="nifty50_collage.png", nifty50_symbols= nifty50_symbols)
 
 
 if __name__ == "__main__":

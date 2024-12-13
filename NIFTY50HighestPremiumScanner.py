@@ -1,14 +1,7 @@
-import math
 import pandas as pd
-import Utils as util
-import time as tm
-from datetime import datetime
 import pytz
-import csv
 
-
-
-
+import Utils as util
 
 if __name__ == '__main__':
     file_path = 'C:/Users/USER/Downloads/ind_nifty50list.csv'
