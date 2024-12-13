@@ -7,7 +7,7 @@ import pytz
 
 if __name__ == '__main__':
     MAX_PROFIT = 8000
-    MAX_LOSS = -7000
+    MAX_LOSS = -5000
     sleep_time = 2
 
     indian_timezone = pytz.timezone('Asia/Calcutta')

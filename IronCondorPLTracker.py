@@ -9,7 +9,7 @@ if __name__ == '__main__':
     MAX_PROFIT = 30000
     MAX_LOSS = -9800
     sleep_time = 2
-    part_symbol = 'BANKNIFTY24807'
+    part_symbol = 'BANKNIFTY24814'
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
