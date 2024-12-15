@@ -4,6 +4,8 @@ import mplfinance as mpf
 import yfinance as yf
 from PIL import Image
 
+DIRECTORY = 'C:/Users/himan/Downloads/'
+
 
 # Step 1: Fetch the 1-minute data for today for each stock
 def fetch_data(symbol):
@@ -15,13 +17,13 @@ def fetch_data(symbol):
 # Step 2: Generate candlestick charts and save as images
 def save_candlestick_chart(data, symbol):
     if not data.empty:
-        mpf.plot(data, type='candle', style='charles', title=symbol, savefig=f"C:/Users/USER/Downloads/Collages/{symbol}.png")
+        mpf.plot(data, type='candle', style='charles', title=symbol, savefig=DIRECTORY + f"Collages/{symbol}.png")
     else:
         print(f"No valid data for {symbol}")
 
 
 # Step 3: Create a collage of the charts
-def create_collage(image_folder, output_image, grid_size=(5, 10), image_size=(300, 300), nifty50_symbols= None):
+def create_collage(image_folder, output_image, grid_size=(5, 10), image_size=(300, 300), nifty50_symbols=None):
     images = []
 
     # Load images from folder
@@ -51,7 +53,7 @@ def create_collage(image_folder, output_image, grid_size=(5, 10), image_size=(30
 # Main function to run the process
 def main():
     # Step 1: Fetch data and generate charts for all stocks
-    file_path = 'C:/Users/USER/Downloads/ind_nifty50list.csv'
+    file_path = DIRECTORY + 'ind_nifty50list.csv'
     df = pd.read_csv(file_path)
 
     nifty50_symbols = [symbol + '.NS' for symbol in df['Symbol']]
@@ -61,7 +63,8 @@ def main():
         save_candlestick_chart(data, symbol)
 
     # Step 2: Create the collage of all candlestick charts
-    create_collage(image_folder="C:/Users/USER/Downloads/Collages", output_image="nifty50_collage.png", nifty50_symbols= nifty50_symbols)
+    create_collage(image_folder=DIRECTORY + "Collages", output_image="nifty50_collage.png",
+                   nifty50_symbols=nifty50_symbols)
 
 
 if __name__ == "__main__":
