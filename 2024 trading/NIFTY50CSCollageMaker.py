@@ -4,8 +4,8 @@ import mplfinance as mpf
 import yfinance as yf
 from PIL import Image, ImageDraw
 
-DIRECTORY = 'C:/Users/himan/Downloads/'
-
+# DIRECTORY = 'C:/Users/himan/Downloads/'
+DIRECTORY = 'C:/Users/USER/Downloads/'
 # Dictionary to store the ratios for each stock
 ratios = {}
 
@@ -13,7 +13,7 @@ ratios = {}
 # Step 1: Fetch the 1-minute data for today for each stock
 def fetch_data(symbol):
     ticker_data = yf.Ticker(symbol)
-    data = ticker_data.history(interval='1m', period='1d')
+    data = ticker_data.history(interval='5m', period='1d')
     return data
 
 
