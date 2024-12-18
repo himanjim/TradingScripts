@@ -44,9 +44,12 @@ if __name__ == '__main__':
         if highest_options_premium_value is None:
             highest_options_premium_value = option_premium_value
         elif option_premium_value > highest_options_premium_value:
+            print(
+                f"Premiuims has heated at : {option_premium_value} from: {highest_options_premium_value} at {datetime.now(indian_timezone).time()}.")
             highest_options_premium_value = option_premium_value
+
         elif (highest_options_premium_value - option_premium_value) > 1500:
-            print(f"Premiuims has cooled at : {nifty_ltp_round_50}. CE: {nifty_option_quotes[nifty_pe]['last_price']}. PE: {nifty_option_quotes[nifty_pe]['last_price']} at {datetime.now(indian_timezone).time()}.")
+            print(f"Premiuims has cooled at : {nifty_ltp_round_50}. CE: {nifty_option_quotes[nifty_ce]['last_price']}. PE: {nifty_option_quotes[nifty_pe]['last_price']} at {datetime.now(indian_timezone).time()}.")
 
         tm.sleep(2)
 
