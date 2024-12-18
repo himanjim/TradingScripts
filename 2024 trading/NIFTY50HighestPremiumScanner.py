@@ -4,7 +4,7 @@ import pytz
 import Utils as util
 
 if __name__ == '__main__':
-    file_path = 'C:/Users/USER/Downloads/ind_nifty50list.csv'
+    file_path = 'C:/Users/himan/Downloads/ind_nifty50list.csv'
     df = pd.read_csv(file_path)
 
     symbols_with_prefix = ['NSE:' + symbol for symbol in df['Symbol']]
@@ -23,6 +23,7 @@ if __name__ == '__main__':
 
     # print(kite.ohlc(data_list))
     ohlc_data = kite.ohlc(symbols_with_prefix)
+
 
     stockOptionsPricesMap = {}
 
@@ -47,12 +48,15 @@ if __name__ == '__main__':
         margin = df_symbol['MARGIN'].values[0]
         lots = df_symbol['LOTS'].values[0]
 
-        stockOptionsPricesMap[stock] = {'return' : ((optionsPrices[peOptionSymbol]['last_price'] + optionsPrices[ceOptionSymbol]['last_price']) * lots) / margin, 'margin' : margin, 'lots' : lots, 'lots' : lots}
+        stockOptionsPricesMap[stock] = {peOptionSymbol: optionsPrices[peOptionSymbol]['last_price'], ceOptionSymbol: optionsPrices[peOptionSymbol]['last_price'], 'lot': lots }
+
+        # stockOptionsPricesMap[stock] = {'return' : ((optionsPrices[peOptionSymbol]['last_price'] + optionsPrices[ceOptionSymbol]['last_price']) * lots) / margin, 'margin' : margin, 'lots' : lots, 'lots' : lots}
         # exit(0)
 
-    # Sorting the dictionary by values in descending order
-    sorted_dict = dict(sorted(stockOptionsPricesMap.items(), key=lambda item: item[1]['return'], reverse=True))
-
-    # Display the sorted dictionary
-    for option, data in sorted_dict.items():
-        print(option + ':' + str(data))
+    print(stockOptionsPricesMap)
+    # # Sorting the dictionary by values in descending order
+    # sorted_dict = dict(sorted(stockOptionsPricesMap.items(), key=lambda item: item[1]['return'], reverse=True))
+    #
+    # # Display the sorted dictionary
+    # for option, data in sorted_dict.items():
+    #     print(option + ':' + str(data))
