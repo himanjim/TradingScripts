@@ -1,7 +1,28 @@
-import Utils as util
 import time as tm
+import datetime as dt
 from datetime import datetime
 import pytz
+from kiteconnect import KiteConnect
+
+KITE_API_KEY = '453dipfh64qcl484'
+KITE_ACCESS_CODE = '8CHJb566nmEyZtGVNjWupTlqQNYoJmIk'
+MARKET_START_TIME = dt.time (9, 15, 0, 100)
+MARKET_END_TIME = dt.time (15, 25, 0)
+TRADE_START_TIME = dt.time (9, 15, 30)
+
+
+def intialize_kite_api():
+    kite = KiteConnect (api_key=KITE_API_KEY)
+
+    try:
+
+        kite.set_access_token(KITE_ACCESS_CODE)
+    except Exception as e:
+        print("Authentication failed", str(e))
+        raise
+
+    return kite
+
 
 if __name__ == '__main__':
     MAX_PROFIT = 30000
@@ -12,7 +33,7 @@ if __name__ == '__main__':
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
-    kite = util.intialize_kite_api()
+    kite = intialize_kite_api()
 
     # print(kite.positions())
     #
@@ -38,7 +59,7 @@ if __name__ == '__main__':
 
     while True:
 
-        if datetime.now(indian_timezone).time() > util.MARKET_END_TIME:
+        if datetime.now(indian_timezone).time() > MARKET_END_TIME:
             print(f"Market is closed. Hence exiting.")
             exit(0)
 

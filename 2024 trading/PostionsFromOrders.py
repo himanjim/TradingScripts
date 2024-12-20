@@ -1,10 +1,31 @@
-import Utils as util
 import pandas as pd
-import pytz
+import datetime as dt
+from kiteconnect import KiteConnect
+
+
+KITE_API_KEY = '453dipfh64qcl484'
+KITE_ACCESS_CODE = 'IdB5ZnMIH8NSrnVGCTNepD79YPiAC6hb'
+MARKET_START_TIME = dt.time (9, 15, 0, 100)
+MARKET_END_TIME = dt.time (15, 25, 0)
+TRADE_START_TIME = dt.time (9, 15, 30)
+
+
+def intialize_kite_api():
+    kite = KiteConnect (api_key=KITE_API_KEY)
+
+    try:
+
+        kite.set_access_token(KITE_ACCESS_CODE)
+    except Exception as e:
+        print("Authentication failed", str(e))
+        raise
+
+    return kite
+
 
 if __name__ == '__main__':
 
-    kite = util.intialize_kite_api()
+    kite = intialize_kite_api()
 
     orders = kite.orders();
 
