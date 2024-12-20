@@ -3,7 +3,9 @@ import pandas as pd
 
 if __name__ == '__main__':
     # Step 1: Fetch data and generate charts for all stocks
-    file_path =  'C:/Users/himan/Downloads/ind_nifty50list.csv'
+    # file_path =  'C:/Users/himan/Downloads/ind_nifty50list.csv'
+    file_path = "C:/Users/USER/Downloads/ind_nifty50list.csv"
+
     df = pd.read_csv(file_path)
 
     nifty50_symbols = [symbol + '.NS' for symbol in df['Symbol']]
