@@ -5,7 +5,7 @@ import pytz
 from kiteconnect import KiteConnect
 
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_ACCESS_CODE = '8CHJb566nmEyZtGVNjWupTlqQNYoJmIk'
+KITE_ACCESS_CODE = '85ybPLyft9LUh73l56dhuoinbbhvD3O0'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 25, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
@@ -41,7 +41,7 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX24D2079500CE', 'quantity': 10, 'price': 1.65, 'product': 'MIS', 'type': 'BUY'}, {'exchange': 'BFO', 'tradingsymbol': 'SENSEX24D2079500CE', 'quantity': 10, 'price': 1.5, 'product': 'MIS', 'type': 'BUY'}]
+    positions = [{'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY24DEC51200PE', 'quantity': 105, 'price': 103.97142857, 'product': 'MIS', 'type': 'SELL'}, {'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY24DEC51200CE', 'quantity': 105, 'price': 95.35, 'product': 'MIS', 'type': 'SELL'}]
 
     symbols = []
     traded_value = 0
@@ -98,7 +98,7 @@ if __name__ == '__main__':
                     kite.place_order(tradingsymbol=position['tradingsymbol'],
                                      variety=kite.VARIETY_REGULAR,
                                      exchange=position['exchange'],
-                                     transaction_type=[kite.TRANSACTION_TYPE_BUY if position['quantity'] is kite.TRANSACTION_TYPE_SELL else kite.TRANSACTION_TYPE_SELL],
+                                     transaction_type=[kite.TRANSACTION_TYPE_BUY if position['type'] is kite.TRANSACTION_TYPE_SELL else kite.TRANSACTION_TYPE_SELL],
                                      quantity=position['quantity'],
                                      order_type=kite.ORDER_TYPE_MARKET,
                                      product=position['product'],
