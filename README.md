@@ -1,7 +1,3 @@
-Here’s a general README text based on your GitHub repository link:
-
----
-
 # TradingScripts Repository
 
 This repository contains a collection of Python scripts and tools for automating trading strategies using the Zerodha Kite API. The scripts are designed to help traders manage and execute trades, track real-time stock prices, and implement various intraday trading strategies. The repository is structured to allow users to easily integrate with their Zerodha account and modify scripts according to their specific trading needs.
