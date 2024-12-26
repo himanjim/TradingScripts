@@ -14,19 +14,19 @@ if __name__ == '__main__':
     # UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
     UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
 
-    UNDERLYING = ':NIFTY BANK'
+    # UNDERLYING = ':NIFTY BANK'
     # UNDERLYING = ':SENSEX'
-    # UNDERLYING = ':NIFTY 50'
+    UNDERLYING = ':NIFTY 50'
     # OPTIONS_EXCHANGE = kite.EXCHANGE_BFO
     OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-    PART_SYMBOL = ':BANKNIFTY24DEC'
+    # PART_SYMBOL = ':BANKNIFTY24DEC'
     # PART_SYMBOL = ':SENSEX24D20'
-    # PART_SYMBOL = ':NIFTY24D19'
+    PART_SYMBOL = ':NIFTY24DEC'
 
-    NO_OF_LOTS = 105
-
-    STRIKE_MULTIPLE = 100
-    # STRIKE_MULTIPLE = 50
+    # NO_OF_LOTS = 105
+    NO_OF_LOTS = 250
+    # STRIKE_MULTIPLE = 100
+    STRIKE_MULTIPLE = 50
     ###############################
 
     # under_lying_symbol = kite.EXCHANGE_NSE + ':NIFTY 50'
@@ -66,7 +66,7 @@ if __name__ == '__main__':
                 f"Premiuims has heated at : {option_premium_value} from: {highest_options_premium_value} at {datetime.now(indian_timezone).time()}.")
             highest_options_premium_value = option_premium_value
 
-        elif (highest_options_premium_value - option_premium_value) > 1000:
+        elif (highest_options_premium_value - option_premium_value) > 500:
             print(f"Premiuims has cooled at : {ul_ltp_round}. CE: {option_quotes[nifty_ce]['last_price']}. PE: {option_quotes[nifty_pe]['last_price']} at {datetime.now(indian_timezone).time()}.")
 
         tm.sleep(2)
