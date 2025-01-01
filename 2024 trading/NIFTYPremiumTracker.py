@@ -21,10 +21,12 @@ if __name__ == '__main__':
     OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
     # PART_SYMBOL = ':BANKNIFTY24DEC'
     # PART_SYMBOL = ':SENSEX24D20'
-    PART_SYMBOL = ':NIFTY24DEC'
+    PART_SYMBOL = ':NIFTY25102'
+    # PART_SYMBOL = ':SENSEX24DEC'
 
     # NO_OF_LOTS = 105
-    NO_OF_LOTS = 250
+    NO_OF_LOTS = 300
+    # NO_OF_LOTS = 80
     # STRIKE_MULTIPLE = 100
     STRIKE_MULTIPLE = 50
     ###############################

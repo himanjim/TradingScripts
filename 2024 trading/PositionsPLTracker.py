@@ -5,7 +5,7 @@ import pytz
 from kiteconnect import KiteConnect
 
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_ACCESS_CODE = '85ybPLyft9LUh73l56dhuoinbbhvD3O0'
+KITE_ACCESS_CODE = 'G2wk8dtjk8LaeCNGcc6SnXjy1i4mmtDv'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 25, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
@@ -25,9 +25,9 @@ def intialize_kite_api():
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 30000
-    MAX_LOSS = -5000
-    MAX_PROFIT_EROSION = 7000
+    MAX_PROFIT = 40000
+    MAX_LOSS = -4000
+    MAX_PROFIT_EROSION = 9000
     sleep_time = 2
     max_profit_set = None
 
@@ -41,7 +41,7 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY24DEC51200PE', 'quantity': 105, 'price': 103.97142857, 'product': 'MIS', 'type': 'SELL'}, {'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY24DEC51200CE', 'quantity': 105, 'price': 95.35, 'product': 'MIS', 'type': 'SELL'}]
+    positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2510223400PE', 'quantity': 300, 'price': 44.1, 'product': 'MIS', 'type': 'BUY'}, {'exchange': 'NFO', 'tradingsymbol': 'NIFTY2510223600PE', 'quantity': 300, 'price': 110.6, 'product': 'MIS', 'type': 'SELL'}]
 
     symbols = []
     traded_value = 0
