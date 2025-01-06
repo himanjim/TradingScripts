@@ -5,7 +5,7 @@ import pytz
 from kiteconnect import KiteConnect
 
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_ACCESS_CODE = 'G2wk8dtjk8LaeCNGcc6SnXjy1i4mmtDv'
+KITE_ACCESS_CODE = 'ucuBz0ZaVG61kDuzWsraV7U81y5wG4Iv'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 25, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
@@ -44,11 +44,9 @@ if __name__ == '__main__':
     positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2510223400PE', 'quantity': 300, 'price': 44.1, 'product': 'MIS', 'type': 'BUY'}, {'exchange': 'NFO', 'tradingsymbol': 'NIFTY2510223600PE', 'quantity': 300, 'price': 110.6, 'product': 'MIS', 'type': 'SELL'}]
 
     symbols = []
-    traded_value = 0
     for position in positions:
         if position['price'] != 0:
             symbols.append(position['exchange'] + ':' + position['tradingsymbol'])
-            traded_value += (position['quantity'] * position['price'])
 
     max_pl = 0
     min_pl = 0
@@ -65,15 +63,10 @@ if __name__ == '__main__':
 
         live_quotes = kite.quote(symbols)
 
-        present_value = 0
+        net_pl = 0
 
-        for trading_symbol, live_quote in live_quotes.items():
-            present_value += (live_quote['last_price'] * position['quantity'])
-
-        if positions[0]['type'] == kite.TRANSACTION_TYPE_BUY:
-            net_pl = present_value - traded_value
-        else:
-            net_pl = traded_value - present_value
+        for position in positions:
+            net_pl += ((live_quotes[position['tradingsymbol']]['last_price'] - position['price']) * position['quantity'])
 
         if net_pl > 0 and net_pl > max_pl:
             max_pl = net_pl

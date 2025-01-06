@@ -9,26 +9,34 @@ if __name__ == '__main__':
 
     kite = util.intialize_kite_api()
 
-    # NIFTY24D1924700PE
+    choice =1
     ###############################
-    # UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
-    UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
+    if choice == 1:
+        # NIFTY24D1924700PE
+        ###############################
+        # UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
+        UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
+        UNDERLYING = ':NIFTY 50'
+        OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
+        PART_SYMBOL = ':NIFTY25102'
+        NO_OF_LOTS = 300
+        STRIKE_MULTIPLE = 50
+    elif choice == 2:
+        UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
+        UNDERLYING = ':SENSEX'
+        OPTIONS_EXCHANGE = kite.EXCHANGE_BFO
+        PART_SYMBOL = ':SENSEX24DEC'
+        NO_OF_LOTS = 80
+        STRIKE_MULTIPLE = 100
 
-    # UNDERLYING = ':NIFTY BANK'
-    # UNDERLYING = ':SENSEX'
-    UNDERLYING = ':NIFTY 50'
-    # OPTIONS_EXCHANGE = kite.EXCHANGE_BFO
-    OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-    # PART_SYMBOL = ':BANKNIFTY24DEC'
-    # PART_SYMBOL = ':SENSEX24D20'
-    PART_SYMBOL = ':NIFTY25102'
-    # PART_SYMBOL = ':SENSEX24DEC'
+    else:
+        UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
+        UNDERLYING = ':NIFTY BANK'
+        OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
+        PART_SYMBOL = ':BANKNIFTY24DEC'
+        NO_OF_LOTS = 105
+        STRIKE_MULTIPLE = 100
 
-    # NO_OF_LOTS = 105
-    NO_OF_LOTS = 300
-    # NO_OF_LOTS = 80
-    # STRIKE_MULTIPLE = 100
-    STRIKE_MULTIPLE = 50
     ###############################
 
     # under_lying_symbol = kite.EXCHANGE_NSE + ':NIFTY 50'
