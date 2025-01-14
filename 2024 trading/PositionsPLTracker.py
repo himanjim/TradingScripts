@@ -5,7 +5,7 @@ import pytz
 from kiteconnect import KiteConnect
 
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_ACCESS_CODE = 'ucuBz0ZaVG61kDuzWsraV7U81y5wG4Iv'
+KITE_ACCESS_CODE = 'pgFjBt0Z8TOmTyKjRBwvW1uiAhbL8iXc'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 25, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
@@ -25,11 +25,11 @@ def intialize_kite_api():
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 40000
-    MAX_LOSS = -4000
+    MAX_PROFIT = 25000
+    MAX_LOSS = -5000
     MAX_PROFIT_EROSION = 9000
     sleep_time = 2
-    max_profit_set = None
+    max_profit_set = 19000
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -41,7 +41,7 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2510223400PE', 'quantity': 300, 'price': 44.1, 'product': 'MIS', 'type': 'BUY'}, {'exchange': 'NFO', 'tradingsymbol': 'NIFTY2510223600PE', 'quantity': 300, 'price': 110.6, 'product': 'MIS', 'type': 'SELL'}]
+    positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX2511476700PE', 'quantity': 80, 'price': 190.75, 'product': 'MIS', 'type': 'SELL'}, {'exchange': 'BFO', 'tradingsymbol': 'SENSEX2511476700CE', 'quantity': 80, 'price': 197.875, 'product': 'MIS', 'type': 'SELL'}]
 
     symbols = []
     for position in positions:
@@ -66,7 +66,11 @@ if __name__ == '__main__':
         net_pl = 0
 
         for position in positions:
-            net_pl += ((live_quotes[position['tradingsymbol']]['last_price'] - position['price']) * position['quantity'])
+            if position['type'] is kite.TRANSACTION_TYPE_SELL:
+                net_pl += ((position['price'] - live_quotes[position['exchange'] + ':' + position['tradingsymbol']]['last_price']) * position['quantity'])
+            else:
+                net_pl += ((live_quotes[position['exchange'] + ':' + position['tradingsymbol']]['last_price'] -
+                            position['price']) * position['quantity'])
 
         if net_pl > 0 and net_pl > max_pl:
             max_pl = net_pl
@@ -82,7 +86,7 @@ if __name__ == '__main__':
             sleep_time = .25
 
         if max_profit_set and max_profit_set > max_pl:
-            max_pl = max_pl
+            max_pl = max_profit_set
 
         if net_pl >= MAX_PROFIT or net_pl <= MAX_LOSS or (max_pl - net_pl) > MAX_PROFIT_EROSION:
 
