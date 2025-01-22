@@ -4,7 +4,7 @@ from kiteconnect import KiteConnect
 
 
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_ACCESS_CODE = 'pgFjBt0Z8TOmTyKjRBwvW1uiAhbL8iXc'
+KITE_ACCESS_CODE = '2oq7O4YAZC6Gx6FGPhGviudDUYsvQZ2E'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 25, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
@@ -68,4 +68,4 @@ if __name__ == '__main__':
         positions.append({'exchange': row['exchange'] , 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'], 'price': row['average_price'], 'product': row['product'], 'type':row['transaction_type']})
 
     for position in positions:
-        print(position)
+        print(str(position) + ',')
