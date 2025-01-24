@@ -9,7 +9,7 @@ if __name__ == '__main__':
 
     kite = util.intialize_kite_api()
 
-    choice =1
+    choice =2
     ###############################
     if choice == 1:
         # NIFTY24D1924700PE
@@ -18,15 +18,16 @@ if __name__ == '__main__':
         UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
         UNDERLYING = ':NIFTY 50'
         OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-        PART_SYMBOL = ':NIFTY25102'
+        PART_SYMBOL = ':NIFTY25123'
         NO_OF_LOTS = 300
         STRIKE_MULTIPLE = 50
     elif choice == 2:
         UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
         UNDERLYING = ':SENSEX'
         OPTIONS_EXCHANGE = kite.EXCHANGE_BFO
-        PART_SYMBOL = ':SENSEX24DEC'
-        NO_OF_LOTS = 80
+        PART_SYMBOL = ':SENSEX25114'
+        PART_SYMBOL = ':SENSEX25JAN'
+        NO_OF_LOTS = 100
         STRIKE_MULTIPLE = 100
 
     else:
@@ -49,6 +50,7 @@ if __name__ == '__main__':
         print(f"Market is closed. Hence exiting.")
         exit(0)
 
+    heated_options_premium_value = None
     highest_options_premium_value = None
     while True:
 
@@ -69,15 +71,18 @@ if __name__ == '__main__':
         for trading_symbol, live_quote in option_quotes.items():
             option_premium_value += (live_quote['last_price'] * NO_OF_LOTS)
 
-        if highest_options_premium_value is None:
-            highest_options_premium_value = option_premium_value
-        elif option_premium_value > highest_options_premium_value:
-            print(
-                f"Premiuims has heated at : {option_premium_value} from: {highest_options_premium_value} at {datetime.now(indian_timezone).time()}.")
-            highest_options_premium_value = option_premium_value
+        if highest_options_premium_value is None or heated_options_premium_value > highest_options_premium_value:
+            highest_options_premium_value = heated_options_premium_value
 
-        elif (highest_options_premium_value - option_premium_value) > 500:
-            print(f"Premiuims has cooled at : {ul_ltp_round}. CE: {option_quotes[nifty_ce]['last_price']}. PE: {option_quotes[nifty_pe]['last_price']} at {datetime.now(indian_timezone).time()}.")
+        if heated_options_premium_value is None:
+            heated_options_premium_value = option_premium_value
+        elif option_premium_value > heated_options_premium_value:
+            print(
+                f"Premiuims has heated at : {option_premium_value} from: {heated_options_premium_value} at {datetime.now(indian_timezone).time()}. Highest premiuim was: {highest_options_premium_value}")
+            heated_options_premium_value = option_premium_value
+
+        elif (heated_options_premium_value - option_premium_value) > 500:
+            print(f"Premiuims has cooled at : {option_premium_value} from: {heated_options_premium_value} at UL: {ul_ltp_round}. CE: {option_quotes[nifty_ce]['last_price']}. PE: {option_quotes[nifty_pe]['last_price']} at {datetime.now(indian_timezone).time()}. Highest premiuim was: {highest_options_premium_value}")
 
         tm.sleep(2)
 
