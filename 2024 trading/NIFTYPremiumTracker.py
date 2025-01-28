@@ -9,7 +9,9 @@ if __name__ == '__main__':
 
     kite = util.intialize_kite_api()
 
-    choice =2
+    choice = 2
+
+    premium_difference_for_action = 5000
     ###############################
     if choice == 1:
         # NIFTY24D1924700PE
@@ -41,7 +43,7 @@ if __name__ == '__main__':
     ###############################
 
     # under_lying_symbol = kite.EXCHANGE_NSE + ':NIFTY 50'
-    under_lying_symbol =UNDER_LYING_EXCHANGE + UNDERLYING
+    under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
 
     while datetime.now(indian_timezone).time() < util.TRADE_START_TIME:
         pass
@@ -50,14 +52,13 @@ if __name__ == '__main__':
         print(f"Market is closed. Hence exiting.")
         exit(0)
 
-    heated_options_premium_value = None
+    original_options_premium_value = None
     highest_options_premium_value = None
     while True:
 
         ul_live_quote = kite.quote(under_lying_symbol)
 
         ul_ltp = ul_live_quote[under_lying_symbol]['last_price']
-
 
         # nifty_ltp_round_50 = round(nifty_ltp / 50) * 50
         ul_ltp_round = round(ul_ltp / STRIKE_MULTIPLE) * STRIKE_MULTIPLE
@@ -71,18 +72,18 @@ if __name__ == '__main__':
         for trading_symbol, live_quote in option_quotes.items():
             option_premium_value += (live_quote['last_price'] * NO_OF_LOTS)
 
-        if highest_options_premium_value is None or heated_options_premium_value > highest_options_premium_value:
-            highest_options_premium_value = heated_options_premium_value
+        if highest_options_premium_value is None or option_premium_value > highest_options_premium_value:
+            highest_options_premium_value = option_premium_value
 
-        if heated_options_premium_value is None:
-            heated_options_premium_value = option_premium_value
-        elif option_premium_value > heated_options_premium_value:
-            print(
-                f"Premiuims has heated at : {option_premium_value} from: {heated_options_premium_value} at {datetime.now(indian_timezone).time()}. Highest premiuim was: {highest_options_premium_value}")
-            heated_options_premium_value = option_premium_value
+        if original_options_premium_value is None:
+            original_options_premium_value = option_premium_value
 
-        elif (heated_options_premium_value - option_premium_value) > 500:
-            print(f"Premiuims has cooled at : {option_premium_value} from: {heated_options_premium_value} at UL: {ul_ltp_round}. CE: {option_quotes[nifty_ce]['last_price']}. PE: {option_quotes[nifty_pe]['last_price']} at {datetime.now(indian_timezone).time()}. Highest premiuim was: {highest_options_premium_value}")
+        if (option_premium_value - original_options_premium_value) > premium_difference_for_action:
+            print(f"*******Difference: {option_premium_value - original_options_premium_value}. Current premium value is: {option_premium_value},  original premium value is : {original_options_premium_value} and highest premium value is: {highest_options_premium_value} at {datetime.now(indian_timezone).time()}. Highest premiuim was: {highest_options_premium_value}")
+
+        elif (original_options_premium_value  - option_premium_value) > premium_difference_for_action:
+            print(f"^^^^^^Difference: {option_premium_value - original_options_premium_value}. Current premium value is : {option_premium_value},  original premium value is : {original_options_premium_value} and highest premium value is: {highest_options_premium_value} at {datetime.now(indian_timezone).time()}. Highest premiuim was: {highest_options_premium_value}")
+        else:
+            print(f"Difference: {option_premium_value - original_options_premium_value}. Current premium value is : {option_premium_value},  original premium value is : {original_options_premium_value} and highest premium value is: {highest_options_premium_value} at {datetime.now(indian_timezone).time()}. Highest premiuim was: {highest_options_premium_value}")
 
         tm.sleep(2)
-
