@@ -27,8 +27,8 @@ if __name__ == '__main__':
         UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
         UNDERLYING = ':SENSEX'
         OPTIONS_EXCHANGE = kite.EXCHANGE_BFO
-        PART_SYMBOL = ':SENSEX25114'
-        PART_SYMBOL = ':SENSEX25JAN'
+        PART_SYMBOL = ':SENSEX25204'
+        # PART_SYMBOL = ':SENSEX25JAN'
         NO_OF_LOTS = 100
         STRIKE_MULTIPLE = 100
 
@@ -36,7 +36,7 @@ if __name__ == '__main__':
         UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
         UNDERLYING = ':NIFTY BANK'
         OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-        PART_SYMBOL = ':BANKNIFTY24DEC'
+        PART_SYMBOL = ':BANKNIFTY25JAN'
         NO_OF_LOTS = 105
         STRIKE_MULTIPLE = 100
 
