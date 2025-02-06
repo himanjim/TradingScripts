@@ -5,7 +5,7 @@ import pytz
 from kiteconnect import KiteConnect
 
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_ACCESS_CODE = '2oq7O4YAZC6Gx6FGPhGviudDUYsvQZ2E'
+KITE_ACCESS_CODE = 'acXxhbUVaqEVPTCUXHeKrSwGcIpytYVE'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 25, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
@@ -24,12 +24,24 @@ def intialize_kite_api():
     return kite
 
 
+def exit_trade(_position):
+    kite.place_order(tradingsymbol=_position['tradingsymbol'],
+                     variety=kite.VARIETY_REGULAR,
+                     exchange=_position['exchange'],
+                     transaction_type=[kite.TRANSACTION_TYPE_BUY if _position[
+                                                                        'type'] is kite.TRANSACTION_TYPE_SELL else kite.TRANSACTION_TYPE_SELL],
+                     quantity=_position['quantity'],
+                     order_type=kite.ORDER_TYPE_MARKET,
+                     product=_position['product'],
+                     )
+
+
 if __name__ == '__main__':
-    MAX_PROFIT = 35000
+    MAX_PROFIT = 20000
     MAX_LOSS = -5000
-    MAX_PROFIT_EROSION = 4000
+    MAX_PROFIT_EROSION = 8000
     sleep_time = 2
-    max_profit_set = 28590
+    max_profit_set = None
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -41,8 +53,8 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2512323100PE', 'quantity': 300, 'price': 109.2, 'product': 'MIS', 'type': 'SELL'},
-{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2512323100CE', 'quantity': 300, 'price': 116.7, 'product': 'MIS', 'type': 'SELL'}]
+    positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2520623750PE', 'quantity': 300, 'price': 97.05, 'product': 'MIS', 'type': 'SELL'},
+{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2520623750CE', 'quantity': 300, 'price': 80.75, 'product': 'MIS', 'type': 'SELL'}]
 
     symbols = []
     for position in positions:
@@ -69,10 +81,12 @@ if __name__ == '__main__':
 
             for position in positions:
                 if position['type'] is kite.TRANSACTION_TYPE_SELL:
-                    net_pl += ((position['price'] - live_quotes[position['exchange'] + ':' + position['tradingsymbol']]['last_price']) * position['quantity'])
+                    position ['pl'] =  ((position['price'] - live_quotes[position['exchange'] + ':' + position['tradingsymbol']]['last_price']) * position['quantity'])
                 else:
-                    net_pl += ((live_quotes[position['exchange'] + ':' + position['tradingsymbol']]['last_price'] -
+                    position['pl'] = ((live_quotes[position['exchange'] + ':' + position['tradingsymbol']]['last_price'] -
                                 position['price']) * position['quantity'])
+
+                net_pl += position['pl']
 
             if net_pl > 0 and net_pl > max_pl:
                 max_pl = net_pl
@@ -90,22 +104,19 @@ if __name__ == '__main__':
             if max_profit_set and max_profit_set > max_pl:
                 max_pl = max_profit_set
 
-            if net_pl >= MAX_PROFIT or net_pl <= MAX_LOSS or (max_pl - net_pl) > MAX_PROFIT_EROSION:
+            if net_pl >= MAX_PROFIT:
 
                 for position in positions:
                     if position['price'] != 0:
-                        kite.place_order(tradingsymbol=position['tradingsymbol'],
-                                         variety=kite.VARIETY_REGULAR,
-                                         exchange=position['exchange'],
-                                         transaction_type=[kite.TRANSACTION_TYPE_BUY if position['type'] is kite.TRANSACTION_TYPE_SELL else kite.TRANSACTION_TYPE_SELL],
-                                         quantity=position['quantity'],
-                                         order_type=kite.ORDER_TYPE_MARKET,
-                                         product=position['product'],
-                                         )
+                        exit_trade(position)
+                        print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
+                break
+            elif net_pl <= MAX_LOSS or (max_pl - net_pl) > MAX_PROFIT_EROSION:
 
-                        print(f"Position of instrument {position['tradingsymbol']} exited.")
-
-                print(f"All postions exited at P/L {net_pl} at {datetime.now(indian_timezone).time()}")
+                for position in positions:
+                    if position['price'] != 0 and position['pl'] < 0:
+                        exit_trade(position)
+                        print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
 
                 break
 
