@@ -5,7 +5,7 @@ import pytz
 from kiteconnect import KiteConnect
 
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_ACCESS_CODE = 'acXxhbUVaqEVPTCUXHeKrSwGcIpytYVE'
+KITE_ACCESS_CODE = 'YGTE9UT9rdnM7mDgWQtdprvdrcM7bDOC'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 25, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
@@ -37,7 +37,7 @@ def exit_trade(_position):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 20000
+    MAX_PROFIT = 10000
     MAX_LOSS = -5000
     MAX_PROFIT_EROSION = 8000
     sleep_time = 2
@@ -53,8 +53,8 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2520623750PE', 'quantity': 300, 'price': 97.05, 'product': 'MIS', 'type': 'SELL'},
-{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2520623750CE', 'quantity': 300, 'price': 80.75, 'product': 'MIS', 'type': 'SELL'}]
+    positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX2521178000PE', 'quantity': 100, 'price': 366.62, 'product': 'MIS', 'type': 'SELL'},
+{'exchange': 'BFO', 'tradingsymbol': 'SENSEX2521178000CE', 'quantity': 100, 'price': 489.05, 'product': 'MIS', 'type': 'SELL'}]
 
     symbols = []
     for position in positions:
@@ -76,6 +76,14 @@ if __name__ == '__main__':
                 exit(0)
 
             live_quotes = kite.quote(symbols)
+
+            positions_live = kite.positions()
+
+            all_positions_closed = all(item['average_price'] == 0 for item in positions_live['day'])
+
+            if all_positions_closed:
+                print("No active positions.")
+                break
 
             net_pl = 0
 

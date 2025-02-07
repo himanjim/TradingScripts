@@ -5,7 +5,7 @@ import pytz
 from kiteconnect import KiteConnect
 
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_ACCESS_CODE = 'nsQbnek0Fs4gkj13XzCf0fPcqq99XtPD'
+KITE_ACCESS_CODE = 'YGTE9UT9rdnM7mDgWQtdprvdrcM7bDOC'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 25, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
@@ -25,9 +25,9 @@ def intialize_kite_api():
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 10000
-    MAX_LOSS = -1000
-    MAX_PROFIT_EROSION = 3000
+    MAX_PROFIT = 20000
+    MAX_LOSS = -3000
+    MAX_PROFIT_EROSION = 5000
     sleep_time = 2
     max_profit_set = None
 
@@ -41,7 +41,7 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX2520477000PE', 'quantity': 60, 'price': 872.25, 'product': 'MIS', 'type': 'SELL'}]
+    positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2520623700CE', 'quantity': 300, 'price': 42.7, 'product': 'MIS', 'type': 'BUY'}]
 
     symbols = []
     for position in positions:
