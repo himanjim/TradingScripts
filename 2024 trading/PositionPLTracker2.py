@@ -5,7 +5,7 @@ import pytz
 from kiteconnect import KiteConnect
 
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_ACCESS_CODE = 'YGTE9UT9rdnM7mDgWQtdprvdrcM7bDOC'
+KITE_ACCESS_CODE = 'PEOyxkmvl0aO7oD0N34gRCOhT4AniPbo'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 25, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
@@ -25,7 +25,7 @@ def intialize_kite_api():
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 20000
+    MAX_PROFIT = 10000
     MAX_LOSS = -3000
     MAX_PROFIT_EROSION = 5000
     sleep_time = 2
@@ -41,7 +41,7 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2520623700CE', 'quantity': 300, 'price': 42.7, 'product': 'MIS', 'type': 'BUY'}]
+    positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX2521177300PE', 'quantity': 100, 'price': 278.55, 'product': 'NRML', 'type': 'SELL'}]
 
     symbols = []
     for position in positions:
@@ -58,21 +58,19 @@ if __name__ == '__main__':
     while True:
         try:
 
-            positions_open = False
-            positions_latest = kite.positions()['day']
-            for position in positions_latest:
-                if position['average_price'] != 0:
-                    positions_open = True
-
-            if positions_open is False:
-                print(f"All positions are closed. Hence exiting.")
-                exit(0)
-
             if datetime.now(indian_timezone).time() > MARKET_END_TIME:
                 print(f"Market is closed. Hence exiting.")
                 exit(0)
 
             live_quotes = kite.quote(symbols)
+
+            positions_live = kite.positions()
+
+            all_positions_closed = all(item['average_price'] == 0 for item in positions_live['day'])
+
+            if all_positions_closed:
+                print("No active positions.")
+                break
 
             net_pl = 0
 
