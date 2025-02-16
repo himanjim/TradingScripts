@@ -1,28 +1,9 @@
 import time as tm
-import datetime as dt
 from datetime import datetime
 import pytz
-from kiteconnect import KiteConnect
-
-KITE_API_KEY = '453dipfh64qcl484'
-KITE_ACCESS_CODE = 'YGTE9UT9rdnM7mDgWQtdprvdrcM7bDOC'
-MARKET_START_TIME = dt.time (9, 15, 0, 100)
-MARKET_END_TIME = dt.time (15, 25, 0)
-TRADE_START_TIME = dt.time (9, 15, 30)
-
-
-def intialize_kite_api():
-    kite = KiteConnect (api_key=KITE_API_KEY)
-
-    try:
-
-        kite.set_access_token(KITE_ACCESS_CODE)
-    except Exception as e:
-        print("Authentication failed", str(e))
-        raise
-
-    return kite
-
+import OptionTradeUtils as oUtils
+import re
+import pandas as pd
 
 def exit_trade(_position):
     kite.place_order(tradingsymbol=_position['tradingsymbol'],
@@ -37,15 +18,17 @@ def exit_trade(_position):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 10000
+    MAX_PROFIT = 30000
     MAX_LOSS = -5000
     MAX_PROFIT_EROSION = 8000
     sleep_time = 2
     max_profit_set = None
 
+    second_trade_executed =  False
+
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
-    kite = intialize_kite_api()
+    kite = oUtils.intialize_kite_api()
 
     # print(kite.positions())
     #
@@ -53,8 +36,8 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX2521178000PE', 'quantity': 100, 'price': 366.62, 'product': 'MIS', 'type': 'SELL'},
-{'exchange': 'BFO', 'tradingsymbol': 'SENSEX2521178000CE', 'quantity': 100, 'price': 489.05, 'product': 'MIS', 'type': 'SELL'}]
+    positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2521323200PE', 'quantity': 300, 'price': 62.65, 'product': 'NRML', 'type': 'SELL'},
+{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2521323200CE', 'quantity': 300, 'price': 59.425, 'product': 'NRML', 'type': 'SELL'}]
 
     symbols = []
     for position in positions:
@@ -71,7 +54,7 @@ if __name__ == '__main__':
     while True:
         try:
 
-            if datetime.now(indian_timezone).time() > MARKET_END_TIME:
+            if datetime.now(indian_timezone).time() > oUtils.MARKET_END_TIME:
                 print(f"Market is closed. Hence exiting.")
                 exit(0)
 
@@ -118,15 +101,56 @@ if __name__ == '__main__':
                     if position['price'] != 0:
                         exit_trade(position)
                         print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
+
                 break
+
             elif net_pl <= MAX_LOSS or (max_pl - net_pl) > MAX_PROFIT_EROSION:
 
                 for position in positions:
-                    if position['price'] != 0 and position['pl'] < 0:
-                        exit_trade(position)
-                        print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
+                    exit_trade(position)
+                    print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
 
-                break
+                if all(item['pl'] < 0 for item in positions):
+                    print(f"Both positions are in loss. Hence not initiating any directional position at {datetime.now(indian_timezone).time()}.")
+                    break
+
+                if second_trade_executed is False:
+                    for position in positions:
+                        if position['pl'] < 0:
+                            ul_ltp_round = oUtils.get_underlying_value(kite, position)
+
+                            modified_symbol = re.sub(r'(\d{5})(?=CE|PE)', str(ul_ltp_round), position['tradingsymbol'])
+                            modified_symbol = position['exchange'] + ':' + modified_symbol
+
+                            kite.place_order(tradingsymbol=modified_symbol,
+                                             variety=kite.VARIETY_REGULAR,
+                                             exchange=position['exchange'],
+                                             transaction_type=kite.TRANSACTION_TYPE_SELL,
+                                             quantity=position['quantity'],
+                                             order_type=kite.ORDER_TYPE_MARKET,
+                                             product=position['product'],
+                                             )
+
+                            print(f"Placed second order of symbol {modified_symbol} at {datetime.now(indian_timezone).time()}.")
+
+                            orders = kite.orders()
+
+                            # Create pandas DataFrame from the list of orders
+                            orders_df = pd.DataFrame(orders)
+
+                            orders_df_row = orders_df.iloc[[-1]]
+
+                            positions = [{'exchange': orders_df_row['exchange'], 'tradingsymbol': orders_df_row['tradingsymbol'], 'quantity': orders_df_row['quantity'], 'price': orders_df_row['average_price'],          'product': orders_df_row['product'], 'type': orders_df_row['transaction_type']}]
+
+                            symbols = [modified_symbol]
+
+                            MAX_PROFIT = 10000
+                            MAX_LOSS = -2000
+                            MAX_PROFIT_EROSION = 5000
+
+                            second_trade_executed = True
+                else:
+                    break
 
             else:
                 tm.sleep(sleep_time)
