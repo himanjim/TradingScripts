@@ -18,9 +18,9 @@ def exit_trade(_position):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 30000
+    MAX_PROFIT = 8000
     MAX_LOSS = -5000
-    MAX_PROFIT_EROSION = 8000
+    MAX_PROFIT_EROSION = 5000
     sleep_time = 2
     max_profit_set = None
 
@@ -36,8 +36,8 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2521323200PE', 'quantity': 300, 'price': 62.65, 'product': 'NRML', 'type': 'SELL'},
-{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2521323200CE', 'quantity': 300, 'price': 59.425, 'product': 'NRML', 'type': 'SELL'}]
+    positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2522022950PE', 'quantity': 300, 'price': 79.25, 'product': 'MIS', 'type': 'SELL'},
+{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2522022950CE', 'quantity': 300, 'price': 114.95, 'product': 'MIS', 'type': 'SELL'}]
 
     symbols = []
     for position in positions:
@@ -120,7 +120,7 @@ if __name__ == '__main__':
                             ul_ltp_round = oUtils.get_underlying_value(kite, position)
 
                             modified_symbol = re.sub(r'(\d{5})(?=CE|PE)', str(ul_ltp_round), position['tradingsymbol'])
-                            modified_symbol = position['exchange'] + ':' + modified_symbol
+                            # modified_symbol = position['exchange'] + ':' + modified_symbol
 
                             kite.place_order(tradingsymbol=modified_symbol,
                                              variety=kite.VARIETY_REGULAR,
