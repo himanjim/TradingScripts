@@ -120,6 +120,7 @@ if __name__ == '__main__':
                             ul_ltp_round = oUtils.get_underlying_value(kite, position)
 
                             modified_symbol = re.sub(r'(\d{5})(?=CE|PE)', str(ul_ltp_round), position['tradingsymbol'])
+                            modified_symbol = modified_symbol.replace('CE', 'TEMP').replace('PE', 'CE').replace('TEMP', 'PE')
                             # modified_symbol = position['exchange'] + ':' + modified_symbol
 
                             kite.place_order(tradingsymbol=modified_symbol,
@@ -139,6 +140,8 @@ if __name__ == '__main__':
                             orders_df = pd.DataFrame(orders)
 
                             orders_df_row = orders_df.iloc[[-1]]
+                            print(
+                                f"Fetched second order of symbol {orders_df_row} at {datetime.now(indian_timezone).time()}.")
 
                             positions = [{'exchange': orders_df_row['exchange'], 'tradingsymbol': orders_df_row['tradingsymbol'], 'quantity': orders_df_row['quantity'], 'price': orders_df_row['average_price'],          'product': orders_df_row['product'], 'type': orders_df_row['transaction_type']}]
 
