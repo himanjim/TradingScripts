@@ -5,6 +5,7 @@ import OptionTradeUtils as oUtils
 import re
 import pandas as pd
 
+
 def exit_trade(_position):
     kite.place_order(tradingsymbol=_position['tradingsymbol'],
                      variety=kite.VARIETY_REGULAR,
@@ -18,13 +19,13 @@ def exit_trade(_position):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 8000
+    MAX_PROFIT = 10000
     MAX_LOSS = -5000
     MAX_PROFIT_EROSION = 5000
     sleep_time = 2
     max_profit_set = None
 
-    second_trade_executed =  False
+    second_trade_executed =  True
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -36,8 +37,8 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2522022950PE', 'quantity': 300, 'price': 79.25, 'product': 'MIS', 'type': 'SELL'},
-{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2522022950CE', 'quantity': 300, 'price': 114.95, 'product': 'MIS', 'type': 'SELL'}]
+    positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX2542279700PE', 'quantity': 100, 'price': 100.0, 'product': 'NRML', 'type': 'SELL'},
+{'exchange': 'BFO', 'tradingsymbol': 'SENSEX2542279700CE', 'quantity': 100, 'price': 55.53, 'product': 'NRML', 'type': 'SELL'}]
 
     symbols = []
     for position in positions:
@@ -98,7 +99,7 @@ if __name__ == '__main__':
             if net_pl >= MAX_PROFIT:
 
                 for position in positions:
-                    if position['price'] != 0:
+                    if position['pl'] < 0 and position['price'] != 0:
                         exit_trade(position)
                         print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
 
@@ -107,6 +108,7 @@ if __name__ == '__main__':
             elif net_pl <= MAX_LOSS or (max_pl - net_pl) > MAX_PROFIT_EROSION:
 
                 for position in positions:
+                    # if position['pl'] < 0 and position['price'] != 0:
                     exit_trade(position)
                     print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
 

@@ -31,7 +31,7 @@ if __name__ == '__main__':
 
     kite = util.intialize_kite_api()
 
-    choice = 1
+    choice = 3
 
     premium_difference_for_action = 5000
     ###############################
@@ -43,14 +43,14 @@ if __name__ == '__main__':
         UNDERLYING = ':NIFTY 50'
         OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
         # PART_SYMBOL = ':NIFTY25123'
-        PART_SYMBOL = ':NIFTY25206'
+        PART_SYMBOL = ':NIFTY25220'
         NO_OF_LOTS = 300
         STRIKE_MULTIPLE = 50
     elif choice == 2:
         UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
         UNDERLYING = ':SENSEX'
         OPTIONS_EXCHANGE = kite.EXCHANGE_BFO
-        PART_SYMBOL = ':SENSEX25211'
+        PART_SYMBOL = ':SENSEX25225'
         # PART_SYMBOL = ':SENSEX25JAN'
         NO_OF_LOTS = 100
         STRIKE_MULTIPLE = 100
@@ -59,8 +59,8 @@ if __name__ == '__main__':
         UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
         UNDERLYING = ':NIFTY BANK'
         OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-        PART_SYMBOL = ':BANKNIFTY25JAN'
-        NO_OF_LOTS = 105
+        PART_SYMBOL = ':BANKNIFTY25FEB'
+        NO_OF_LOTS = 120
         STRIKE_MULTIPLE = 100
 
     ###############################
@@ -100,6 +100,11 @@ if __name__ == '__main__':
 
         if original_options_premium_value is None:
             original_options_premium_value = option_premium_value
+
+        print(
+            f"Current premium value is: {option_premium_value},  original premium value is : {original_options_premium_value} and highest premium value is: {highest_options_premium_value} at {datetime.now(indian_timezone).time()}.")
+
+        continue
 
         if (option_premium_value - original_options_premium_value) > premium_difference_for_action:
             print(f"*******Difference: {option_premium_value - original_options_premium_value}. Current premium value is: {option_premium_value},  original premium value is : {original_options_premium_value} and highest premium value is: {highest_options_premium_value} at {datetime.now(indian_timezone).time()}. Highest premiuim was: {highest_options_premium_value}")
