@@ -2,10 +2,10 @@ import time as tm
 from datetime import datetime
 import pytz
 import OptionTradeUtils as oUtils
-
+import pandas as pd
 
 if __name__ == '__main__':
-    MAX_PROFIT = 10000
+    MAX_PROFIT = 15000
     MAX_LOSS = -3000
     MAX_PROFIT_EROSION = 5000
     sleep_time = 2
@@ -21,7 +21,18 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2521323200CE', 'quantity': 300, 'price': 59.425, 'product': 'NRML', 'type': 'SELL'}]
+    # positions = [{'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY25APR55400PE', 'quantity': 120, 'price': 217.375, 'product': 'NRML', 'type': 'SELL'}]
+
+    orders = kite.orders()
+    # Create pandas DataFrame from the list of orders
+    df = pd.DataFrame(orders)
+    positions = []
+    # Iterate over each row in the filtered DataFrame
+    for index, row in df.iterrows():
+        positions.append(
+            {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
+             'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
+    positions = positions[-1:]
 
     symbols = []
     for position in positions:

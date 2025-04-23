@@ -59,7 +59,7 @@ if __name__ == '__main__':
         UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
         UNDERLYING = ':NIFTY BANK'
         OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-        PART_SYMBOL = ':BANKNIFTY25FEB'
+        PART_SYMBOL = ':BANKNIFTY25APR'
         NO_OF_LOTS = 120
         STRIKE_MULTIPLE = 100
 
@@ -68,16 +68,16 @@ if __name__ == '__main__':
     # under_lying_symbol = kite.EXCHANGE_NSE + ':NIFTY 50'
     under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
 
-    while datetime.now(indian_timezone).time() < util.TRADE_START_TIME:
+    while datetime.now(indian_timezone).time() < util.MARKET_START_TIME:
         pass
-
-    if datetime.now(indian_timezone).time() > util.MARKET_END_TIME:
-        print(f"Market is closed. Hence exiting.")
-        exit(0)
 
     original_options_premium_value = None
     highest_options_premium_value = None
     while True:
+
+        if datetime.now(indian_timezone).time() > util.MARKET_END_TIME:
+            print(f"Market is closed. Hence exiting.")
+            exit(0)
 
         ul_live_quote = kite.quote(under_lying_symbol)
 
@@ -104,6 +104,7 @@ if __name__ == '__main__':
         print(
             f"Current premium value is: {option_premium_value},  original premium value is : {original_options_premium_value} and highest premium value is: {highest_options_premium_value} at {datetime.now(indian_timezone).time()}.")
 
+        tm.sleep(2)
         continue
 
         if (option_premium_value - original_options_premium_value) > premium_difference_for_action:
@@ -118,4 +119,4 @@ if __name__ == '__main__':
         else:
             print(f"Difference: {option_premium_value - original_options_premium_value}. Current premium value is : {option_premium_value},  original premium value is : {original_options_premium_value} and highest premium value is: {highest_options_premium_value} at {datetime.now(indian_timezone).time()}. Highest premiuim was: {highest_options_premium_value}")
 
-        tm.sleep(1)
+

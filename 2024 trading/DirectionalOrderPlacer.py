@@ -10,7 +10,7 @@ if __name__ == '__main__':
 
     kite = util.intialize_kite_api()
 
-    choice = 2
+    choice = 3
 
     ###############################
     if choice == 1:
@@ -21,7 +21,7 @@ if __name__ == '__main__':
         UNDERLYING = ':NIFTY 50'
         OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
         # PART_SYMBOL = ':NIFTY25123'
-        PART_SYMBOL = ':NIFTY25213'
+        PART_SYMBOL = 'NIFTY25213'
         NO_OF_LOTS = 300
         STRIKE_MULTIPLE = 50
         trigger_value = None
@@ -31,7 +31,7 @@ if __name__ == '__main__':
         UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
         UNDERLYING = ':SENSEX'
         OPTIONS_EXCHANGE = kite.EXCHANGE_BFO
-        PART_SYMBOL = ':SENSEX25218'
+        PART_SYMBOL = 'SENSEX25218'
         # PART_SYMBOL = ':SENSEX25JAN'
         NO_OF_LOTS = 100
         STRIKE_MULTIPLE = 100
@@ -42,11 +42,11 @@ if __name__ == '__main__':
         UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
         UNDERLYING = ':NIFTY BANK'
         OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-        PART_SYMBOL = ':BANKNIFTY25JAN'
-        NO_OF_LOTS = 105
+        PART_SYMBOL = 'BANKNIFTY25APR'
+        NO_OF_LOTS = 30
         STRIKE_MULTIPLE = 100
-        trigger_value = None
-        transaction_type = kite.TRANSACTION_TYPE_SELL
+        trigger_value = 55342
+        transaction_type = kite.TRANSACTION_TYPE_BUY
         option_type = 'PE'
 
     ###############################
@@ -57,11 +57,11 @@ if __name__ == '__main__':
     while datetime.now(indian_timezone).time() < util.TRADE_START_TIME:
         pass
 
-    if datetime.now(indian_timezone).time() > util.MARKET_END_TIME:
-        print(f"Market is closed. Hence exiting.")
-        exit(0)
-
     while True:
+
+        if datetime.now(indian_timezone).time() > util.MARKET_END_TIME:
+            print(f"Market is closed. Hence exiting.")
+            exit(0)
 
         ul_live_quote = kite.quote(under_lying_symbol)
 
@@ -70,7 +70,7 @@ if __name__ == '__main__':
         # nifty_ltp_round_50 = round(nifty_ltp / 50) * 50
         ul_ltp_round = round(ul_ltp / STRIKE_MULTIPLE) * STRIKE_MULTIPLE
 
-        option = OPTIONS_EXCHANGE + PART_SYMBOL + str(ul_ltp_round) + option_type
+        option = PART_SYMBOL + str(ul_ltp_round) + option_type
 
         if (transaction_type ==kite.TRANSACTION_TYPE_SELL and (option_type == 'PE' and  ul_ltp > trigger_value) or (option_type == 'CE' and  ul_ltp < trigger_value)) or (transaction_type ==kite.TRANSACTION_TYPE_BUY and (option_type == 'PE' and  ul_ltp < trigger_value) or (option_type == 'CE' and  ul_ltp > trigger_value)):
             order_details = kite.place_order(tradingsymbol=option,
@@ -82,5 +82,6 @@ if __name__ == '__main__':
                              product=kite.PRODUCT_MIS,
                              )
             print(f"Placed {order_details}: {transaction_type} order for : {option} at {datetime.now(indian_timezone).time()}.")
+            exit(0)
 
         tm.sleep(1)
