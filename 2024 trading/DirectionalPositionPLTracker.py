@@ -5,11 +5,11 @@ import OptionTradeUtils as oUtils
 import pandas as pd
 
 if __name__ == '__main__':
-    MAX_PROFIT = 15000
+    MAX_PROFIT = 10000
     MAX_LOSS = -3000
     MAX_PROFIT_EROSION = 5000
     sleep_time = 2
-    max_profit_set = None
+    max_profit_set = 4680
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -21,18 +21,20 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    # positions = [{'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY25APR55400PE', 'quantity': 120, 'price': 217.375, 'product': 'NRML', 'type': 'SELL'}]
+    positions = [{'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY25APR55400PE', 'quantity': 120, 'price': 105.85, 'product': 'NRML', 'type': 'SELL'}]
 
-    orders = kite.orders()
-    # Create pandas DataFrame from the list of orders
-    df = pd.DataFrame(orders)
-    positions = []
-    # Iterate over each row in the filtered DataFrame
-    for index, row in df.iterrows():
-        positions.append(
-            {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
-             'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
-    positions = positions[-1:]
+    # orders = kite.orders()
+    # # Create pandas DataFrame from the list of orders
+    # df = pd.DataFrame(orders)
+    # positions = []
+    # # Iterate over each row in the filtered DataFrame
+    # for index, row in df.iterrows():
+    #     positions.append(
+    #         {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
+    #          'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
+    # positions = positions[-1:]
+    #
+    # print(positions)
 
     symbols = []
     for position in positions:
@@ -66,7 +68,7 @@ if __name__ == '__main__':
             net_pl = 0
 
             for position in positions:
-                if position['type'] is kite.TRANSACTION_TYPE_SELL:
+                if position['type'] == kite.TRANSACTION_TYPE_SELL:
                     net_pl += ((position['price'] - live_quotes[position['exchange'] + ':' + position['tradingsymbol']]['last_price']) * position['quantity'])
                 else:
                     net_pl += ((live_quotes[position['exchange'] + ':' + position['tradingsymbol']]['last_price'] -

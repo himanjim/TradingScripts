@@ -102,7 +102,7 @@ if __name__ == '__main__':
             original_options_premium_value = option_premium_value
 
         print(
-            f"Current premium value is: {option_premium_value},  original premium value is : {original_options_premium_value} and highest premium value is: {highest_options_premium_value} at {datetime.now(indian_timezone).time()}.")
+            f"Strike:{ul_ltp_round}. Current PREM is: {option_premium_value}(CE:{option_quotes[option_ce]['last_price']} PE:{option_quotes[option_pe]['last_price']}),  original : {original_options_premium_value} and highest : {highest_options_premium_value} at {datetime.now(indian_timezone).time()}.")
 
         tm.sleep(2)
         continue
