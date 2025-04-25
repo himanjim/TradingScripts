@@ -11,7 +11,7 @@ def exit_trade(_position):
                      variety=kite.VARIETY_REGULAR,
                      exchange=_position['exchange'],
                      transaction_type=[kite.TRANSACTION_TYPE_BUY if _position[
-                                                                        'type'] is kite.TRANSACTION_TYPE_SELL else kite.TRANSACTION_TYPE_SELL],
+                                                                        'type'] == kite.TRANSACTION_TYPE_SELL else kite.TRANSACTION_TYPE_SELL],
                      quantity=_position['quantity'],
                      order_type=kite.ORDER_TYPE_MARKET,
                      product=_position['product'],
@@ -20,10 +20,10 @@ def exit_trade(_position):
 
 if __name__ == '__main__':
     MAX_PROFIT = 25000
-    MAX_LOSS = -5000
+    MAX_LOSS = 0
     MAX_PROFIT_EROSION = 10000
     sleep_time = 2
-    max_profit_set = 15583
+    max_profit_set = 5729
 
     second_trade_executed =  True
 
@@ -55,6 +55,9 @@ if __name__ == '__main__':
     positions = all_positions[-2:]
 
     print(positions)
+
+#     positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX25APR79000PE', 'quantity': 100, 'price': 534.72, 'product': 'NRML', 'type': 'SELL'},
+# {'exchange': 'BFO', 'tradingsymbol': 'SENSEX25APR79000CE', 'quantity': 100, 'price': 533.97, 'product': 'NRML', 'type': 'SELL'}]
 
     symbols = []
     for position in positions:
@@ -102,6 +105,9 @@ if __name__ == '__main__':
             if net_pl < 0 and net_pl < min_pl:
                 min_pl = net_pl
 
+            if net_pl > 5000:
+                MAX_LOSS = 0
+
             print(f"Net P/L: {net_pl}. Maximum Profit: {max_pl}. Maximum Loss: {min_pl} at {datetime.now(indian_timezone).time()}.")
 
             if min_pl < (MAX_LOSS * .5):
@@ -127,51 +133,6 @@ if __name__ == '__main__':
                     # if position['pl'] < 0 and position['price'] != 0:
                     exit_trade(position)
                     print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
-
-                if all(item['pl'] < 0 for item in positions):
-                    print(f"Both positions are in loss. Hence not initiating any directional position at {datetime.now(indian_timezone).time()}.")
-                    break
-
-                if second_trade_executed is False:
-                    for position in positions:
-                        if position['pl'] < 0:
-                            ul_ltp_round = oUtils.get_underlying_value(kite, position)
-
-                            modified_symbol = re.sub(r'(\d{5})(?=CE|PE)', str(ul_ltp_round), position['tradingsymbol'])
-                            modified_symbol = modified_symbol.replace('CE', 'TEMP').replace('PE', 'CE').replace('TEMP', 'PE')
-                            # modified_symbol = position['exchange'] + ':' + modified_symbol
-
-                            kite.place_order(tradingsymbol=modified_symbol,
-                                             variety=kite.VARIETY_REGULAR,
-                                             exchange=position['exchange'],
-                                             transaction_type=kite.TRANSACTION_TYPE_SELL,
-                                             quantity=position['quantity'],
-                                             order_type=kite.ORDER_TYPE_MARKET,
-                                             product=position['product'],
-                                             )
-
-                            print(f"Placed second order of symbol {modified_symbol} at {datetime.now(indian_timezone).time()}.")
-
-                            orders = kite.orders()
-
-                            # Create pandas DataFrame from the list of orders
-                            orders_df = pd.DataFrame(orders)
-
-                            orders_df_row = orders_df.iloc[[-1]]
-                            print(
-                                f"Fetched second order of symbol {orders_df_row} at {datetime.now(indian_timezone).time()}.")
-
-                            positions = [{'exchange': orders_df_row['exchange'], 'tradingsymbol': orders_df_row['tradingsymbol'], 'quantity': orders_df_row['quantity'], 'price': orders_df_row['average_price'],          'product': orders_df_row['product'], 'type': orders_df_row['transaction_type']}]
-
-                            symbols = [modified_symbol]
-
-                            MAX_PROFIT = 10000
-                            MAX_LOSS = -2000
-                            MAX_PROFIT_EROSION = 5000
-
-                            second_trade_executed = True
-                else:
-                    break
 
             else:
                 tm.sleep(sleep_time)

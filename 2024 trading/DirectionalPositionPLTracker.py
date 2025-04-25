@@ -5,11 +5,11 @@ import OptionTradeUtils as oUtils
 import pandas as pd
 
 if __name__ == '__main__':
-    MAX_PROFIT = 10000
-    MAX_LOSS = -3000
-    MAX_PROFIT_EROSION = 5000
+    MAX_PROFIT = 35000
+    MAX_LOSS = 0
+    MAX_PROFIT_EROSION = 10000
     sleep_time = 2
-    max_profit_set = 4680
+    max_profit_set = 28105
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -21,20 +21,20 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY25APR55400PE', 'quantity': 120, 'price': 105.85, 'product': 'NRML', 'type': 'SELL'}]
+    positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX25APR79800CE', 'quantity': 100, 'price': 535.0, 'product': 'NRML', 'type': 'SELL'}]
 
-    # orders = kite.orders()
-    # # Create pandas DataFrame from the list of orders
-    # df = pd.DataFrame(orders)
-    # positions = []
-    # # Iterate over each row in the filtered DataFrame
-    # for index, row in df.iterrows():
-    #     positions.append(
-    #         {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
-    #          'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
-    # positions = positions[-1:]
-    #
-    # print(positions)
+    orders = kite.orders()
+    # Create pandas DataFrame from the list of orders
+    df = pd.DataFrame(orders)
+    positions = []
+    # Iterate over each row in the filtered DataFrame
+    for index, row in df.iterrows():
+        positions.append(
+            {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
+             'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
+    positions = positions[-1:]
+
+    print(positions)
 
     symbols = []
     for position in positions:
@@ -80,6 +80,9 @@ if __name__ == '__main__':
             if net_pl < 0 and net_pl < min_pl:
                 min_pl = net_pl
 
+            if net_pl > 5000:
+                MAX_LOSS = 0
+
             print(f"Net P/L: {net_pl}. Maximum Profit: {max_pl}. Maximum Loss: {min_pl} at {datetime.now(indian_timezone).time()}.")
 
             if min_pl < (MAX_LOSS * .5):
@@ -97,7 +100,7 @@ if __name__ == '__main__':
                         kite.place_order(tradingsymbol=position['tradingsymbol'],
                                          variety=kite.VARIETY_REGULAR,
                                          exchange=position['exchange'],
-                                         transaction_type=[kite.TRANSACTION_TYPE_BUY if position['type'] is kite.TRANSACTION_TYPE_SELL else kite.TRANSACTION_TYPE_SELL],
+                                         transaction_type=[kite.TRANSACTION_TYPE_BUY if position['type'] == kite.TRANSACTION_TYPE_SELL else kite.TRANSACTION_TYPE_SELL],
                                          quantity=position['quantity'],
                                          order_type=kite.ORDER_TYPE_MARKET,
                                          product=position['product'],

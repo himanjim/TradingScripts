@@ -13,7 +13,7 @@ ratios = {}
 # Step 1: Fetch the 1-minute data for today for each stock
 def fetch_data(symbol):
     ticker_data = yf.Ticker(symbol)
-    data = ticker_data.history(interval='5m', period='1d')
+    data = ticker_data.history(interval='1m', period='1d')
     return data
 
 
@@ -107,6 +107,7 @@ def main():
     df = pd.read_csv(file_path)
 
     nifty50_symbols = [symbol + '.NS' for symbol in df['Symbol']]
+    # nifty50_symbols = [nifty50_symbols[0]]
 
     for symbol in nifty50_symbols:
         data = fetch_data(symbol)
