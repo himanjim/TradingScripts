@@ -3,10 +3,40 @@ import datetime as dt
 
 
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_ACCESS_CODE = 'UgR02hYGZwuKXHu5eWEJ0VbsDAzCGHav'
+KITE_ACCESS_CODE = 'elbL7ajfjVUrxLqYp6lAjQ7KmNx56M5b'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 30, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
+
+
+def get_instruments(kite_):
+    choice = 2
+
+    if choice == 1:
+        UNDER_LYING_EXCHANGE = kite_.EXCHANGE_NSE
+        UNDERLYING = ':NIFTY 50'
+        OPTIONS_EXCHANGE = kite_.EXCHANGE_NFO
+        PART_SYMBOL = ':NIFTY25430'
+        NO_OF_LOTS = 300
+        STRIKE_MULTIPLE = 50
+    elif choice == 2:
+        UNDER_LYING_EXCHANGE = kite_.EXCHANGE_BSE
+        UNDERLYING = ':SENSEX'
+        OPTIONS_EXCHANGE = kite_.EXCHANGE_BFO
+        # PART_SYMBOL = ':SENSEX25MAY'
+        PART_SYMBOL = ':SENSEX25506'
+        NO_OF_LOTS = 100
+        STRIKE_MULTIPLE = 100
+    else:
+        UNDER_LYING_EXCHANGE = kite_.EXCHANGE_NSE
+        UNDERLYING = ':NIFTY BANK'
+        OPTIONS_EXCHANGE = kite_.EXCHANGE_NFO
+        PART_SYMBOL = ':BANKNIFTY25APR'
+        NO_OF_LOTS = 120
+        STRIKE_MULTIPLE = 100
+
+    return UNDER_LYING_EXCHANGE ,UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE
+
 
 
 def intialize_kite_api():

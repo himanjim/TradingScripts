@@ -19,11 +19,11 @@ def exit_trade(_position):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 25000
-    MAX_LOSS = 0
+    MAX_PROFIT = 6000
+    MAX_LOSS = -5000
     MAX_PROFIT_EROSION = 10000
     sleep_time = 2
-    max_profit_set = 5729
+    max_profit_set = 1310
 
     second_trade_executed =  True
 

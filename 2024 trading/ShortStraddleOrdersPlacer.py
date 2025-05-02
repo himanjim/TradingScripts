@@ -1,7 +1,6 @@
-import Utils as util
-import time as tm
 from datetime import datetime
 import pytz
+import OptionTradeUtils as oUtils
 
 
 def place_order(_pe, _ce, _transaction, _lots, _exchange):
@@ -29,39 +28,11 @@ if __name__ == '__main__':
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
-    kite = util.intialize_kite_api()
+    kite = oUtils.intialize_kite_api()
 
-    choice = 1
+    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE = oUtils.get_instruments(kite)
+    PART_SYMBOL = PART_SYMBOL.replace(':', '')
 
-    ###############################
-    if choice == 1:
-        # NIFTY24D1924700PE
-        ###############################
-        # UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
-        UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
-        UNDERLYING = ':NIFTY 50'
-        OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-        # PART_SYMBOL = 'NIFTY25123'
-        # PART_SYMBOL = 'NIFTY25220'
-        PART_SYMBOL = 'NIFTY25430'
-        NO_OF_LOTS = 300
-        STRIKE_MULTIPLE = 50
-    elif choice == 2:
-        UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
-        UNDERLYING = ':SENSEX'
-        OPTIONS_EXCHANGE = kite.EXCHANGE_BFO
-        PART_SYMBOL = 'SENSEX25225'
-        # PART_SYMBOL = 'SENSEX25JAN'
-        NO_OF_LOTS = 100
-        STRIKE_MULTIPLE = 100
-
-    else:
-        UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
-        UNDERLYING = ':NIFTY BANK'
-        OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-        PART_SYMBOL = 'BANKNIFTY25APR'
-        NO_OF_LOTS = 120
-        STRIKE_MULTIPLE = 100
 
     ###############################
 

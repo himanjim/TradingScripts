@@ -7,6 +7,20 @@ if __name__ == '__main__':
 
     orders = kite.orders()
 
+    # orders = kite.orders()
+    # # Create pandas DataFrame from the list of orders
+    # df = pd.DataFrame(orders)
+    # positions = []
+    # # Iterate over each row in the filtered DataFrame
+    # for index, row in df.iterrows():
+    #     positions.append(
+    #         {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
+    #          'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
+    # positions = positions[-2:]
+    # print(positions)
+    #
+    # exit(0)
+
     # Create pandas DataFrame from the list of orders
     df = pd.DataFrame(orders)
 

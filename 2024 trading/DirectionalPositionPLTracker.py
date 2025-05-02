@@ -5,11 +5,11 @@ import OptionTradeUtils as oUtils
 import pandas as pd
 
 if __name__ == '__main__':
-    MAX_PROFIT = 35000
-    MAX_LOSS = 0
+    MAX_PROFIT = 10000
+    MAX_LOSS = -3000
     MAX_PROFIT_EROSION = 10000
     sleep_time = 2
-    max_profit_set = 28105
+    max_profit_set = None
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -21,7 +21,7 @@ if __name__ == '__main__':
 
     # positions = kite.positions()
 
-    positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX25APR79800CE', 'quantity': 100, 'price': 535.0, 'product': 'NRML', 'type': 'SELL'}]
+    positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX25APR80200CE', 'quantity': 100, 'price': 302.15, 'product': 'NRML', 'type': 'SELL'}]
 
     orders = kite.orders()
     # Create pandas DataFrame from the list of orders

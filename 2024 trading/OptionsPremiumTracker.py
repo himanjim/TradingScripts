@@ -1,18 +1,25 @@
-import Utils as util
 import time as tm
-from datetime import datetime
 import pytz
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import pandas as pd
 from datetime import datetime
-import random
 from matplotlib.animation import FuncAnimation
 import threading
 import time
+import os
+import OptionTradeUtils as oUtils
 
-# --- Initialize empty DataFrame ---
-df = pd.DataFrame(columns=['timestamp', 'value'])
+# --- Time and file setup ---
+indian_timezone = pytz.timezone('Asia/Calcutta')
+today_str = datetime.now(indian_timezone).strftime('%Y-%m-%d')
+DATA_FILE = f"premium_data_{today_str}.csv"
+
+# --- Load persisted data if available ---
+if os.path.exists(DATA_FILE):
+    df = pd.read_csv(DATA_FILE, parse_dates=['timestamp'])
+else:
+    df = pd.DataFrame(columns=['timestamp', 'value'])
 
 # --- Setup Plot ---
 fig, ax = plt.subplots(figsize=(10, 6))
@@ -22,11 +29,14 @@ plt.title('Live Data Chart (Smooth & Realtime)')
 plt.xlabel('Time')
 plt.ylabel('Value')
 lock = threading.Lock()
+
 # --- Function to add new data point ---
 def add_data(new_time, new_value):
     global df
     with lock:
-        df = pd.concat([df, pd.DataFrame({'timestamp': [new_time], 'value': [new_value]})], ignore_index=True)
+        new_row = pd.DataFrame({'timestamp': [new_time], 'value': [new_value]})
+        df = pd.concat([df, new_row], ignore_index=True)
+        new_row.to_csv(DATA_FILE, mode='a', header=not os.path.exists(DATA_FILE), index=False)
 
 # --- Animation Update Function ---
 def animate(frame):
@@ -37,35 +47,26 @@ def animate(frame):
             ax.autoscale_view()
             fig.autofmt_xdate()
 
-
+# --- Data fetching loop ---
 def fetch_data_loop():
     try:
         while True:
             now = datetime.now()
-
             original_options_premium_value = None
             highest_options_premium_value = None
 
-            if datetime.now(indian_timezone).time() > util.MARKET_END_TIME:
+            if datetime.now(indian_timezone).time() > oUtils.MARKET_END_TIME:
                 print(f"Market is closed. Hence exiting.")
                 exit(0)
 
             try:
-
                 ul_live_quote = kite.quote(under_lying_symbol)
-
                 ul_ltp = ul_live_quote[under_lying_symbol]['last_price']
-
-                # nifty_ltp_round_50 = round(nifty_ltp / 50) * 50
                 ul_ltp_round = round(ul_ltp / STRIKE_MULTIPLE) * STRIKE_MULTIPLE
-
                 option_pe = OPTIONS_EXCHANGE + PART_SYMBOL + str(ul_ltp_round) + 'PE'
                 option_ce = OPTIONS_EXCHANGE + PART_SYMBOL + str(ul_ltp_round) + 'CE'
-
                 option_quotes = kite.quote([option_pe, option_ce])
-
             except Exception as e:
-                # This will catch any exception and print the error message
                 print(f"An error occurred: {e}")
                 tm.sleep(2)
                 continue
@@ -90,59 +91,19 @@ def fetch_data_loop():
         print(f"Error in data fetching thread: {e}")
 
 
+# --- Main execution ---
 if __name__ == '__main__':
 
-    indian_timezone = pytz.timezone('Asia/Calcutta')
+    kite = oUtils.intialize_kite_api()
 
-    kite = util.intialize_kite_api()
+    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE = oUtils.get_instruments(
+        kite)
 
-    choice = 1
-
-    premium_difference_for_action = 5000
-    ###############################
-    if choice == 1:
-        # NIFTY24D1924700PE
-        ###############################
-        # UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
-        UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
-        UNDERLYING = ':NIFTY 50'
-        OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-        # PART_SYMBOL = ':NIFTY25123'
-        # PART_SYMBOL = ':NIFTY25220'
-        PART_SYMBOL = ':NIFTY25430'
-        NO_OF_LOTS = 300
-        STRIKE_MULTIPLE = 50
-    elif choice == 2:
-        UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
-        UNDERLYING = ':SENSEX'
-        OPTIONS_EXCHANGE = kite.EXCHANGE_BFO
-        # PART_SYMBOL = ':SENSEX25225'
-        PART_SYMBOL = ':SENSEX25APR'
-        NO_OF_LOTS = 100
-        STRIKE_MULTIPLE = 100
-
-    else:
-        UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
-        UNDERLYING = ':NIFTY BANK'
-        OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-        PART_SYMBOL = ':BANKNIFTY25APR'
-        NO_OF_LOTS = 120
-        STRIKE_MULTIPLE = 100
-
-    ###############################
-
-    # under_lying_symbol = kite.EXCHANGE_NSE + ':NIFTY 50'
     under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
 
-    while datetime.now(indian_timezone).time() < util.MARKET_START_TIME:
+    while datetime.now(indian_timezone).time() < oUtils.MARKET_START_TIME:
         pass
 
-    # --- Start background data fetching ---
     threading.Thread(target=fetch_data_loop, daemon=True).start()
-
-    # --- Setup FuncAnimation ---
     ani = FuncAnimation(fig, animate, interval=500)
-
-    # --- Start the plot (this will now show instantly and update!) ---
     plt.show()
-
