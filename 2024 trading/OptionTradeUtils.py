@@ -3,7 +3,9 @@ import datetime as dt
 
 
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_ACCESS_CODE = 'elbL7ajfjVUrxLqYp6lAjQ7KmNx56M5b'
+KITE_API_SECRET = 'cnt30fp12ftbzk7s0a84ieqv8wbquer4'
+
+KITE_ACCESS_CODE = 'Cj8ZHX0esjlIyK1QCdo6uH0Rbde2vdwq'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 30, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
