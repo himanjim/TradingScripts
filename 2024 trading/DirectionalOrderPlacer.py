@@ -1,4 +1,4 @@
-import Utils as util
+import OptionTradeUtils as oUtils
 import time as tm
 from datetime import datetime
 import pytz
@@ -8,58 +8,23 @@ if __name__ == '__main__':
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
-    kite = util.intialize_kite_api()
+    kite = oUtils.intialize_kite_api()
 
-    choice = 3
-
-    ###############################
-    if choice == 1:
-        # NIFTY24D1924700PE
-        ###############################
-        # UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
-        UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
-        UNDERLYING = ':NIFTY 50'
-        OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-        # PART_SYMBOL = ':NIFTY25123'
-        PART_SYMBOL = 'NIFTY25213'
-        NO_OF_LOTS = 300
-        STRIKE_MULTIPLE = 50
-        trigger_value = None
-        transaction_type = kite.TRANSACTION_TYPE_SELL
-        option_type = 'PE'
-    elif choice == 2:
-        UNDER_LYING_EXCHANGE = kite.EXCHANGE_BSE
-        UNDERLYING = ':SENSEX'
-        OPTIONS_EXCHANGE = kite.EXCHANGE_BFO
-        PART_SYMBOL = 'SENSEX25218'
-        # PART_SYMBOL = ':SENSEX25JAN'
-        NO_OF_LOTS = 100
-        STRIKE_MULTIPLE = 100
-        trigger_value = None
-        transaction_type = kite.TRANSACTION_TYPE_SELL
-        option_type = 'PE'
-    else:
-        UNDER_LYING_EXCHANGE = kite.EXCHANGE_NSE
-        UNDERLYING = ':NIFTY BANK'
-        OPTIONS_EXCHANGE = kite.EXCHANGE_NFO
-        PART_SYMBOL = 'BANKNIFTY25APR'
-        NO_OF_LOTS = 30
-        STRIKE_MULTIPLE = 100
-        trigger_value = 55342
-        transaction_type = kite.TRANSACTION_TYPE_BUY
-        option_type = 'PE'
-
-    ###############################
-
+    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE = oUtils.get_instruments(
+        kite)
+    PART_SYMBOL = PART_SYMBOL.replace(':', '')
     # under_lying_symbol = kite.EXCHANGE_NSE + ':NIFTY 50'
     under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
+    option_type = 'PE'
+    transaction_type = kite.TRANSACTION_TYPE_SELL
+    trigger_value = None
 
-    while datetime.now(indian_timezone).time() < util.TRADE_START_TIME:
+    while datetime.now(indian_timezone).time() < oUtils.TRADE_START_TIME:
         pass
 
     while True:
 
-        if datetime.now(indian_timezone).time() > util.MARKET_END_TIME:
+        if datetime.now(indian_timezone).time() > oUtils.MARKET_END_TIME:
             print(f"Market is closed. Hence exiting.")
             exit(0)
 

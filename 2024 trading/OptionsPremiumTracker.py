@@ -49,25 +49,28 @@ def animate(frame):
             ax.autoscale_view()
             fig.autofmt_xdate()
 
+
 # --- Data fetching loop ---
 def fetch_data_loop():
     try:
+        next_beep = None
+        original_options_premium_value = None
+        highest_options_premium_value = None
         while True:
             now = datetime.now()
-            original_options_premium_value = None
-            highest_options_premium_value = None
 
             if datetime.now(indian_timezone).time() > oUtils.MARKET_END_TIME:
                 print(f"Market is closed. Hence exiting.")
                 exit(0)
 
-            if 'next_beep' not in globals():
+            if next_beep is None:
                 base = dt.datetime.combine(dt.date.today(), dt.time(9, 15))
                 next_beep = base + dt.timedelta(minutes=((dt.datetime.now() - base).seconds // 600 + 1) * 10)
                 print('About to beep.' + str(next_beep))
+                print('Now:' + str(dt.datetime.now()))
             if dt.datetime.now() >= next_beep:
                 print('Beeping 1.')
-                winsound.Beep(1000, 3000)  # 3 seconds
+                winsound.Beep(1000, 2000)  # 3 seconds
                 next_beep += dt.timedelta(minutes=10)
                 print('Beeping 2.')
 
@@ -86,6 +89,11 @@ def fetch_data_loop():
             option_premium_value = 0
             for trading_symbol, live_quote in option_quotes.items():
                 option_premium_value += (live_quote['last_price'] * NO_OF_LOTS)
+
+            recent_values = df['value'].iloc[-5:] if len(df) >= 5 else df['value']
+            if not recent_values.empty and option_premium_value - recent_values.mean() >= 5000:
+                print("Premium jumped ₹5000+ above 5-period average — Beeping!")
+                winsound.Beep(2000, 2000)
 
             if highest_options_premium_value is None or option_premium_value > highest_options_premium_value:
                 highest_options_premium_value = option_premium_value
