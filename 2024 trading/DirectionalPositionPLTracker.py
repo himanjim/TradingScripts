@@ -5,11 +5,11 @@ import OptionTradeUtils as oUtils
 import pandas as pd
 
 if __name__ == '__main__':
-    MAX_PROFIT = 15000
+    MAX_PROFIT = 20000
     MAX_LOSS = -3000
     MAX_PROFIT_EROSION = 10000
     sleep_time = 2
-    max_profit_set = None
+    max_profit_set = 12461
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 

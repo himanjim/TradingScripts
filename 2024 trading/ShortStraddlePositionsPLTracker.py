@@ -2,7 +2,6 @@ import time as tm
 from datetime import datetime
 import pytz
 import OptionTradeUtils as oUtils
-import re
 import pandas as pd
 
 
@@ -19,13 +18,11 @@ def exit_trade(_position):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 6000
+    MAX_PROFIT = 10000
     MAX_LOSS = -5000
-    MAX_PROFIT_EROSION = 10000
+    MAX_PROFIT_EROSION = 5000
     sleep_time = 2
-    max_profit_set = 1310
-
-    second_trade_executed =  True
+    max_profit_set = None
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -56,8 +53,8 @@ if __name__ == '__main__':
 
     print(positions)
 
-#     positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX25APR79000PE', 'quantity': 100, 'price': 534.72, 'product': 'NRML', 'type': 'SELL'},
-# {'exchange': 'BFO', 'tradingsymbol': 'SENSEX25APR79000CE', 'quantity': 100, 'price': 533.97, 'product': 'NRML', 'type': 'SELL'}]
+    # positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2550824400PE', 'quantity': 300, 'price': 51.775, 'product': 'MIS', 'type': 'SELL'},
+    # {'exchange': 'NFO', 'tradingsymbol': 'NIFTY2550824400CE', 'quantity': 300, 'price': 23.75, 'product': 'MIS', 'type': 'SELL'},]
 
     symbols = []
     for position in positions:
@@ -82,7 +79,11 @@ if __name__ == '__main__':
 
             positions_live = kite.positions()
 
-            all_positions_closed = all(item['average_price'] == 0 for item in positions_live['day'])
+            all_positions_closed = all(
+                item['average_price'] == 0
+                for item in positions_live['day']
+                if item['product'] in ('NRML', 'MIS')
+            )
 
             if all_positions_closed:
                 print("No active positions.")
@@ -133,6 +134,8 @@ if __name__ == '__main__':
                     # if position['pl'] < 0 and position['price'] != 0:
                     exit_trade(position)
                     print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
+
+                break
 
             else:
                 tm.sleep(sleep_time)

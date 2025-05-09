@@ -1,3 +1,80 @@
+import datetime as dt
+import winsound  # Use only on Windows
+winsound.Beep(2000, 2000)
+print(1380//600)
+while True:
+    if 'next_beep' not in globals():
+        base = dt.datetime.combine(dt.date.today(), dt.time(8,10))
+        next_beep = base + dt.timedelta(minutes=((dt.datetime.now() - base).seconds // 600 + 1)*10)
+    print('About to beep.' + str(next_beep))
+    print('Now:' + str(dt.datetime.now()))
+
+    if dt.datetime.now() >= next_beep:
+        winsound.Beep(1000, 3000)  # 3 seconds
+        next_beep += dt.timedelta(minutes=10)
+    print(next_beep)
+# winsound.Beep(1000, 3000)
+exit(0)
+
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import pandas as pd
+from datetime import datetime
+import random
+from matplotlib.animation import FuncAnimation
+import threading
+import time
+
+# --- Initialize empty DataFrame ---
+df = pd.DataFrame(columns=['timestamp', 'value'])
+
+# --- Setup Plot ---
+fig, ax = plt.subplots(figsize=(10, 6))
+line, = ax.plot([], [], lw=2)
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+plt.title('Live Data Chart (Smooth & Realtime)')
+plt.xlabel('Time')
+plt.ylabel('Value')
+
+lock = threading.Lock()
+
+# --- Function to add new data point ---
+def add_data(new_time, new_value):
+    global df
+    with lock:
+        df = pd.concat([df, pd.DataFrame({'timestamp': [new_time], 'value': [new_value]})], ignore_index=True)
+
+# --- Animation Update Function ---
+def animate(frame):
+    with lock:
+        if not df.empty:
+            line.set_data(df['timestamp'], df['value'])
+            ax.relim()
+            ax.autoscale_view()
+            fig.autofmt_xdate()
+
+# --- Background thread to simulate API fetching ---
+def fetch_data_loop():
+    try:
+        while True:
+            now = datetime.now()
+            value = random.uniform(1, 100)  # <-- Replace with API fetching
+            add_data(now, value)
+            print(f"Fetched at {now.strftime('%H:%M:%S')}: {value:.2f}")
+            time.sleep(2)
+    except Exception as e:
+        print(f"Error in data fetching thread: {e}")
+
+# --- Start background data fetching ---
+threading.Thread(target=fetch_data_loop, daemon=True).start()
+
+# --- Setup FuncAnimation ---
+ani = FuncAnimation(fig, animate, interval=500)
+
+# --- Start the plot (this will now show instantly and update!) ---
+plt.show()
+
+exit(0)
 import re
 
 original_string = "NIFTY2521323200CE"
@@ -11,19 +88,22 @@ print(modified_string)
 exit(0)
 
 import yfinance as yf
-import mplfinance as mpf
 
-# Step 1: Download stock data for Apple (AAPL) from yfinance
-ticker = 'TCS.NS'
-aapl = yf.Ticker(ticker)
-stock_data = aapl.history(interval='5m', period='1d')
 
-# Step 2: Visualize the data using mplfinance
-# We can customize the chart style, moving averages, and more.
-mpf.plot(stock_data, type='candle', volume=True, mav=(10, 20),
-         title=f'{ticker} Stock Price',
-         style='yahoo',
-         show_nontrading=True)
+
+# Get options data for Reliance Industries (RELIANCE.NS)
+
+reliance_ticker = yf.Ticker("RELIANCE.NS")
+
+options_data = reliance_ticker.options_chain()
+
+
+
+# Access specific options data (e.g., call options with a specific strike price)
+
+calls = options_data.calls
+
+print(calls)
 
 
 

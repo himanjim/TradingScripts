@@ -11,6 +11,7 @@ import os
 import OptionTradeUtils as oUtils
 import winsound  # Use only on Windows
 import datetime as dt
+from scipy.stats import zscore
 
 # --- Time and file setup ---
 indian_timezone = pytz.timezone('Asia/Calcutta')
@@ -66,13 +67,9 @@ def fetch_data_loop():
             if next_beep is None:
                 base = dt.datetime.combine(dt.date.today(), dt.time(9, 15))
                 next_beep = base + dt.timedelta(minutes=((dt.datetime.now() - base).seconds // 600 + 1) * 10)
-                print('About to beep.' + str(next_beep))
-                print('Now:' + str(dt.datetime.now()))
             if dt.datetime.now() >= next_beep:
-                print('Beeping 1.')
                 winsound.Beep(1000, 2000)  # 3 seconds
                 next_beep += dt.timedelta(minutes=10)
-                print('Beeping 2.')
 
             try:
                 ul_live_quote = kite.quote(under_lying_symbol)
@@ -90,10 +87,18 @@ def fetch_data_loop():
             for trading_symbol, live_quote in option_quotes.items():
                 option_premium_value += (live_quote['last_price'] * NO_OF_LOTS)
 
-            recent_values = df['value'].iloc[-5:] if len(df) >= 5 else df['value']
-            if not recent_values.empty and option_premium_value - recent_values.mean() >= 5000:
-                print("Premium jumped ₹5000+ above 5-period average — Beeping!")
-                winsound.Beep(2000, 2000)
+            # Detect statistical jump using z-score
+            if len(df) >= 10:
+                recent_diffs = df['value'].diff().fillna(0)
+                recent_z = zscore(recent_diffs)
+                if recent_z[-1] > 3:  # Use array-style access, not .iloc
+                    print("Z-score spike detected — significant premium jump!")
+                    winsound.Beep(2500, 2000)
+
+            # recent_values = df['value'].iloc[-10:] if len(df) >= 10 else df['value']
+            # if not recent_values.empty and option_premium_value - recent_values.any() >= 5000:
+            #     print("Premium jumped ₹5000+ above 10-period any value — Beeping!")
+            #     winsound.Beep(2500, 500)
 
             if highest_options_premium_value is None or option_premium_value > highest_options_premium_value:
                 highest_options_premium_value = option_premium_value
