@@ -12,6 +12,7 @@ import OptionTradeUtils as oUtils
 import winsound  # Use only on Windows
 import datetime as dt
 from scipy.stats import zscore
+import traceback
 
 # --- Time and file setup ---
 indian_timezone = pytz.timezone('Asia/Calcutta')
@@ -87,13 +88,13 @@ def fetch_data_loop():
             for trading_symbol, live_quote in option_quotes.items():
                 option_premium_value += (live_quote['last_price'] * NO_OF_LOTS)
 
-            # Detect statistical jump using z-score
-            if len(df) >= 10:
-                recent_diffs = df['value'].diff().fillna(0)
-                recent_z = zscore(recent_diffs)
-                if recent_z[-1] > 3:  # Use array-style access, not .iloc
-                    print("Z-score spike detected — significant premium jump!")
-                    winsound.Beep(2500, 2000)
+            # # Detect statistical jump using z-score
+            # if len(df) >= 10:
+            #     recent_diffs = df['value'].diff().fillna(0)
+            #     recent_z = zscore(recent_diffs)
+            #     if recent_z[-1] > 3:  # Use array-style access, not .iloc
+            #         print("Z-score spike detected — significant premium jump!")
+            #         winsound.Beep(2500, 2000)
 
             # recent_values = df['value'].iloc[-10:] if len(df) >= 10 else df['value']
             # if not recent_values.empty and option_premium_value - recent_values.any() >= 5000:
@@ -114,6 +115,7 @@ def fetch_data_loop():
             time.sleep(2)
     except Exception as e:
         print(f"Error in data fetching thread: {e}")
+        traceback.print_exc()
 
 
 # --- Main execution ---

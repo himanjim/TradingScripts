@@ -5,11 +5,11 @@ import OptionTradeUtils as oUtils
 import pandas as pd
 
 if __name__ == '__main__':
-    MAX_PROFIT = 20000
+    MAX_PROFIT = 10000
     MAX_LOSS = -3000
     MAX_PROFIT_EROSION = 10000
     sleep_time = 2
-    max_profit_set = 12461
+    max_profit_set = None
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -28,9 +28,10 @@ if __name__ == '__main__':
     positions = []
     # Iterate over each row in the filtered DataFrame
     for index, row in df.iterrows():
-        positions.append(
-            {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
-             'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
+        if row['product'] in ('NRML', 'MIS'):
+            positions.append(
+                {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
+                 'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
     positions = positions[-1:]
 
     print(positions)
@@ -58,7 +59,11 @@ if __name__ == '__main__':
 
             positions_live = kite.positions()
 
-            all_positions_closed = all(item['average_price'] == 0 for item in positions_live['day'])
+            all_positions_closed = all(
+                item['average_price'] == 0
+                for item in positions_live['day']
+                if item['product'] in ('NRML', 'MIS')
+            )
 
             if all_positions_closed:
                 print("No active positions.")

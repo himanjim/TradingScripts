@@ -10,7 +10,7 @@ def place_order(_pe, _ce, _transaction, _lots, _exchange):
                      transaction_type=_transaction,
                      quantity=_lots,
                      order_type=kite.ORDER_TYPE_MARKET,
-                     product=kite.PRODUCT_MIS,
+                     product=kite.PRODUCT_NRML,
                      )
 
     kite.place_order(tradingsymbol=_ce,
@@ -19,7 +19,7 @@ def place_order(_pe, _ce, _transaction, _lots, _exchange):
                      transaction_type=_transaction,
                      quantity=_lots,
                      order_type=kite.ORDER_TYPE_MARKET,
-                     product=kite.PRODUCT_MIS,
+                     product=kite.PRODUCT_NRML,
                      )
     print(f"Placed {_transaction} order for : {_pe} and {_ce} at {datetime.now(indian_timezone).time()}.")
 

@@ -18,9 +18,9 @@ def exit_trade(_position):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 10000
+    MAX_PROFIT = 15000
     MAX_LOSS = -5000
-    MAX_PROFIT_EROSION = 5000
+    MAX_PROFIT_EROSION = 10000
     sleep_time = 2
     max_profit_set = None
 
@@ -45,9 +45,8 @@ if __name__ == '__main__':
     all_positions = []
     # Iterate over each row in the filtered DataFrame
     for index, row in df.iterrows():
-        all_positions.append(
-            {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
-             'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
+        if row['product'] in ('NRML', 'MIS'):
+            all_positions.append({'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'], 'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
 
     positions = all_positions[-2:]
 
