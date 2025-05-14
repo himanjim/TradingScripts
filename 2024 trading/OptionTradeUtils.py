@@ -3,22 +3,21 @@ import datetime as dt
 
 
 KITE_API_KEY = '453dipfh64qcl484'
-KITE_API_SECRET = 'cnt30fp12ftbzk7s0a84ieqv8wbquer4'
-
-KITE_ACCESS_CODE = 'BzGP4Kq732p7KjuEF69mF0xHm5pHGkeC'
+KITE_ACCESS_CODE = 'joLX4pldJjk7Fx8kZrAHchCczu6g71wO'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 30, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
 
 
 def get_instruments(kite_):
-    choice = 2
+    choice = 1
 
     if choice == 1:
         UNDER_LYING_EXCHANGE = kite_.EXCHANGE_NSE
         UNDERLYING = ':NIFTY 50'
         OPTIONS_EXCHANGE = kite_.EXCHANGE_NFO
-        PART_SYMBOL = ':NIFTY25508'
+        # PART_SYMBOL = ':NIFTY25508'
+        PART_SYMBOL = ':NIFTY25515'
         NO_OF_LOTS = 300
         STRIKE_MULTIPLE = 50
     elif choice == 2:

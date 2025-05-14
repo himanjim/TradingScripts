@@ -16,6 +16,30 @@ def exit_trade(_position):
                      product=_position['product'],
                      )
 
+def get_positions_from_orders(kite_):
+    orders = kite_.orders()
+    # Create pandas DataFrame from the list of orders
+    df = pd.DataFrame(orders)
+    _all_positions = []
+    # Iterate over each row in the filtered DataFrame
+    for index, row in df.iterrows():
+        if row['product'] in ('NRML', 'MIS'):
+            all_positions.append(
+                {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
+                 'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
+
+    return _all_positions
+
+def any_active_positions(kite_):
+    positions_live = kite_.positions()
+
+    return all(
+        item['average_price'] == 0
+        for item in positions_live['day']
+        if item['product'] in ('NRML', 'MIS')
+    )
+
+
 
 if __name__ == '__main__':
     MAX_PROFIT = 15000
@@ -23,10 +47,14 @@ if __name__ == '__main__':
     MAX_PROFIT_EROSION = 10000
     sleep_time = 2
     max_profit_set = None
+    second_trade_execute = True
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
     kite = oUtils.intialize_kite_api()
+    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE = oUtils.get_instruments(kite)
+    PART_SYMBOL = PART_SYMBOL.replace(':', '')
+    under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
 
     # print(kite.positions())
     #
@@ -39,15 +67,7 @@ if __name__ == '__main__':
 #
 #     [{'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY25APR55300PE', 'quantity': 120, 'price': 82.525, 'product': 'NRML', 'type': 'SELL'}, {'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY25APR55300CE', 'quantity': 120, 'price': 148.6875, 'product': 'NRML', 'type': 'SELL'}]
 
-    orders = kite.orders()
-    # Create pandas DataFrame from the list of orders
-    df = pd.DataFrame(orders)
-    all_positions = []
-    # Iterate over each row in the filtered DataFrame
-    for index, row in df.iterrows():
-        if row['product'] in ('NRML', 'MIS'):
-            all_positions.append({'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'], 'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
-
+    all_positions = get_positions_from_orders(kite)
     positions = all_positions[-2:]
 
     print(positions)
@@ -74,19 +94,12 @@ if __name__ == '__main__':
                 print(f"Market is closed. Hence exiting.")
                 exit(0)
 
-            live_quotes = kite.quote(symbols)
-
-            positions_live = kite.positions()
-
-            all_positions_closed = all(
-                item['average_price'] == 0
-                for item in positions_live['day']
-                if item['product'] in ('NRML', 'MIS')
-            )
-
-            if all_positions_closed:
+            if any_active_positions():
                 print("No active positions.")
                 break
+
+            live_quotes = kite.quote(symbols)
+
 
             net_pl = 0
 
@@ -133,6 +146,55 @@ if __name__ == '__main__':
                     # if position['pl'] < 0 and position['price'] != 0:
                     exit_trade(position)
                     print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
+
+                if second_trade_execute and net_pl <= MAX_LOSS:
+                    under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
+                    ul_live_quote = kite.quote(under_lying_symbol)
+
+                    ul_ltp = ul_live_quote[under_lying_symbol]['last_price']
+
+                    # nifty_ltp_round_50 = round(nifty_ltp / 50) * 50
+                    ul_ltp_round = round(ul_ltp / STRIKE_MULTIPLE) * STRIKE_MULTIPLE
+                    for position in positions:
+                        if position['pl'] > 0 and position['price'] != 0:
+                            if 'CE' in position['tradingsymbol']:
+                                option_symbol = PART_SYMBOL + str(ul_ltp_round) + 'CE'
+                            else:
+                                option_symbol = PART_SYMBOL + str(ul_ltp_round) + 'PE'
+
+                            kite.place_order(tradingsymbol=option_symbol,
+                                             variety=kite.VARIETY_REGULAR,
+                                             exchange=position['exchange'],
+                                             transaction_type=kite.TRANSACTION_TYPE_SELL,
+                                             quantity=position['quantity'],
+                                             order_type=kite.ORDER_TYPE_MARKET,
+                                             product=position['product'],
+                                             )
+                            print(
+                                f"2nd order placed of instrument {option_symbol} at {datetime.now(indian_timezone).time()}.")
+
+                            tm.sleep(1)
+                            if any_active_positions():
+                                print("No active positions. Place order manually")
+                                break
+
+                            all_positions = get_positions_from_orders(kite)
+                            last_position = all_positions[-1:]
+
+                            if last_position and last_position['tradingsymbol'] == option_symbol and last_position['price'] != 0:
+                                kite.place_order(tradingsymbol=option_symbol,
+                                                 variety=kite.VARIETY_REGULAR,
+                                                 exchange=position['exchange'],
+                                                 transaction_type=kite.TRANSACTION_TYPE_BUY,
+                                                 quantity=position['quantity'],
+                                                 order_type=kite.ORDER_TYPE_SL,
+                                                 product=position['product'],
+                                                 price= last_position['price'] + 31,
+                                                 trigger_price = last_position['price'] + 30
+                                                 )
+
+                            break
+
 
                 break
 
