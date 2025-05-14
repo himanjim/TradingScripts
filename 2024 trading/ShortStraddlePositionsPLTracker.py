@@ -9,8 +9,8 @@ def exit_trade(_position):
     kite.place_order(tradingsymbol=_position['tradingsymbol'],
                      variety=kite.VARIETY_REGULAR,
                      exchange=_position['exchange'],
-                     transaction_type=[kite.TRANSACTION_TYPE_BUY if _position[
-                                                                        'type'] == kite.TRANSACTION_TYPE_SELL else kite.TRANSACTION_TYPE_SELL],
+                     transaction_type=kite.TRANSACTION_TYPE_BUY if _position[
+                                                                        'type'] == kite.TRANSACTION_TYPE_SELL else kite.TRANSACTION_TYPE_SELL,
                      quantity=_position['quantity'],
                      order_type=kite.ORDER_TYPE_MARKET,
                      product=_position['product'],
@@ -24,7 +24,7 @@ def get_positions_from_orders(kite_):
     # Iterate over each row in the filtered DataFrame
     for index, row in df.iterrows():
         if row['product'] in ('NRML', 'MIS'):
-            all_positions.append(
+            _all_positions.append(
                 {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
                  'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
 
@@ -40,19 +40,18 @@ def any_active_positions(kite_):
     )
 
 
-
 if __name__ == '__main__':
-    MAX_PROFIT = 15000
+    MAX_PROFIT = 10000
     MAX_LOSS = -5000
-    MAX_PROFIT_EROSION = 10000
+    MAX_PROFIT_EROSION = 5000
     sleep_time = 2
     max_profit_set = None
-    second_trade_execute = True
+    second_trade_execute = None
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
     kite = oUtils.intialize_kite_api()
-    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE = oUtils.get_instruments(kite)
+    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOP_LOSS_POINTS, TARGET_POINTS = oUtils.get_instruments(kite)
     PART_SYMBOL = PART_SYMBOL.replace(':', '')
     under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
 
@@ -72,8 +71,8 @@ if __name__ == '__main__':
 
     print(positions)
 
-    # positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2550824400PE', 'quantity': 300, 'price': 51.775, 'product': 'MIS', 'type': 'SELL'},
-    # {'exchange': 'NFO', 'tradingsymbol': 'NIFTY2550824400CE', 'quantity': 300, 'price': 23.75, 'product': 'MIS', 'type': 'SELL'},]
+#     positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2551524600PE', 'quantity': 300, 'price': 100.2125, 'product': 'NRML', 'type': 'SELL'},
+# {'exchange': 'NFO', 'tradingsymbol': 'NIFTY2551524600CE', 'quantity': 300, 'price': 103.775, 'product': 'NRML', 'type': 'SELL'},]
 
     symbols = []
     for position in positions:

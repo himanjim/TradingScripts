@@ -58,6 +58,7 @@ def fetch_data_loop():
         next_beep = None
         original_options_premium_value = None
         highest_options_premium_value = None
+        last_beep_index_for_5k_prem = 0
         while True:
             now = datetime.now()
 
@@ -96,10 +97,14 @@ def fetch_data_loop():
             #         print("Z-score spike detected — significant premium jump!")
             #         winsound.Beep(2500, 2000)
 
-            # recent_values = df['value'].iloc[-10:] if len(df) >= 10 else df['value']
+            # # Slice df from last beep index to current end
+            # df_slice = df.iloc[last_beep_index_for_5k_prem:] if last_beep_index_for_5k_prem < len(df) else df
+            #
+            # recent_values = df_slice['value'].iloc[-10:] if len(df_slice) >= 10 else df_slice['value']
             # if not recent_values.empty and option_premium_value - recent_values.any() >= 5000:
             #     print("Premium jumped ₹5000+ above 10-period any value — Beeping!")
             #     winsound.Beep(2500, 500)
+            #     last_beep_index_for_5k_prem = len(df)  # Update to current end after beep
 
             if highest_options_premium_value is None or option_premium_value > highest_options_premium_value:
                 highest_options_premium_value = option_premium_value
