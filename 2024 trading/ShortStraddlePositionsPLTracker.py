@@ -94,7 +94,7 @@ if __name__ == '__main__':
                 print(f"Market is closed. Hence exiting.")
                 exit(0)
 
-            if any_active_positions():
+            if any_active_positions(kite):
                 print("No active positions.")
                 break
 
@@ -147,6 +147,7 @@ if __name__ == '__main__':
                     exit_trade(position)
                     print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
 
+                # Code of 2nd trade after loss
                 if second_trade_execute and net_pl <= MAX_LOSS:
                     under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
                     ul_live_quote = kite.quote(under_lying_symbol)
@@ -174,12 +175,12 @@ if __name__ == '__main__':
                                 f"2nd order placed of instrument {option_symbol} at {datetime.now(indian_timezone).time()}.")
 
                             tm.sleep(1)
-                            if any_active_positions():
+                            if any_active_positions(kite):
                                 print("No active positions. Place order manually")
                                 break
 
                             all_positions = get_positions_from_orders(kite)
-                            last_position = all_positions[-1:]
+                            last_position = all_positions[-1:][0]
 
                             if last_position and last_position['tradingsymbol'] == option_symbol and last_position['price'] != 0:
                                 kite.place_order(tradingsymbol=option_symbol,
@@ -194,7 +195,7 @@ if __name__ == '__main__':
                                                  )
 
                             break
-
+                # Code of 2nd trade after loss
 
                 break
 
