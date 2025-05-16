@@ -3,9 +3,11 @@ from datetime import datetime
 import pytz
 import OptionTradeUtils as oUtils
 import pandas as pd
+import winsound  # Use only on Windows
+
 
 if __name__ == '__main__':
-    MAX_PROFIT = 10000
+    MAX_PROFIT = 20000
     MAX_LOSS = -3000
     MAX_PROFIT_EROSION = 10000
     sleep_time = 2
@@ -35,6 +37,8 @@ if __name__ == '__main__':
     positions = positions[-1:]
 
     print(positions)
+
+    # positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2551524600PE', 'quantity': 300, 'price': 97.45, 'product': 'NRML', 'type': 'SELL'}]
 
     symbols = []
     for position in positions:
@@ -113,7 +117,7 @@ if __name__ == '__main__':
                         print(f"Position of instrument {position['tradingsymbol']} exited.")
 
                 print(f"All postions exited at P/L {net_pl} at {datetime.now(indian_timezone).time()}")
-
+                winsound.Beep(2000, 2000)
                 break
 
             else:

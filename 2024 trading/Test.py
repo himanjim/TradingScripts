@@ -1,7 +1,22 @@
+import OptionTradeUtils as oUtils
+
+kite = oUtils.intialize_kite_api()
+
+print(kite.instruments('NSE'))
+exit(0)
+# h_data = kite.historical_data('SENSEX2552082200PE', '2025-05-15 09:15:00', '2025-05-15 10:15:00', '1min')
+h_data = kite.historical_data(265, '2024-05-15 09:15:00', '2024-05-15 15:15:00', 'minute')
+# h_data = kite.historical_data()
+# h_data = kite.quote('BFO:SENSEX2552082200PE')
+print(h_data)
+# print(kite.instruments('BSE'))
+exit(0)
+
 import datetime as dt
 import winsound  # Use only on Windows
 winsound.Beep(2000, 2000)
 print(1380//600)
+exit(0)
 while True:
     if 'next_beep' not in globals():
         base = dt.datetime.combine(dt.date.today(), dt.time(8,10))

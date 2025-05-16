@@ -35,21 +35,21 @@ if __name__ == '__main__':
 
 
     ###############################
+    while True:
+        # under_lying_symbol = kite.EXCHANGE_NSE + ':NIFTY 50'
+        under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
 
-    # under_lying_symbol = kite.EXCHANGE_NSE + ':NIFTY 50'
-    under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
+        input(f"Press Enter to place SHORT straddle for {PART_SYMBOL}")
 
-    input(f"Press Enter to place SHORT straddle for {PART_SYMBOL}")
+        ul_live_quote = kite.quote(under_lying_symbol)
 
-    ul_live_quote = kite.quote(under_lying_symbol)
+        ul_ltp = ul_live_quote[under_lying_symbol]['last_price']
 
-    ul_ltp = ul_live_quote[under_lying_symbol]['last_price']
+        # nifty_ltp_round_50 = round(nifty_ltp / 50) * 50
+        ul_ltp_round = round(ul_ltp / STRIKE_MULTIPLE) * STRIKE_MULTIPLE
 
-    # nifty_ltp_round_50 = round(nifty_ltp / 50) * 50
-    ul_ltp_round = round(ul_ltp / STRIKE_MULTIPLE) * STRIKE_MULTIPLE
+        option_pe = PART_SYMBOL + str(ul_ltp_round) + 'PE'
+        option_ce = PART_SYMBOL + str(ul_ltp_round) + 'CE'
 
-    option_pe = PART_SYMBOL + str(ul_ltp_round) + 'PE'
-    option_ce = PART_SYMBOL + str(ul_ltp_round) + 'CE'
-
-    place_order(option_pe, option_ce, kite.TRANSACTION_TYPE_SELL, NO_OF_LOTS, OPTIONS_EXCHANGE)
+        place_order(option_pe, option_ce, kite.TRANSACTION_TYPE_SELL, NO_OF_LOTS, OPTIONS_EXCHANGE)
 
