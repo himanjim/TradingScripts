@@ -7,7 +7,7 @@ import winsound  # Use only on Windows
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 20000
+    MAX_PROFIT = 10000
     MAX_LOSS = -3000
     MAX_PROFIT_EROSION = 10000
     sleep_time = 2
@@ -30,7 +30,7 @@ if __name__ == '__main__':
     positions = []
     # Iterate over each row in the filtered DataFrame
     for index, row in df.iterrows():
-        if row['product'] in ('NRML', 'MIS'):
+        if row['product'] in ('NRML', 'MIS') and row['variety'] in ('regular'):
             positions.append(
                 {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
                  'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
@@ -88,7 +88,7 @@ if __name__ == '__main__':
             if net_pl < 0 and net_pl < min_pl:
                 min_pl = net_pl
 
-            if net_pl > 5000:
+            if net_pl > 3000:
                 MAX_LOSS = 0
 
             print(f"Net P/L: {net_pl}. Maximum Profit: {max_pl}. Maximum Loss: {min_pl} at {datetime.now(indian_timezone).time()}.")

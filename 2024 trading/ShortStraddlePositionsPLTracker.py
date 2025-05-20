@@ -24,7 +24,7 @@ def get_positions_from_orders(kite_):
     _all_positions = []
     # Iterate over each row in the filtered DataFrame
     for index, row in df.iterrows():
-        if row['product'] in ('NRML', 'MIS'):
+        if row['product'] in ('NRML', 'MIS') and row['variety'] in ('regular'):
             _all_positions.append(
                 {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
                  'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
@@ -42,8 +42,8 @@ def any_active_positions(kite_):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 10000
-    MAX_LOSS = -5000
+    MAX_PROFIT = 8000
+    MAX_LOSS = -4000
     MAX_PROFIT_EROSION = 10000
     sleep_time = 2
     max_profit_set = None
@@ -138,9 +138,10 @@ if __name__ == '__main__':
             if net_pl >= MAX_PROFIT:
 
                 for position in positions:
-                    if position['pl'] < 0 and position['price'] != 0:
-                        exit_trade(position)
-                        print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
+                    # if position['pl'] < 0 and position['price'] != 0:
+                    exit_trade(position)
+                    print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
+                    winsound.Beep(2000, 2000)
 
                 break
 
