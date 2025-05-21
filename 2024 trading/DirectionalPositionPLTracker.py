@@ -7,9 +7,9 @@ import winsound  # Use only on Windows
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 10000
+    MAX_PROFIT = 20000
     MAX_LOSS = -3000
-    MAX_PROFIT_EROSION = 10000
+    MAX_PROFIT_EROSION = 3000
     sleep_time = 2
     max_profit_set = None
 
@@ -88,8 +88,12 @@ if __name__ == '__main__':
             if net_pl < 0 and net_pl < min_pl:
                 min_pl = net_pl
 
-            if net_pl > 3000:
+            if max_pl > 3000:
                 MAX_LOSS = 0
+            elif max_pl > 10000:
+                MAX_PROFIT_EROSION = 5000
+            elif max_pl > 15000:
+                MAX_PROFIT_EROSION = 7000
 
             print(f"Net P/L: {net_pl}. Maximum Profit: {max_pl}. Maximum Loss: {min_pl} at {datetime.now(indian_timezone).time()}.")
 

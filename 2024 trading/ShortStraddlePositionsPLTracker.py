@@ -42,8 +42,8 @@ def any_active_positions(kite_):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 8000
-    MAX_LOSS = -4000
+    MAX_PROFIT = 20000
+    MAX_LOSS = -5000
     MAX_PROFIT_EROSION = 10000
     sleep_time = 2
     max_profit_set = None
@@ -118,10 +118,10 @@ if __name__ == '__main__':
             if net_pl < 0 and net_pl < min_pl:
                 min_pl = net_pl
 
-            if net_pl > 5000:
+            if max_pl > 5000:
                 MAX_LOSS = 0
                 MAX_PROFIT_EROSION = 5000
-            elif net_pl > 10000:
+            elif max_pl > 10000:
                 MAX_LOSS = 7000
                 MAX_PROFIT_EROSION = 10000
 
