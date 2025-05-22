@@ -42,12 +42,12 @@ def any_active_positions(kite_):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 20000
-    MAX_LOSS = -5000
-    MAX_PROFIT_EROSION = 10000
+    MAX_PROFIT = 3000
+    MAX_LOSS = -1000
+    MAX_PROFIT_EROSION = 2000
     sleep_time = 2
     max_profit_set = None
-    second_trade_execute = False
+    # second_trade_execute = False
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
@@ -141,7 +141,7 @@ if __name__ == '__main__':
                     # if position['pl'] < 0 and position['price'] != 0:
                     exit_trade(position)
                     print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
-                    winsound.Beep(2000, 2000)
+                winsound.Beep(2000, 2000)
 
                 break
 
@@ -151,7 +151,7 @@ if __name__ == '__main__':
                     # if position['pl'] < 0 and position['price'] != 0:
                     exit_trade(position)
                     print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
-                    winsound.Beep(2000, 2000)
+                winsound.Beep(2000, 2000)
 
                 # # Code of 2nd trade after loss
                 # if second_trade_execute and net_pl <= MAX_LOSS:

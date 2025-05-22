@@ -2,6 +2,7 @@ from datetime import datetime
 import pytz
 import OptionTradeUtils as oUtils
 
+
 def place_single_order(symbol, transaction, lots, exchange):
     kite.place_order(
         tradingsymbol=symbol,
@@ -25,15 +26,29 @@ if __name__ == '__main__':
 
     while True:
         under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
-        user_input = input("Enter 'PE' or 'CE' to place SHORT order (case-insensitive): ").strip().upper()
+        user_input = input("Enter option type (PE/CE) and optionally BUY/SELL (e.g. 'PE buy', 'CE', etc.): ").strip().lower()
 
-        if user_input not in ['PE', 'CE']:
-            print("Invalid input. Please enter only 'PE' or 'CE'.")
+        if not user_input:
+            print("No input detected. Please enter a valid option type.")
+            continue
+
+        tokens = user_input.split()
+        option_type = tokens[0].upper() if len(tokens) > 0 else None
+        transaction_str = tokens[1].upper() if len(tokens) > 1 else "SELL"
+
+        if option_type not in ["PE", "CE"]:
+            print("Invalid option type. Please enter PE or CE.")
+            continue
+
+        if transaction_str not in ["BUY", "SELL"]:
+            print("Invalid transaction type. Use 'buy' or 'sell'.")
             continue
 
         ul_live_quote = kite.quote(under_lying_symbol)
         ul_ltp = ul_live_quote[under_lying_symbol]['last_price']
         ul_ltp_round = round(ul_ltp / STRIKE_MULTIPLE) * STRIKE_MULTIPLE
 
-        option_symbol = PART_SYMBOL + str(ul_ltp_round) + user_input
-        place_single_order(option_symbol, kite.TRANSACTION_TYPE_SELL, NO_OF_LOTS, OPTIONS_EXCHANGE)
+        option_symbol = PART_SYMBOL + str(ul_ltp_round) + option_type
+        transaction = kite.TRANSACTION_TYPE_BUY if transaction_str == "BUY" else kite.TRANSACTION_TYPE_SELL
+
+        place_single_order(option_symbol, transaction, NO_OF_LOTS, OPTIONS_EXCHANGE)
