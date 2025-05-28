@@ -17,7 +17,7 @@ import traceback
 # --- Time and file setup ---
 indian_timezone = pytz.timezone('Asia/Calcutta')
 today_str = datetime.now(indian_timezone).strftime('%Y-%m-%d')
-DATA_FILE = f"premium_data_{today_str}.csv"
+DATA_FILE = f"C:/Users/USER/Downloads/premium_data_{today_str}.csv"
 
 # --- Load persisted data if available ---
 if os.path.exists(DATA_FILE):

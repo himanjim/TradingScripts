@@ -42,8 +42,8 @@ def any_active_positions(kite_):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 10000
-    MAX_LOSS = -3000
+    MAX_PROFIT = 20000
+    MAX_LOSS = -5000
     MAX_PROFIT_EROSION = 10000
     sleep_time = 2
     max_profit_set = None

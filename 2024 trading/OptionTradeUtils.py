@@ -6,14 +6,14 @@ KITE_API_KEY = '453dipfh64qcl484'
 KITE_API_SECRET = 'cnt30fp12ftbzk7s0a84ieqv8wbquer4'
 
 
-KITE_ACCESS_CODE = 'eq82LmnThTbKReHmpWGqWNX3TPTNmWOk'
+KITE_ACCESS_CODE = 'zaMkKK5EGnM3YBVdWdcHSOC7Gpavmz9e'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 30, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
 
 
 def get_instruments(kite_):
-    choice = 2
+    choice = 3
 
     if choice == 1:
         UNDER_LYING_EXCHANGE = kite_.EXCHANGE_NSE
@@ -36,7 +36,8 @@ def get_instruments(kite_):
         UNDER_LYING_EXCHANGE = kite_.EXCHANGE_NSE
         UNDERLYING = ':NIFTY BANK'
         OPTIONS_EXCHANGE = kite_.EXCHANGE_NFO
-        PART_SYMBOL = ':BANKNIFTY25APR'
+        # PART_SYMBOL = ':BANKNIFTY25APR'
+        PART_SYMBOL = ':BANKNIFTY25MAY'
         NO_OF_LOTS = 120
         STRIKE_MULTIPLE = 100
 
