@@ -50,9 +50,9 @@ if __name__ == '__main__':
 
         if transaction_str == "BUY":
             if option_type == "PE":
-                ul_ltp_round = ul_ltp_round - (2* STRIKE_MULTIPLE)
+                ul_ltp_round = ul_ltp_round - (1* STRIKE_MULTIPLE)
             else:
-                ul_ltp_round = ul_ltp_round + (2 * STRIKE_MULTIPLE)
+                ul_ltp_round = ul_ltp_round + (1 * STRIKE_MULTIPLE)
 
         option_symbol = PART_SYMBOL + str(ul_ltp_round) + option_type
         transaction = kite.TRANSACTION_TYPE_BUY if transaction_str == "BUY" else kite.TRANSACTION_TYPE_SELL

@@ -2,8 +2,8 @@ import pandas as pd
 
 DIRECTORY = "C:/Users/USER/Downloads/"
 # Step 1: Load the CSV file containing trade data
-df = pd.read_csv(DIRECTORY + "orders (8).csv")
-positions_df = pd.read_csv(DIRECTORY + "positions (30).csv")
+df = pd.read_csv(DIRECTORY + "orders (4).csv")
+positions_df = pd.read_csv(DIRECTORY + "positions (25).csv")
 
 # Step 2: Convert 'Time' column to datetime format and sort trades by time
 df['Time'] = pd.to_datetime(df['Time'])
@@ -72,7 +72,8 @@ for i, row1 in df.iterrows():
                     "SELL CALL EXIT PRICE": call_exit['Avg. price'],
                     "SELL PUT STRIKE": put_leg['Strike'],
                     "SELL PUT ENTRY PRICE": put_leg['Avg. price'],
-                    "SELL PUT EXIT PRICE": put_exit['Avg. price']
+                    "SELL PUT EXIT PRICE": put_exit['Avg. price'],
+                    "TRADE TYPE": 'SHORT STRADDLE'
                 })
 
                 # Mark all 4 trades as used
@@ -101,7 +102,8 @@ for i, row1 in df_remaining.iterrows():
                 row1['Type'] != row2['Type']
         ):
             # Determine which is entry and exit
-            entry, exit = (row1, row2) if row1['Type'] == 'SELL' else (row2, row1)
+            entry, exit = (row1, row2) if row1['Time'] < row2['Time'] else (row2, row1)
+            trade_type = entry['Type']  # Either 'BUY' or 'SELL'
 
             # Save the trade based on option type
             if entry['OptionType'] == 'CE':
@@ -113,7 +115,8 @@ for i, row1 in df_remaining.iterrows():
                     "SELL CALL EXIT PRICE": exit['Avg. price'],
                     "SELL PUT STRIKE": None,
                     "SELL PUT ENTRY PRICE": None,
-                    "SELL PUT EXIT PRICE": None
+                    "SELL PUT EXIT PRICE": None,
+                    "TRADE TYPE": trade_type
                 })
             else:
                 directional.append({
@@ -124,7 +127,8 @@ for i, row1 in df_remaining.iterrows():
                     "SELL CALL EXIT PRICE": None,
                     "SELL PUT STRIKE": entry['Strike'],
                     "SELL PUT ENTRY PRICE": entry['Avg. price'],
-                    "SELL PUT EXIT PRICE": exit['Avg. price']
+                    "SELL PUT EXIT PRICE": exit['Avg. price'],
+                    "TRADE TYPE": trade_type
                 })
 
             # Mark both trades as used
@@ -144,7 +148,8 @@ positions_df['Strike'] = positions_df['Strike'].astype(str)
 expiry_lookup = positions_df.set_index(['Strike', 'OptionType'])['LTP'].to_dict()
 
 # Step 10: Combine straddle and directional trades into a single DataFrame
-final_df = pd.DataFrame(straddles + directional).sort_values(by="TRADE ENTRY TIME")
+final_df = pd.DataFrame(straddles + directional)
+final_df = final_df.sort_values(by="TRADE ENTRY TIME")
 final_df["SELL CALL EXPIRY PRICE"] = final_df["SELL CALL STRIKE"].apply(lambda s: get_expiry_price(s, "CE"))
 final_df["SELL PUT EXPIRY PRICE"] = final_df["SELL PUT STRIKE"].apply(lambda s: get_expiry_price(s, "PE"))
 

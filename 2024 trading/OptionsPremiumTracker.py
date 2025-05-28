@@ -17,7 +17,7 @@ import traceback
 # --- Time and file setup ---
 indian_timezone = pytz.timezone('Asia/Calcutta')
 today_str = datetime.now(indian_timezone).strftime('%Y-%m-%d')
-DATA_FILE = f"C:/Users/USER/Downloads/premium_data_{today_str}.csv"
+DATA_FILE = f"C:/Users/USER/Downloads/PremiumsChartsData/premium_data_{today_str}.csv"
 
 # --- Load persisted data if available ---
 if os.path.exists(DATA_FILE):
@@ -59,6 +59,7 @@ def fetch_data_loop():
         original_options_premium_value = None
         highest_options_premium_value = None
         last_beep_index_for_5k_prem = 0
+        trigger_value = None
         while True:
             now = datetime.now()
 
@@ -84,6 +85,9 @@ def fetch_data_loop():
                 print(f"An error occurred: {e}")
                 tm.sleep(2)
                 continue
+
+            if trigger_value and ul_ltp > trigger_value:
+                winsound.Beep(2000, 1500)
 
             option_premium_value = 0
             for trading_symbol, live_quote in option_quotes.items():
