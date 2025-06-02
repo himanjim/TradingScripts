@@ -7,8 +7,8 @@ import winsound  # Use only on Windows
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 20000
-    MAX_LOSS = -3000
+    MAX_PROFIT = 10000
+    MAX_LOSS = -2000
     MAX_PROFIT_EROSION = 3000
     sleep_time = 2
     max_profit_set = None
@@ -30,7 +30,7 @@ if __name__ == '__main__':
     positions = []
     # Iterate over each row in the filtered DataFrame
     for index, row in df.iterrows():
-        if row['product'] in ('NRML', 'MIS') and row['variety'] in ('regular'):
+        if row['product'] in ('NRML', 'MIS') and row['variety'] in ('regular') and row['status'] in ('COMPLETE'):
             positions.append(
                 {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
                  'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
@@ -51,6 +51,8 @@ if __name__ == '__main__':
     if len(symbols) == 0:
         print(f"No active position. Hence exiting.")
         exit(0)
+
+    oUtils.cancel_all_open_orders(kite)
 
     while True:
         try:
@@ -121,6 +123,9 @@ if __name__ == '__main__':
                         print(f"Position of instrument {position['tradingsymbol']} exited.")
 
                 print(f"All postions exited at P/L {net_pl} at {datetime.now(indian_timezone).time()}")
+
+                oUtils.cancel_all_open_orders(kite)
+
                 winsound.Beep(2000, 2000)
                 break
 

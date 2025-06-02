@@ -60,19 +60,21 @@ def fetch_data_loop():
         highest_options_premium_value = None
         last_beep_index_for_5k_prem = 0
         trigger_value = None
+        beep_count = 0  # Add this at the beginning of fetch_data_loop() function
+
         while True:
             now = datetime.now()
 
             if datetime.now(indian_timezone).time() > oUtils.MARKET_END_TIME:
                 print(f"Market is closed. Hence exiting.")
                 exit(0)
-
-            if next_beep is None:
-                base = dt.datetime.combine(dt.date.today(), dt.time(9, 15))
-                next_beep = base + dt.timedelta(minutes=((dt.datetime.now() - base).seconds // 600 + 1) * 10)
-            if dt.datetime.now() >= next_beep:
-                winsound.Beep(1000, 2000)  # 3 seconds
-                next_beep += dt.timedelta(minutes=10)
+            #
+            # if next_beep is None:
+            #     base = dt.datetime.combine(dt.date.today(), dt.time(9, 15))
+            #     next_beep = base + dt.timedelta(minutes=((dt.datetime.now() - base).seconds // 600 + 1) * 10)
+            # if dt.datetime.now() >= next_beep:
+            #     winsound.Beep(1000, 2000)  # 3 seconds
+            #     next_beep += dt.timedelta(minutes=10)
 
             try:
                 ul_live_quote = kite.quote(under_lying_symbol)
@@ -86,8 +88,10 @@ def fetch_data_loop():
                 tm.sleep(2)
                 continue
 
-            if trigger_value and ul_ltp > trigger_value:
+            # Replace the trigger check with:
+            if trigger_value and ul_ltp < trigger_value and beep_count < 3:
                 winsound.Beep(2000, 1500)
+                beep_count += 1
 
             option_premium_value = 0
             for trading_symbol, live_quote in option_quotes.items():

@@ -6,14 +6,14 @@ KITE_API_KEY = '453dipfh64qcl484'
 KITE_API_SECRET = 'cnt30fp12ftbzk7s0a84ieqv8wbquer4'
 
 
-KITE_ACCESS_CODE = 'zaMkKK5EGnM3YBVdWdcHSOC7Gpavmz9e'
+KITE_ACCESS_CODE = '5eRgazkHoTW1NMhA3tzTGDX4eWNOMlia'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 30, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
 
 
 def get_instruments(kite_):
-    choice = 3
+    choice = 2
 
     if choice == 1:
         UNDER_LYING_EXCHANGE = kite_.EXCHANGE_NSE
@@ -28,8 +28,8 @@ def get_instruments(kite_):
         UNDERLYING = ':SENSEX'
         OPTIONS_EXCHANGE = kite_.EXCHANGE_BFO
         # PART_SYMBOL = ':SENSEX25MAY'
-        PART_SYMBOL = ':SENSEX25506' # 6th May 2025
-        PART_SYMBOL = ':SENSEX25MAY'
+        # PART_SYMBOL = ':SENSEX25506' # 6th May 2025
+        PART_SYMBOL = ':SENSEX25603'
         NO_OF_LOTS = 100
         STRIKE_MULTIPLE = 100
     else:
@@ -77,3 +77,18 @@ def get_underlying_value(_kite, _position):
     ul_ltp_round = round(ul_ltp / strike_multiple) * strike_multiple
 
     return ul_ltp_round
+
+
+def cancel_all_open_orders(kite):
+    orders = kite.orders()
+    open_orders = [order for order in orders if order['status'] == 'TRIGGER PENDING' or order['status'] == 'OPEN']
+
+    for order in open_orders:
+        try:
+            kite.cancel_order(
+                variety=order['variety'],
+                order_id=order['order_id']
+            )
+            print(f"Cancelled order ID: {order['order_id']} for {order['tradingsymbol']}")
+        except Exception as e:
+            print(f"Failed to cancel order ID: {order['order_id']} - {str(e)}")

@@ -62,9 +62,9 @@ if __name__ == '__main__':
         print("Invalid transaction type. Please enter BUY or SELL.")
         exit(1)
 
-    instrument_symbol = 'SENSEX25MAY52500CE'  # Fixed symbol
-    lots = 15  # Fixed lots
-    stoploss_points = 50.0  # Fixed stoploss points
+    instrument_symbol = 'SENSEX2560381200CE'  # Fixed symbol
+    lots = 100  # Fixed lots
+    stoploss_points = 30.0  # Fixed stoploss points
     exchange = 'BFO'
 
     transaction_type = kite.TRANSACTION_TYPE_BUY if transaction == 'BUY' else kite.TRANSACTION_TYPE_SELL
