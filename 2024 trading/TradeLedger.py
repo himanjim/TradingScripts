@@ -103,7 +103,13 @@ for i, row1 in df_remaining.iterrows():
         ):
             # Determine which is entry and exit
             entry, exit = (row1, row2) if row1['Time'] < row2['Time'] else (row2, row1)
-            trade_type = entry['Type']  # Either 'BUY' or 'SELL'
+
+            trade_type = 'BUY' if entry['Type'] == 'BUY' else 'SELL'
+            entry_price = entry['Avg. price']
+            exit_price = exit['Avg. price']
+            # Swap prices if trade_type is BUY to maintain entry < exit
+            if trade_type == 'BUY':
+                entry_price, exit_price = exit_price, entry_price
 
             # Save the trade based on option type
             if entry['OptionType'] == 'CE':
@@ -111,8 +117,8 @@ for i, row1 in df_remaining.iterrows():
                     "TRADE ENTRY TIME": entry['Time'].time(),
                     "TRADE EXIT TIME": exit['Time'].time(),
                     "SELL CALL STRIKE": entry['Strike'],
-                    "SELL CALL ENTRY PRICE": entry['Avg. price'],
-                    "SELL CALL EXIT PRICE": exit['Avg. price'],
+                    "SELL CALL ENTRY PRICE": entry_price,
+                    "SELL CALL EXIT PRICE": exit_price,
                     "SELL PUT STRIKE": None,
                     "SELL PUT ENTRY PRICE": None,
                     "SELL PUT EXIT PRICE": None,
@@ -126,8 +132,8 @@ for i, row1 in df_remaining.iterrows():
                     "SELL CALL ENTRY PRICE": None,
                     "SELL CALL EXIT PRICE": None,
                     "SELL PUT STRIKE": entry['Strike'],
-                    "SELL PUT ENTRY PRICE": entry['Avg. price'],
-                    "SELL PUT EXIT PRICE": exit['Avg. price'],
+                    "SELL CALL ENTRY PRICE": entry_price,
+"SELL CALL EXIT PRICE": exit_price,
                     "TRADE TYPE": trade_type
                 })
 
