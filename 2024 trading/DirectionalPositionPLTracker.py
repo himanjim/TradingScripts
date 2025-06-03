@@ -7,7 +7,7 @@ import winsound  # Use only on Windows
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 10000
+    MAX_PROFIT = 20000
     MAX_LOSS = -2000
     MAX_PROFIT_EROSION = 3000
     sleep_time = 2

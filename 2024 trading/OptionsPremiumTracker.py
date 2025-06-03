@@ -68,13 +68,13 @@ def fetch_data_loop():
             if datetime.now(indian_timezone).time() > oUtils.MARKET_END_TIME:
                 print(f"Market is closed. Hence exiting.")
                 exit(0)
-            #
-            # if next_beep is None:
-            #     base = dt.datetime.combine(dt.date.today(), dt.time(9, 15))
-            #     next_beep = base + dt.timedelta(minutes=((dt.datetime.now() - base).seconds // 600 + 1) * 10)
-            # if dt.datetime.now() >= next_beep:
-            #     winsound.Beep(1000, 2000)  # 3 seconds
-            #     next_beep += dt.timedelta(minutes=10)
+
+            if next_beep is None:
+                base = dt.datetime.combine(dt.date.today(), dt.time(9, 15))
+                next_beep = base + dt.timedelta(minutes=((dt.datetime.now() - base).seconds // 600 + 1) * 10)
+            if dt.datetime.now() >= next_beep:
+                winsound.Beep(1000, 2000)  # 3 seconds
+                next_beep += dt.timedelta(minutes=10)
 
             try:
                 ul_live_quote = kite.quote(under_lying_symbol)

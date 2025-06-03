@@ -42,11 +42,11 @@ def any_active_positions(kite_):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 20000
+    MAX_PROFIT = 30000
     MAX_LOSS = -3000
     MAX_PROFIT_EROSION = 5000
     sleep_time = 2
-    max_profit_set = 12032
+    max_profit_set = None
     # second_trade_execute = False
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
@@ -72,7 +72,7 @@ if __name__ == '__main__':
 
     print(positions)
 
-    positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX2560381300PE', 'quantity': 100, 'price': 587.78, 'product': 'NRML', 'type': 'SELL'}, {'exchange': 'BFO', 'tradingsymbol': 'SENSEX2560381300CE', 'quantity': 100, 'price': 547.95, 'product': 'NRML', 'type': 'SELL'}]
+    # positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX2560381300PE', 'quantity': 100, 'price': 587.78, 'product': 'NRML', 'type': 'SELL'}, {'exchange': 'BFO', 'tradingsymbol': 'SENSEX2560381300CE', 'quantity': 100, 'price': 547.95, 'product': 'NRML', 'type': 'SELL'}]
 
     symbols = []
     for position in positions:
