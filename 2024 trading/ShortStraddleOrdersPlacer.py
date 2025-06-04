@@ -4,6 +4,16 @@ import OptionTradeUtils as oUtils
 
 
 def place_order(_pe, _ce, _transaction, _lots, _exchange):
+    # Check live positions before placing order
+    positions = kite.positions()
+    net_positions = positions['net']
+    open_positions = [p['tradingsymbol'] for p in net_positions if p['quantity'] != 0]
+
+    if _pe in open_positions or _ce in open_positions:
+        print(
+            f"⛔ Trade skipped: Existing position found in {option_pe if option_pe in open_positions else option_ce}\n")
+        return
+
     kite.place_order(tradingsymbol=_pe,
                      variety=kite.VARIETY_REGULAR,
                      exchange=_exchange,

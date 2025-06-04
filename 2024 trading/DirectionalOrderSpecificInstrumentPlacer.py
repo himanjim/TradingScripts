@@ -8,6 +8,16 @@ kite = oUtils.intialize_kite_api()
 
 def place_market_order_with_absolute_stoploss(symbol, transaction_type, lots, exchange, stoploss_absolute):
     try:
+        # Check if symbol already exists in open positions
+        positions = kite.positions()
+        net_positions = positions['net']
+        matching_positions = [p for p in net_positions if p['tradingsymbol'] == symbol and p['quantity'] != 0]
+
+        if matching_positions:
+            print(
+                f"⛔ Trade skipped: Open position already exists for {symbol} with quantity {matching_positions[0]['quantity']}.\n")
+            return
+
         # Place market order
         order_id = kite.place_order(
             tradingsymbol=symbol,
@@ -53,15 +63,17 @@ def place_market_order_with_absolute_stoploss(symbol, transaction_type, lots, ex
 
 # --- Main Execution Loop ---
 if __name__ == '__main__':
-    instrument_symbol = 'SENSEX2560380900CE'  # Fixed symbol
-    lots = 100  # Fixed quantity
-    exchange = 'BFO'
+    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE = oUtils.get_instruments(
+        kite)
+    instrument_symbol = PART_SYMBOL.replace(':', '') + '24600PE'  # Fixed symbol
+    lots = NO_OF_LOTS  # Fixed quantity
+    exchange = OPTIONS_EXCHANGE
 
     while True:
-        user_input = input("Enter transaction type and absolute stoploss (e.g., BUY 230 or SELL 210): ").strip().upper().split()
+        user_input = input("Enter transaction type and absolute stoploss (e.g., B 230 or S 210): ").strip().upper().split()
 
-        if len(user_input) != 2 or user_input[0] not in ['BUY', 'SELL']:
-            print("❌ Invalid input. Format should be: BUY 230 or SELL 230\n")
+        if len(user_input) != 2 or user_input[0] not in ['B', 'S']:
+            print("❌ Invalid input. Format should be: B 230 or S 230\n")
             continue
 
         transaction = user_input[0]
@@ -71,7 +83,7 @@ if __name__ == '__main__':
             print("❌ Stoploss must be a numeric value.\n")
             continue
 
-        transaction_type = kite.TRANSACTION_TYPE_BUY if transaction == 'BUY' else kite.TRANSACTION_TYPE_SELL
+        transaction_type = kite.TRANSACTION_TYPE_BUY if transaction == 'B' else kite.TRANSACTION_TYPE_SELL
 
         place_market_order_with_absolute_stoploss(
             symbol=instrument_symbol,
