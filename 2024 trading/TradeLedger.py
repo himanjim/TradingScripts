@@ -1,6 +1,10 @@
 import pandas as pd
+from pathlib import Path
+import os
 
-DIRECTORY = "C:/Users/USER/Downloads/"
+# Get the Downloads path (Windows style)
+downloads_path = os.path.join(os.environ["USERPROFILE"], "Downloads")
+DIRECTORY = downloads_path
 # Step 1: Load the CSV file containing trade data
 df = pd.read_csv(DIRECTORY + "orders (4).csv")
 positions_df = pd.read_csv(DIRECTORY + "positions (25).csv")
@@ -160,5 +164,5 @@ final_df["SELL CALL EXPIRY PRICE"] = final_df["SELL CALL STRIKE"].apply(lambda s
 final_df["SELL PUT EXPIRY PRICE"] = final_df["SELL PUT STRIKE"].apply(lambda s: get_expiry_price(s, "PE"))
 
 # Step 11: Export the final DataFrame to an Excel file
-final_df.to_excel("C:/Users/USER/Downloads/parsed_trades.xlsx", index=False)
+final_df.to_excel(DIRECTORY + "parsed_trades.xlsx", index=False)
 print("✅ Trades successfully written to 'parsed_trades.xlsx'")
