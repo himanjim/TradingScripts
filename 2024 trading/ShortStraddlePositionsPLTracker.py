@@ -52,7 +52,7 @@ if __name__ == '__main__':
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
     kite = oUtils.intialize_kite_api()
-    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE = oUtils.get_instruments(kite)
+    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS = oUtils.get_instruments(kite)
     PART_SYMBOL = PART_SYMBOL.replace(':', '')
     under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
 

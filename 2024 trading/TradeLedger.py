@@ -6,8 +6,8 @@ import os
 downloads_path = os.path.join(os.environ["USERPROFILE"], "Downloads")
 DIRECTORY = downloads_path
 # Step 1: Load the CSV file containing trade data
-df = pd.read_csv(DIRECTORY + "orders (4).csv")
-positions_df = pd.read_csv(DIRECTORY + "positions (25).csv")
+df = pd.read_csv(DIRECTORY + "/orders (4).csv")
+positions_df = pd.read_csv(DIRECTORY + "/positions (25).csv")
 
 # Step 2: Convert 'Time' column to datetime format and sort trades by time
 df['Time'] = pd.to_datetime(df['Time'])
@@ -164,5 +164,5 @@ final_df["SELL CALL EXPIRY PRICE"] = final_df["SELL CALL STRIKE"].apply(lambda s
 final_df["SELL PUT EXPIRY PRICE"] = final_df["SELL PUT STRIKE"].apply(lambda s: get_expiry_price(s, "PE"))
 
 # Step 11: Export the final DataFrame to an Excel file
-final_df.to_excel(DIRECTORY + "parsed_trades.xlsx", index=False)
+final_df.to_excel(DIRECTORY + "/parsed_trades.xlsx", index=False)
 print("✅ Trades successfully written to 'parsed_trades.xlsx'")
