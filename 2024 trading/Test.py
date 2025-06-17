@@ -2,7 +2,18 @@ import OptionTradeUtils as oUtils
 
 kite = oUtils.intialize_kite_api()
 
-print(kite.instruments('NSE'))
+print(kite.margins())
+
+from pathlib import Path
+import os
+
+# Get the Downloads path (Windows style)
+downloads_path = os.path.join(os.environ["USERPROFILE"], "Downloads")
+
+# Convert to POSIX (Linux-style) path
+posix_path = Path(downloads_path).as_posix()
+
+print(posix_path)
 exit(0)
 # h_data = kite.historical_data('SENSEX2552082200PE', '2025-05-15 09:15:00', '2025-05-15 10:15:00', '1min')
 h_data = kite.historical_data(265, '2024-05-15 09:15:00', '2024-05-15 15:15:00', 'minute')

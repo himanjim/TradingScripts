@@ -73,14 +73,15 @@ if __name__ == '__main__':
     exchange = OPTIONS_EXCHANGE
 
     while True:
-        user_input = input("Enter transaction type, strike+option (e.g., B 52500CE or S 52500CE 230): ").strip().upper().split()
+        user_input = input("Enter strike+option, transaction type (B/S), and optional absolute stoploss (e.g., 52500CE B or 52500CE S 230): ").strip().upper().split()
 
-        if len(user_input) < 2 or user_input[0] not in ['B', 'S']:
-            print("❌ Invalid input. Format: B 52500CE [STOPLOSS] or S 52500CE [STOPLOSS]")
+        if len(user_input) < 2 or user_input[1] not in ['B', 'S']:
+            print("❌ Invalid input. Format: 52500CE B [STOPLOSS] or 52500CE S [STOPLOSS]")
             continue
 
-        transaction = user_input[0]
-        suffix_symbol = user_input[1]
+        suffix_symbol = user_input[0]
+        transaction = user_input[1]
+
         instrument_symbol = PART_SYMBOL.replace(':', '') + suffix_symbol
         stoploss_absolute = None
 
