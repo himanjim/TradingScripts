@@ -42,14 +42,54 @@ def add_data(new_time, new_value):
         df = pd.concat([df, new_row], ignore_index=True)
         new_row.to_csv(DATA_FILE, mode='a', header=not os.path.exists(DATA_FILE), index=False)
 
+
 # --- Animation Update Function ---
+arrow_annotations = []
+last_alert_time = None
+alert_cooldown_sec = 120  # avoid repeated alerts within 2 minutes
+
 def animate(frame):
+    global last_alert_time
     with lock:
-        if not df.empty:
-            line.set_data(df['timestamp'], df['value'])
-            ax.relim()
-            ax.autoscale_view()
-            fig.autofmt_xdate()
+        if len(df) < 20:
+            return
+
+        line.set_data(df['timestamp'], df['value'])
+        ax.relim()
+        ax.autoscale_view()
+        fig.autofmt_xdate()
+
+        # Clear old arrows
+        for ann in arrow_annotations:
+            ann.remove()
+        arrow_annotations.clear()
+
+        # Detect unusual premium rise
+        recent_df = df.iloc[-20:]
+        avg_recent = recent_df['value'].iloc[:-1].mean()
+        current_value = recent_df['value'].iloc[-1]
+        current_time = recent_df['timestamp'].iloc[-1]
+
+        # Only alert if rise is > threshold (e.g., ₹3000 above average)
+        if current_value > avg_recent + 5000:
+            if not last_alert_time or (current_time - last_alert_time).total_seconds() > alert_cooldown_sec:
+                print(f"🚨 Premium rise alert at {current_time} → Value: {current_value:.2f}, Avg: {avg_recent:.2f}")
+
+                # 3 beeps
+                threading.Thread(target=lambda: [winsound.Beep(2000, 300) for _ in range(3)]).start()
+
+                # Red upward arrow
+                ann = ax.annotate(
+                    '⬆',
+                    xy=(current_time, current_value),
+                    xytext=(0, 30),
+                    textcoords='offset points',
+                    arrowprops=dict(facecolor='red', arrowstyle='->'),
+                    ha='center', color='red', fontsize=12
+                )
+                arrow_annotations.append(ann)
+
+                last_alert_time = current_time
 
 
 # --- Data fetching loop ---
@@ -59,7 +99,7 @@ def fetch_data_loop():
         original_options_premium_value = None
         highest_options_premium_value = None
         last_beep_index_for_5k_prem = 0
-        trigger_value = None
+        trigger_value = 80950
         beep_count = 0  # Add this at the beginning of fetch_data_loop() function
 
         while True:
@@ -89,7 +129,7 @@ def fetch_data_loop():
                 continue
 
             # Replace the trigger check with:
-            if trigger_value and ul_ltp < trigger_value and beep_count < 3:
+            if trigger_value and ul_ltp > trigger_value and beep_count < 3:
                 winsound.Beep(2000, 1500)
                 beep_count += 1
 

@@ -121,10 +121,8 @@ if __name__ == '__main__':
 
             if max_pl > 5000:
                 MAX_LOSS = 0
-                MAX_PROFIT_EROSION = 5000
             elif max_pl > 10000:
                 MAX_LOSS = 7000
-                MAX_PROFIT_EROSION = 5000
 
             print(f"Net P/L: {net_pl}. Maximum Profit: {max_pl}. Maximum Loss: {min_pl} at {datetime.now(indian_timezone).time()}.")
 

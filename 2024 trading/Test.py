@@ -1,135 +1,86 @@
+import datetime as dt
+import pandas as pd
+import plotly.graph_objects as go
 import OptionTradeUtils as oUtils
-
+# --- Zerodha API Setup ---
+# Initialize kite API
 kite = oUtils.intialize_kite_api()
 
-print(kite.margins())
+# --- Get instrument token ---
+def get_instrument_token(exchange: str, tradingsymbol: str):
+    instruments = kite.instruments(exchange)
+    df_instruments = pd.DataFrame(instruments)
+    row = df_instruments[df_instruments['tradingsymbol'] == tradingsymbol]
+    if row.empty:
+        raise Exception(f"Symbol {tradingsymbol} not found in {exchange}")
+    return int(row.iloc[0]['instrument_token'])
 
-from pathlib import Path
-import os
+# --- Set symbol and date range ---
+symbol = "NIFTY 50"
+exchange = "NSE"
+instrument_token = get_instrument_token(exchange, symbol)
 
-# Get the Downloads path (Windows style)
-downloads_path = os.path.join(os.environ["USERPROFILE"], "Downloads")
+today = dt.datetime.now().date()
+from_time = dt.datetime.combine(today, dt.time(9, 15))
+to_time = dt.datetime.combine(today, dt.time(15, 30))
 
-# Convert to POSIX (Linux-style) path
-posix_path = Path(downloads_path).as_posix()
+# --- Fetch 2-minute data ---
+data = kite.historical_data(
+    instrument_token=instrument_token,
+    from_date=from_time,
+    to_date=to_time,
+    interval="2minute"
+)
 
-print(posix_path)
-exit(0)
-# h_data = kite.historical_data('SENSEX2552082200PE', '2025-05-15 09:15:00', '2025-05-15 10:15:00', '1min')
-h_data = kite.historical_data(265, '2024-05-15 09:15:00', '2024-05-15 15:15:00', 'minute')
-# h_data = kite.historical_data()
-# h_data = kite.quote('BFO:SENSEX2552082200PE')
-print(h_data)
-# print(kite.instruments('BSE'))
-exit(0)
+df = pd.DataFrame(data)
+df['date'] = pd.to_datetime(df['date'])
+df.set_index('date', inplace=True)
 
-import datetime as dt
-import winsound  # Use only on Windows
-winsound.Beep(2000, 2000)
-print(1380//600)
-exit(0)
-while True:
-    if 'next_beep' not in globals():
-        base = dt.datetime.combine(dt.date.today(), dt.time(8,10))
-        next_beep = base + dt.timedelta(minutes=((dt.datetime.now() - base).seconds // 600 + 1)*10)
-    print('About to beep.' + str(next_beep))
-    print('Now:' + str(dt.datetime.now()))
+# --- Detect Swing Highs and Lows ---
+def find_swings(df, window=2):
+    highs, lows = [], []
+    for i in range(window, len(df) - window):
+        if df['high'].iloc[i] == max(df['high'].iloc[i-window:i+window+1]):
+            highs.append((df.index[i], df['high'].iloc[i]))
+        if df['low'].iloc[i] == min(df['low'].iloc[i-window:i+window+1]):
+            lows.append((df.index[i], df['low'].iloc[i]))
+    return highs, lows
 
-    if dt.datetime.now() >= next_beep:
-        winsound.Beep(1000, 3000)  # 3 seconds
-        next_beep += dt.timedelta(minutes=10)
-    print(next_beep)
-# winsound.Beep(1000, 3000)
-exit(0)
+highs, lows = find_swings(df)
 
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import pandas as pd
-from datetime import datetime
-import random
-from matplotlib.animation import FuncAnimation
-import threading
-import time
+# --- Plot with Plotly ---
+fig = go.Figure()
 
-# --- Initialize empty DataFrame ---
-df = pd.DataFrame(columns=['timestamp', 'value'])
+# Price line
+fig.add_trace(go.Scatter(
+    x=df.index, y=df['close'],
+    mode='lines',
+    name='Close Price',
+    line=dict(color='black')
+))
 
-# --- Setup Plot ---
-fig, ax = plt.subplots(figsize=(10, 6))
-line, = ax.plot([], [], lw=2)
-ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-plt.title('Live Data Chart (Smooth & Realtime)')
-plt.xlabel('Time')
-plt.ylabel('Value')
+# Add trendlines for swing highs
+for _, price in highs:
+    fig.add_shape(type='line',
+                  x0=df.index[0], x1=df.index[-1],
+                  y0=price, y1=price,
+                  line=dict(color='red', width=1, dash='dash'))
 
-lock = threading.Lock()
+# Add trendlines for swing lows
+for _, price in lows:
+    fig.add_shape(type='line',
+                  x0=df.index[0], x1=df.index[-1],
+                  y0=price, y1=price,
+                  line=dict(color='green', width=1, dash='dash'))
 
-# --- Function to add new data point ---
-def add_data(new_time, new_value):
-    global df
-    with lock:
-        df = pd.concat([df, pd.DataFrame({'timestamp': [new_time], 'value': [new_value]})], ignore_index=True)
+# Layout
+fig.update_layout(
+    title=f"{symbol} - Trendlines (2-min) - {today}",
+    xaxis_title="Time",
+    yaxis_title="Price",
+    xaxis_rangeslider_visible=False,
+    template='plotly_white',
+    height=600
+)
 
-# --- Animation Update Function ---
-def animate(frame):
-    with lock:
-        if not df.empty:
-            line.set_data(df['timestamp'], df['value'])
-            ax.relim()
-            ax.autoscale_view()
-            fig.autofmt_xdate()
-
-# --- Background thread to simulate API fetching ---
-def fetch_data_loop():
-    try:
-        while True:
-            now = datetime.now()
-            value = random.uniform(1, 100)  # <-- Replace with API fetching
-            add_data(now, value)
-            print(f"Fetched at {now.strftime('%H:%M:%S')}: {value:.2f}")
-            time.sleep(2)
-    except Exception as e:
-        print(f"Error in data fetching thread: {e}")
-
-# --- Start background data fetching ---
-threading.Thread(target=fetch_data_loop, daemon=True).start()
-
-# --- Setup FuncAnimation ---
-ani = FuncAnimation(fig, animate, interval=500)
-
-# --- Start the plot (this will now show instantly and update!) ---
-plt.show()
-
-exit(0)
-import re
-
-original_string = "NIFTY2521323200CE"
-new_number = "24000"  # Replace the number with this new one
-
-# Use regex to match the number before 'CE' or 'PE' and replace it
-modified_string = re.sub(r'(\d{5})(?=CE|PE)', new_number, original_string)
-
-print(modified_string)
-
-exit(0)
-
-import yfinance as yf
-
-
-
-# Get options data for Reliance Industries (RELIANCE.NS)
-
-reliance_ticker = yf.Ticker("RELIANCE.NS")
-
-options_data = reliance_ticker.options_chain()
-
-
-
-# Access specific options data (e.g., call options with a specific strike price)
-
-calls = options_data.calls
-
-print(calls)
-
-
-
+fig.show()
