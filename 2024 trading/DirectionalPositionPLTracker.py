@@ -1,137 +1,162 @@
-import time as tm
+from OptionTradeUtils import intialize_kite_api, get_instruments
+from collections import defaultdict
 from datetime import datetime
 import pytz
-import OptionTradeUtils as oUtils
-import pandas as pd
-import winsound  # Use only on Windows
+
+# Initialize Kite API and timezone
+kite = intialize_kite_api()
+indian_timezone = pytz.timezone('Asia/Calcutta')
+
+# Get stoploss point value (e.g., 30 for SENSEX, 10 for NIFTY)
+_, _, options_exchange, _, _, _, STOPLOSS_POINTS = get_instruments(kite)
 
 
-if __name__ == '__main__':
-    MAX_PROFIT = 20000
-    MAX_LOSS = -2000
-    MAX_PROFIT_EROSION = 3000
-    sleep_time = 2
-    max_profit_set = None
+def get_active_directional_positions():
+    """
+    Identify PE/CE positions that are not part of a straddle (directional trades).
+    """
+    positions = kite.positions()['net']
+    pe_positions = {}
+    ce_positions = {}
 
-    indian_timezone = pytz.timezone('Asia/Calcutta')
-
-    kite = oUtils.intialize_kite_api()
-
-    # print(kite.positions())
-    #
-    # exit(0)
-
-    # positions = kite.positions()
-
-
-    orders = kite.orders()
-    # Create pandas DataFrame from the list of orders
-    df = pd.DataFrame(orders)
-    positions = []
-    # Iterate over each row in the filtered DataFrame
-    for index, row in df.iterrows():
-        if row['product'] in ('NRML', 'MIS') and row['variety'] in ('regular') and row['status'] in ('COMPLETE'):
-            positions.append(
-                {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
-                 'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
-    positions = positions[-1:]
-
-    print(positions)
-
-    # positions = [{'exchange': 'NFO', 'tradingsymbol': 'NIFTY2551524600PE', 'quantity': 300, 'price': 97.45, 'product': 'NRML', 'type': 'SELL'}]
-
-    symbols = []
-    for position in positions:
-        if position['price'] != 0:
-            symbols.append(position['exchange'] + ':' + position['tradingsymbol'])
-
-    max_pl = 0
-    min_pl = 0
-
-    if len(symbols) == 0:
-        print(f"No active position. Hence exiting.")
-        exit(0)
-
-    oUtils.cancel_all_open_orders(kite)
-
-    while True:
-        try:
-
-            if datetime.now(indian_timezone).time() > oUtils.MARKET_END_TIME:
-                print(f"Market is closed. Hence exiting.")
-                exit(0)
-
-            live_quotes = kite.quote(symbols)
-
-            positions_live = kite.positions()
-
-            all_positions_closed = all(
-                item['average_price'] == 0
-                for item in positions_live['day']
-                if item['product'] in ('NRML', 'MIS')
-            )
-
-            if all_positions_closed:
-                print("No active positions.")
-                break
-
-            net_pl = 0
-
-            for position in positions:
-                if position['type'] == kite.TRANSACTION_TYPE_SELL:
-                    net_pl += ((position['price'] - live_quotes[position['exchange'] + ':' + position['tradingsymbol']]['last_price']) * position['quantity'])
-                else:
-                    net_pl += ((live_quotes[position['exchange'] + ':' + position['tradingsymbol']]['last_price'] -
-                                position['price']) * position['quantity'])
-
-            if net_pl > 0 and net_pl > max_pl:
-                max_pl = net_pl
-
-            if net_pl < 0 and net_pl < min_pl:
-                min_pl = net_pl
-
-            if max_pl > 10000:
-                MAX_LOSS = 100
-            elif max_pl > 20000:
-                MAX_PROFIT_EROSION = 10000
-
-            print(f"Net P/L: {net_pl}. Maximum Profit: {max_pl}. Maximum Loss: {min_pl} at {datetime.now(indian_timezone).time()}.")
-
-            if min_pl < (MAX_LOSS * .5):
-                sleep_time = .5
-            elif min_pl < (MAX_LOSS * .8):
-                sleep_time = .25
-
-            if max_profit_set and max_profit_set > max_pl:
-                max_pl = max_profit_set
-
-            if net_pl >= MAX_PROFIT or net_pl <= MAX_LOSS or (max_pl - net_pl) > MAX_PROFIT_EROSION:
-
-                for position in positions:
-                    if position['price'] != 0:
-                        kite.place_order(tradingsymbol=position['tradingsymbol'],
-                                         variety=kite.VARIETY_REGULAR,
-                                         exchange=position['exchange'],
-                                         transaction_type=[kite.TRANSACTION_TYPE_BUY if position['type'] == kite.TRANSACTION_TYPE_SELL else kite.TRANSACTION_TYPE_SELL],
-                                         quantity=position['quantity'],
-                                         order_type=kite.ORDER_TYPE_MARKET,
-                                         product=position['product'],
-                                         )
-
-                        print(f"Position of instrument {position['tradingsymbol']} exited.")
-
-                print(f"All postions exited at P/L {net_pl} at {datetime.now(indian_timezone).time()}")
-
-                oUtils.cancel_all_open_orders(kite)
-
-                winsound.Beep(2000, 2000)
-                break
-
-            else:
-                tm.sleep(sleep_time)
-
-        except Exception as e:
-            # This will catch any exception and print the error message
-            print(f"An error occurred: {e}")
-            tm.sleep(2)
+    for pos in positions:
+        symbol = pos['tradingsymbol']
+        qty = pos['quantity']
+        if qty == 0:
             continue
+        if 'PE' in symbol:
+            pe_positions[symbol] = pos
+        elif 'CE' in symbol:
+            ce_positions[symbol] = pos
+
+    directional = {}
+    for pe in pe_positions:
+        ce_match = pe.replace('PE', 'CE')
+        if ce_match not in ce_positions:
+            directional[pe] = pe_positions[pe]
+
+    for ce in ce_positions:
+        pe_match = ce.replace('CE', 'PE')
+        if pe_match not in pe_positions:
+            directional[ce] = ce_positions[ce]
+
+    return directional
+
+def get_last_order_for_symbol(symbol):
+    """
+    Get the most recent filled order for a symbol.
+    """
+    orders = kite.orders()
+    for order in reversed(orders):
+        if order['tradingsymbol'] == symbol and order['status'] == 'COMPLETE':
+            return order
+    return None
+
+def get_existing_sl_order(symbol):
+    """
+    Return the active SL order if it exists.
+    """
+    orders = kite.orders()
+    for order in orders:
+        if (
+            order['tradingsymbol'] == symbol and
+            order['order_type'] == 'SL' and
+            order['status'] in ['TRIGGER PENDING', 'OPEN']
+        ):
+            return order
+    return None
+
+
+def calculate_trailing_sl(entry_price, pnl, direction, qty):
+    """
+    Determine new SL price based on profit thresholds.
+    """
+    if direction == 'SELL':
+        if pnl >= 20000:
+            return entry_price - (10000 / qty)
+        elif pnl >= 10000:
+            return entry_price
+    elif direction == 'BUY':
+        if pnl >= 20000:
+            return entry_price + (10000 / qty)
+        elif pnl >= 5000:
+            return entry_price
+    return None
+
+def cancel_order(order_id):
+    """
+    Cancel a live order.
+    """
+    try:
+        kite.cancel_order(
+            variety=kite.VARIETY_REGULAR,
+            order_id=order_id
+        )
+        print(f"❌ Cancelled old SL order ID: {order_id}")
+    except Exception as e:
+        print(f"⚠️ Failed to cancel order {order_id}: {e}")
+
+def place_stoploss_order(symbol, direction, qty, sl_price):
+    """
+    Place new SL order (after cancelling old one if needed).
+    """
+    trigger_price = round(sl_price, 1)
+    try:
+        order_id = kite.place_order(
+            tradingsymbol=symbol,
+            variety=kite.VARIETY_REGULAR,
+            exchange=options_exchange,
+            transaction_type=kite.TRANSACTION_TYPE_SELL if direction == 'BUY' else kite.TRANSACTION_TYPE_BUY,
+            quantity=qty,
+            order_type=kite.ORDER_TYPE_SL,
+            product=kite.PRODUCT_NRML,
+            price=trigger_price,
+            trigger_price=trigger_price
+        )
+        print(f"✅ SL order placed: {symbol} @ {trigger_price} ({direction}) | Order ID: {order_id}")
+    except Exception as e:
+        print(f"⚠️ Failed to place SL for {symbol}: {e}")
+
+
+def manage_directional_trades():
+    """
+    Core function to detect directional trades and manage their SLs.
+    """
+    directional_positions = get_active_directional_positions()
+    ltp_data = kite.ltp([f'NFO:{sym}' for sym in directional_positions])
+
+    for symbol, pos in directional_positions.items():
+        last_order = get_last_order_for_symbol(symbol)
+        if not last_order:
+            print(f"⚠️ No order found for {symbol}")
+            continue
+
+        direction = last_order['transaction_type']
+        qty = abs(pos['quantity'])
+        entry_price = last_order['average_price']
+        ltp = ltp_data[f'NFO:{symbol}']['last_price']
+        pnl = (ltp - entry_price) * qty if direction == 'BUY' else (entry_price - ltp) * qty
+
+        print(f"🟨 {symbol} | {direction} | Entry: {entry_price} | LTP: {ltp} | PnL: {pnl}")
+
+        sl_order = get_existing_sl_order(symbol)
+
+        if not sl_order:
+            # No SL yet, place initial
+            sl_price = ltp - STOPLOSS_POINTS if direction == 'BUY' else ltp + STOPLOSS_POINTS
+            place_stoploss_order(symbol, direction, qty, sl_price)
+        else:
+            # SL exists → check if trailing needed
+            new_sl = calculate_trailing_sl(entry_price, pnl, direction, qty)
+            if new_sl:
+                current_trigger = float(sl_order['trigger_price'])
+                if (direction == 'BUY' and new_sl > current_trigger) or \
+                   (direction == 'SELL' and new_sl < current_trigger):
+                    cancel_order(sl_order['order_id'])
+                    place_stoploss_order(symbol, direction, qty, new_sl)
+                else:
+                    print(f"⏩ SL for {symbol} is already better or equal. No update needed.")
+
+# 🔁 Run once
+if __name__ == '__main__':
+    manage_directional_trades()
