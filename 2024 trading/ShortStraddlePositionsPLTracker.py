@@ -44,9 +44,9 @@ def any_active_positions(kite_):
 if __name__ == '__main__':
     MAX_PROFIT = 30000
     MAX_LOSS = -3000
-    MAX_PROFIT_EROSION = 5000
+    MAX_PROFIT_EROSION = 2000
     sleep_time = 2
-    max_profit_set = None
+    max_profit_set = 2105
     # second_trade_execute = False
 
     indian_timezone = pytz.timezone('Asia/Calcutta')

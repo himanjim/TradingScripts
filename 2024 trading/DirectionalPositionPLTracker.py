@@ -42,25 +42,25 @@ def get_active_directional_positions():
 
     return directional
 
-def get_last_order_for_symbol(symbol):
+
+def get_last_order_for_symbol(symbol, orders):
     """
     Get the most recent filled order for a symbol.
     """
-    orders = kite.orders()
     for order in reversed(orders):
         if order['tradingsymbol'] == symbol and order['status'] == 'COMPLETE':
             return order
     return None
 
-def get_existing_sl_order(symbol):
+
+def get_existing_sl_order(symbol, orders):
     """
     Return the active SL order if it exists.
     """
-    orders = kite.orders()
     for order in orders:
         if (
             order['tradingsymbol'] == symbol and
-            order['order_type'] == 'SL' and
+            order['order_type'] in ['SL', 'SL-M'] and
             order['status'] in ['TRIGGER PENDING', 'OPEN']
         ):
             return order
@@ -83,6 +83,7 @@ def calculate_trailing_sl(entry_price, pnl, direction, qty):
             return entry_price
     return None
 
+
 def cancel_order(order_id):
     """
     Cancel a live order.
@@ -95,6 +96,7 @@ def cancel_order(order_id):
         print(f"❌ Cancelled old SL order ID: {order_id}")
     except Exception as e:
         print(f"⚠️ Failed to cancel order {order_id}: {e}")
+
 
 def place_stoploss_order(symbol, direction, qty, sl_price):
     """
@@ -123,10 +125,18 @@ def manage_directional_trades():
     Core function to detect directional trades and manage their SLs.
     """
     directional_positions = get_active_directional_positions()
-    ltp_data = kite.ltp([f'NFO:{sym}' for sym in directional_positions])
+
+
+    try:
+        ltp_data = kite.ltp([f'NFO:{sym}' for sym in directional_positions])
+    except Exception as e:
+        print(f"❌ Failed to fetch LTPs: {e}")
+        return
 
     for symbol, pos in directional_positions.items():
-        last_order = get_last_order_for_symbol(symbol)
+        orders = kite.orders()
+
+        last_order = get_last_order_for_symbol(symbol, orders)
         if not last_order:
             print(f"⚠️ No order found for {symbol}")
             continue
@@ -139,7 +149,7 @@ def manage_directional_trades():
 
         print(f"🟨 {symbol} | {direction} | Entry: {entry_price} | LTP: {ltp} | PnL: {pnl}")
 
-        sl_order = get_existing_sl_order(symbol)
+        sl_order = get_existing_sl_order(symbol, orders)
 
         if not sl_order:
             # No SL yet, place initial

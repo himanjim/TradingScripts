@@ -1,13 +1,12 @@
 import pandas as pd
-from pathlib import Path
 import os
 
 # Get the Downloads path (Windows style)
 downloads_path = os.path.join(os.environ["USERPROFILE"], "Downloads")
 DIRECTORY = downloads_path
 # Step 1: Load the CSV file containing trade data
-df = pd.read_csv(DIRECTORY + "/orders (4).csv")
-positions_df = pd.read_csv(DIRECTORY + "/positions (25).csv")
+df = pd.read_csv(DIRECTORY + "/orders (5).csv")
+positions_df = pd.read_csv(DIRECTORY + "/positions (26).csv")
 
 # Step 2: Convert 'Time' column to datetime format and sort trades by time
 df['Time'] = pd.to_datetime(df['Time'])
@@ -137,7 +136,7 @@ for i, row1 in df_remaining.iterrows():
                     "SELL CALL EXIT PRICE": None,
                     "SELL PUT STRIKE": entry['Strike'],
                     "SELL CALL ENTRY PRICE": entry_price,
-"SELL CALL EXIT PRICE": exit_price,
+                    "SELL CALL EXIT PRICE": exit_price,
                     "TRADE TYPE": trade_type
                 })
 

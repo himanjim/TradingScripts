@@ -70,26 +70,26 @@ def animate(frame):
         current_value = recent_df['value'].iloc[-1]
         current_time = recent_df['timestamp'].iloc[-1]
 
-        # Only alert if rise is > threshold (e.g., ₹3000 above average)
-        if current_value > avg_recent + 5000:
-            if not last_alert_time or (current_time - last_alert_time).total_seconds() > alert_cooldown_sec:
-                print(f"🚨 Premium rise alert at {current_time} → Value: {current_value:.2f}, Avg: {avg_recent:.2f}")
-
-                # 3 beeps
-                threading.Thread(target=lambda: [winsound.Beep(2000, 300) for _ in range(3)]).start()
-
-                # Red upward arrow
-                ann = ax.annotate(
-                    '⬆',
-                    xy=(current_time, current_value),
-                    xytext=(0, 30),
-                    textcoords='offset points',
-                    arrowprops=dict(facecolor='red', arrowstyle='->'),
-                    ha='center', color='red', fontsize=12
-                )
-                arrow_annotations.append(ann)
-
-                last_alert_time = current_time
+        # # Only alert if rise is > threshold (e.g., ₹3000 above average)
+        # if current_value > avg_recent + 5000:
+        #     if not last_alert_time or (current_time - last_alert_time).total_seconds() > alert_cooldown_sec:
+        #         print(f"🚨 Premium rise alert at {current_time} → Value: {current_value:.2f}, Avg: {avg_recent:.2f}")
+        #
+        #         # 3 beeps
+        #         threading.Thread(target=lambda: [winsound.Beep(2000, 300) for _ in range(3)]).start()
+        #
+        #         # Red upward arrow
+        #         ann = ax.annotate(
+        #             '⬆',
+        #             xy=(current_time, current_value),
+        #             xytext=(0, 30),
+        #             textcoords='offset points',
+        #             arrowprops=dict(facecolor='red', arrowstyle='->'),
+        #             ha='center', color='red', fontsize=12
+        #         )
+        #         arrow_annotations.append(ann)
+        #
+        #         last_alert_time = current_time
 
 
 # --- Data fetching loop ---
