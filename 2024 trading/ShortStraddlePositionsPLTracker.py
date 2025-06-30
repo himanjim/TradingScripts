@@ -42,11 +42,11 @@ def any_active_positions(kite_):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 30000
-    MAX_LOSS = -3000
-    MAX_PROFIT_EROSION = 2000
+    MAX_PROFIT = 20000
+    max_loss = -3000
+    MAX_PROFIT_EROSION = 5000
     sleep_time = 2
-    max_profit_set = 2105
+    max_profit_set = None
     # second_trade_execute = False
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
@@ -120,15 +120,17 @@ if __name__ == '__main__':
                 min_pl = net_pl
 
             if max_pl > 5000:
-                MAX_LOSS = 0
+                if max_loss < 0:
+                    max_loss = 0
             elif max_pl > 10000:
-                MAX_LOSS = 7000
+                if max_loss < 7000:
+                    max_loss = 7000
 
             print(f"Net P/L: {net_pl}. Maximum Profit: {max_pl}. Maximum Loss: {min_pl} at {datetime.now(indian_timezone).time()}.")
 
-            if min_pl < (MAX_LOSS * .5):
+            if min_pl < (max_loss * .5):
                 sleep_time = .5
-            elif min_pl < (MAX_LOSS * .8):
+            elif min_pl < (max_loss * .8):
                 sleep_time = .25
 
             if max_profit_set and max_profit_set > max_pl:
@@ -146,7 +148,7 @@ if __name__ == '__main__':
 
                 break
 
-            elif net_pl <= MAX_LOSS or (max_pl - net_pl) > MAX_PROFIT_EROSION:
+            elif net_pl <= max_loss or (max_pl - net_pl) > MAX_PROFIT_EROSION:
 
                 for position in positions:
                     # if position['pl'] < 0 and position['price'] != 0:

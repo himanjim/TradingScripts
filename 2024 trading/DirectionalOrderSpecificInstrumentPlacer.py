@@ -1,6 +1,7 @@
 from datetime import datetime
 import pytz
 import OptionTradeUtils as oUtils
+import time
 
 indian_timezone = pytz.timezone('Asia/Calcutta')
 kite = oUtils.intialize_kite_api()
@@ -44,11 +45,24 @@ def place_order(symbol, transaction_type, lots, exchange, stoploss_absolute, sto
         if stoploss_absolute is not None:
             stoploss_price = round(stoploss_absolute, 1)
         else:
-            orders = kite.orders()
-            executed_order = next((order for order in orders if order['order_id'] == order_id and order['status'] == 'COMPLETE'), None)
+            executed_order = None
+            max_retries = 3
+            for attempt in range(1, max_retries + 1):
+                orders = kite.orders()
+                executed_order = next(
+                    (order for order in orders if order['order_id'] == order_id and order['status'] == 'COMPLETE'),
+                    None)
+
+                if executed_order:
+                    break
+                else:
+                    print(f"🔄 Attempt {attempt}: Executed order not yet found. Retrying in 1 second...")
+                    time.sleep(1)
+
             if not executed_order:
-                print("⚠️ Market order not completed or not found. Cannot place stop-loss.")
+                print("❌ Market order not completed or not found after 3 attempts. Cannot place stop-loss.")
                 return
+
             traded_price = float(executed_order['average_price'])
             stoploss_price = round(traded_price - stoploss_points if transaction_type == kite.TRANSACTION_TYPE_BUY else traded_price + stoploss_points, 1)
 
