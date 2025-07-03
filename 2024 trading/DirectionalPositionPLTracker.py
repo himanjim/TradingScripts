@@ -126,6 +126,9 @@ def manage_directional_trades():
     """
     directional_positions = get_active_directional_positions()
 
+    if len(directional_positions) == 0:
+        return
+
 
     try:
         ltp_data = kite.ltp([f'NFO:{sym}' for sym in directional_positions])
