@@ -135,8 +135,8 @@ for i, row1 in df_remaining.iterrows():
                     "SELL CALL ENTRY PRICE": None,
                     "SELL CALL EXIT PRICE": None,
                     "SELL PUT STRIKE": entry['Strike'],
-                    "SELL CALL ENTRY PRICE": entry_price,
-                    "SELL CALL EXIT PRICE": exit_price,
+                    "SELL PUT ENTRY PRICE": entry_price,
+                    "SELL PUT EXIT PRICE": exit_price,
                     "TRADE TYPE": trade_type
                 })
 

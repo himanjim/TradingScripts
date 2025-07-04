@@ -131,7 +131,7 @@ def manage_directional_trades():
 
 
     try:
-        ltp_data = kite.ltp([f'NFO:{sym}' for sym in directional_positions])
+        ltp_data = kite.ltp([f'{options_exchange}:{tradingsymbol}' for tradingsymbol in directional_positions])
     except Exception as e:
         print(f"❌ Failed to fetch LTPs: {e}")
         return
@@ -147,7 +147,7 @@ def manage_directional_trades():
         direction = last_order['transaction_type']
         qty = abs(pos['quantity'])
         entry_price = last_order['average_price']
-        ltp = ltp_data[f'NFO:{symbol}']['last_price']
+        ltp = ltp_data[f'{options_exchange}:{symbol}']['last_price']
         pnl = (ltp - entry_price) * qty if direction == 'BUY' else (entry_price - ltp) * qty
 
         print(f"🟨 {symbol} | {direction} | Entry: {entry_price} | LTP: {ltp} | PnL: {pnl}")
