@@ -6,21 +6,21 @@ KITE_API_KEY = '453dipfh64qcl484'
 KITE_API_SECRET = 'cnt30fp12ftbzk7s0a84ieqv8wbquer4'
 
 
-KITE_ACCESS_CODE = 's53G2RxvTO8RgP8d023O0dbGRP8xHBt3'
+KITE_ACCESS_CODE = 'XHOL7SO5DUa35Ur1MbOWipPTc5bSaVWv'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 30, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
 
 
 def get_instruments(kite_):
-    choice = 2
+    choice = 3
 
     if choice == 1:
         UNDER_LYING_EXCHANGE = kite_.EXCHANGE_NSE
         UNDERLYING = ':NIFTY 50'
         OPTIONS_EXCHANGE = kite_.EXCHANGE_NFO
         # PART_SYMBOL = ':NIFTY25508'
-        PART_SYMBOL = ':NIFTY25703'
+        PART_SYMBOL = ':NIFTY25724'
         NO_OF_LOTS = 300
         STRIKE_MULTIPLE = 50
         STOPLOSS_POINTS = 10
@@ -30,7 +30,7 @@ def get_instruments(kite_):
         OPTIONS_EXCHANGE = kite_.EXCHANGE_BFO
         # PART_SYMBOL = ':SENSEX25MAY'
         # PART_SYMBOL = ':SENSEX25506' # 6th May 2025
-        PART_SYMBOL = ':SENSEX25708'
+        PART_SYMBOL = ':SENSEX25JUL'
         NO_OF_LOTS = 100
         STRIKE_MULTIPLE = 100
         STOPLOSS_POINTS = 30
@@ -39,10 +39,10 @@ def get_instruments(kite_):
         UNDERLYING = ':NIFTY BANK'
         OPTIONS_EXCHANGE = kite_.EXCHANGE_NFO
         # PART_SYMBOL = ':BANKNIFTY25APR'
-        PART_SYMBOL = ':BANKNIFTY25JUN'
-        NO_OF_LOTS = 120
+        PART_SYMBOL = ':BANKNIFTY25JUL'
+        NO_OF_LOTS = 105
         STRIKE_MULTIPLE = 100
-        STOPLOSS_POINTS = 25
+        STOPLOSS_POINTS = 30
 
     return UNDER_LYING_EXCHANGE ,UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS
 

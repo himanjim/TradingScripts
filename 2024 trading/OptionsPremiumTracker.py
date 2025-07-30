@@ -94,7 +94,7 @@ def fetch_data_loop():
                 base = dt.datetime.combine(dt.date.today(), dt.time(9, 15))
                 next_beep = base + dt.timedelta(minutes=((dt.datetime.now() - base).seconds // 600 + 1) * 10)
             if dt.datetime.now() >= next_beep:
-                winsound.Beep(1000, 2000)  # 3 seconds
+                winsound.Beep(1000, 1000)  # 3 seconds
                 next_beep += dt.timedelta(minutes=10)
 
             try:
