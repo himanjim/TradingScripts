@@ -17,6 +17,34 @@ def place_order(symbol, transaction_type, lots, exchange, stoploss_absolute, sto
             print(f"⛔ Trade skipped: Open position already exists for {symbol} with quantity {matching_positions[0]['quantity']}.")
             return
 
+        if stoploss_absolute is not None and not is_limit:
+            try:
+                ltp_data = kite.ltp(f"{exchange}:{symbol}")
+                entry_price = float(ltp_data[f"{exchange}:{symbol}"]['last_price'])
+                risk_per_lot = abs(entry_price - stoploss_absolute)
+                max_loss_allowed = NO_OF_LOTS * stoploss_points
+
+                if risk_per_lot == 0:
+                    print("❌ Stoploss equals entry price. Cannot calculate risk.")
+                    return
+
+                raw_affordable_lots = int(max_loss_allowed // risk_per_lot)
+                max_affordable_lots = (raw_affordable_lots // MINIMUM_LOTS) * MINIMUM_LOTS
+
+                if max_affordable_lots < MINIMUM_LOTS:
+                    print(
+                        f"❌ Risk too high. Even minimum lots ({MINIMUM_LOTS}) exceed allowed loss ({max_loss_allowed}).")
+                    lots = max_affordable_lots
+
+                if lots > max_affordable_lots:
+                    print(
+                        f"⚠️ Reducing lots from {lots} to {max_affordable_lots} to respect max loss limit of {max_loss_allowed}")
+                    lots = max_affordable_lots
+
+            except Exception as price_err:
+                print(f"❌ Failed to fetch LTP or calculate risk: {price_err}")
+                return
+
         order_type = kite.ORDER_TYPE_LIMIT if is_limit else kite.ORDER_TYPE_MARKET
         order_args = {
             "tradingsymbol": symbol,
@@ -86,7 +114,7 @@ def place_order(symbol, transaction_type, lots, exchange, stoploss_absolute, sto
 
 # --- Main Execution Loop ---
 if __name__ == '__main__':
-    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS = oUtils.get_instruments(kite)
+    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS, MINIMUM_LOTS = oUtils.get_instruments(kite)
     lots = NO_OF_LOTS
     exchange = OPTIONS_EXCHANGE
 
