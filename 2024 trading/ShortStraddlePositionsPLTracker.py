@@ -42,9 +42,9 @@ def any_active_positions(kite_):
 
 
 if __name__ == '__main__':
-    MAX_PROFIT = 40000
-    max_loss = -3000
-    MAX_PROFIT_EROSION = 5000
+    MAX_PROFIT = 5000
+    max_loss = -2000
+    MAX_PROFIT_EROSION = 2000
     sleep_time = 2
     max_profit_set = None
     # second_trade_execute = False
@@ -52,7 +52,7 @@ if __name__ == '__main__':
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
     kite = oUtils.intialize_kite_api()
-    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS = oUtils.get_instruments(kite)
+    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS, MIN_LOTS = oUtils.get_instruments(kite)
     PART_SYMBOL = PART_SYMBOL.replace(':', '')
     under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
 

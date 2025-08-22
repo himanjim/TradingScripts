@@ -40,7 +40,7 @@ if __name__ == '__main__':
 
     kite = oUtils.intialize_kite_api()
 
-    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS = oUtils.get_instruments(kite)
+    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS, MINIMUM_LOTS = oUtils.get_instruments(kite)
     PART_SYMBOL = PART_SYMBOL.replace(':', '')
 
 

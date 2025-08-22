@@ -140,7 +140,7 @@ if __name__ == '__main__':
 
     kite = oUtils.intialize_kite_api()
 
-    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS = oUtils.get_instruments(
+    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS, MIN_LOTS = oUtils.get_instruments(
         kite)
 
     under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
