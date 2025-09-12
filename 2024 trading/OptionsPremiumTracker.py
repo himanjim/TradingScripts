@@ -1,153 +1,250 @@
-import time as tm
+# OptionsPremiumTracker_pycharm_fix.py
+# Windows + PyCharm friendly: forces GUI backend, shows chart immediately, animates smoothly.
+
+import os
+import time
+import threading
+import traceback
+import datetime as dt
+
+# --- force GUI backend so PyCharm shows a real window (not SciView) ---
+import matplotlib
+try:
+    matplotlib.use("TkAgg")  # works with stock Python on Windows
+except Exception:
+    # fallback if Tk not present but PyQt is installed
+    matplotlib.use("QtAgg")
+
 import pytz
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import pandas as pd
-from datetime import datetime
 from matplotlib.animation import FuncAnimation
-import threading
-import time
-import os
-import OptionTradeUtils as oUtils
-import winsound  # Use only on Windows
-import datetime as dt
-from scipy.stats import zscore
-import traceback
 
-# --- Time and file setup ---
-indian_timezone = pytz.timezone('Asia/Calcutta')
-today_str = datetime.now(indian_timezone).strftime('%Y-%m-%d')
+import winsound  # Windows only
+import OptionTradeUtils as oUtils  # your utility module
 
+# ------------- Config -------------
+INDIA_TZ = pytz.timezone("Asia/Calcutta")
+REFRESH_MS = 1000                 # chart refresh (ms)
+POLL_SEC = 2                      # quote poll sleep (s)
+BEEP_INTERVAL_MIN = 10            # periodic beep after 09:15 IST
+MAX_POINTS = 10_000               # cap points in memory/plot
+DATA_SUBDIR = "PremiumsChartsData"
+
+# ------------- File setup -------------
+today_str = dt.datetime.now(INDIA_TZ).strftime("%Y-%m-%d")
 downloads_path = os.path.join(os.environ["USERPROFILE"], "Downloads")
-DIRECTORY = downloads_path
+data_dir = os.path.join(downloads_path, DATA_SUBDIR)
+os.makedirs(data_dir, exist_ok=True)
+DATA_FILE = os.path.join(data_dir, f"premium_data_{today_str}.csv")
 
-DATA_FILE = DIRECTORY + f"/PremiumsChartsData/premium_data_{today_str}.csv"
-
-# --- Load persisted data if available ---
+# ------------- DataFrame init -------------
 if os.path.exists(DATA_FILE):
-    df = pd.read_csv(DATA_FILE, parse_dates=['timestamp'])
+    df = pd.read_csv(DATA_FILE, parse_dates=["timestamp"])
+    if not pd.api.types.is_datetime64tz_dtype(df["timestamp"]):
+        # localize old rows to IST for consistency
+        df["timestamp"] = df["timestamp"].dt.tz_localize(INDIA_TZ, nonexistent="shift_forward", ambiguous="NaT")
 else:
-    df = pd.DataFrame(columns=['timestamp', 'value'])
+    df = pd.DataFrame(columns=["timestamp", "value"])
 
-# --- Setup Plot ---
-fig, ax = plt.subplots(figsize=(10, 6))
-line, = ax.plot([], [], lw=2)
-ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-plt.title('Live Data Chart (Smooth & Realtime)')
-plt.xlabel('Time')
-plt.ylabel('Value')
 lock = threading.Lock()
 
-# --- Function to add new data point ---
-def add_data(new_time, new_value):
+# ------------- Status overlay (thread-safe) -------------
+_status_msg = "Starting…"
+_status_lock = threading.Lock()
+
+def set_status(msg: str):
+    global _status_msg
+    with _status_lock:
+        _status_msg = msg
+
+def get_status() -> str:
+    with _status_lock:
+        return _status_msg
+
+def ist_now() -> dt.datetime:
+    return dt.datetime.now(INDIA_TZ)
+
+# ------------- Matplotlib setup -------------
+fig, ax = plt.subplots(figsize=(10, 6))
+(line,) = ax.plot([], [], lw=2)
+ax.set_title("Options Premium (CE+PE) — Live")
+ax.set_xlabel("Time (IST)")
+ax.set_ylabel("Premium × Lots (₹)")
+ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+fig.autofmt_xdate()
+
+# overlay shown when no data yet / pre-market, etc.
+status_artist = ax.text(
+    0.5, 0.5, "", transform=ax.transAxes, ha="center", va="center", fontsize=12, alpha=0.8
+)
+
+def add_data(ts: dt.datetime, val: float):
+    """Thread-safe append to df and persist to CSV. Caps in-memory rows."""
     global df
+    if ts.tzinfo is None:
+        ts = INDIA_TZ.localize(ts)
     with lock:
-        new_row = pd.DataFrame({'timestamp': [new_time], 'value': [new_value]})
+        new_row = pd.DataFrame({"timestamp": [ts], "value": [val]})
         df = pd.concat([df, new_row], ignore_index=True)
-        new_row.to_csv(DATA_FILE, mode='a', header=not os.path.exists(DATA_FILE), index=False)
+        if len(df) > MAX_POINTS:
+            df = df.iloc[-MAX_POINTS:].copy()
 
+        write_header = not os.path.exists(DATA_FILE)
+        row_csv = new_row.copy()
+        row_csv["timestamp"] = row_csv["timestamp"].dt.tz_convert(INDIA_TZ).dt.strftime("%Y-%m-%d %H:%M:%S%z")
+        row_csv.to_csv(DATA_FILE, mode="a", header=write_header, index=False)
 
-# --- Animation Update Function ---
-arrow_annotations = []
-last_alert_time = None
-alert_cooldown_sec = 120  # avoid repeated alerts within 2 minutes
+def round_to_multiple(x: float, multiple: int) -> int:
+    return int(round(x / multiple) * multiple)
 
-def animate(frame):
-    global last_alert_time
+def init_anim():
+    line.set_data([], [])
+    status_artist.set_text(get_status())
+    status_artist.set_visible(True)
+    return (line, status_artist)
+
+def animate(_frame):
     with lock:
-        if df.empty or 'timestamp' not in df.columns or 'value' not in df.columns:
-            return
+        local = df.copy()
 
-        try:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            line.set_data(df['timestamp'], df['value'])
-            ax.relim()
-            ax.autoscale_view()
-            fig.autofmt_xdate()
+    if local.empty:
+        status_artist.set_text(get_status())
+        status_artist.set_visible(True)
+        # keep axes reasonable even when empty
+        ax.relim()
+        ax.autoscale_view()
+        return (line, status_artist)
 
-            for ann in arrow_annotations:
-                ann.remove()
-            arrow_annotations.clear()
-        except Exception as e:
-            print(f"Error in animate: {e}")
+    x = pd.to_datetime(local["timestamp"])
+    if not pd.api.types.is_datetime64tz_dtype(x):
+        x = x.dt.tz_localize(INDIA_TZ, nonexistent="shift_forward", ambiguous="NaT")
+    y = pd.to_numeric(local["value"], errors="coerce")
 
+    line.set_data(x, y)
+    ax.relim()
+    ax.autoscale_view()
 
+    status_artist.set_visible(False)
+    return (line, status_artist)
 
-# --- Data fetching loop ---
+# ------------- Fetch loop -------------
 def fetch_data_loop():
     try:
-        next_beep = None
-        original_options_premium_value = None
-        highest_options_premium_value = None
-        last_beep_index_for_5k_prem = 0
-        trigger_value = None
-        beep_count = 0  # Add this at the beginning of fetch_data_loop() function
+        set_status("Initializing…")
+        # periodic beep schedule (every 10 minutes after 09:15 IST)
+        base = ist_now().replace(hour=9, minute=15, second=0, microsecond=0)
+        if ist_now() > base:
+            delta_min = int((ist_now() - base).total_seconds() // 60)
+            next_min_mod = ((delta_min // BEEP_INTERVAL_MIN) + 1) * BEEP_INTERVAL_MIN
+            next_beep = base + dt.timedelta(minutes=next_min_mod)
+        else:
+            next_beep = base
+
+        original_prem = None
+        highest_prem = None
 
         while True:
-            now = datetime.now()
+            now = ist_now()
 
-            if datetime.now(indian_timezone).time() > oUtils.MARKET_END_TIME:
-                print(f"Market is closed. Hence exiting.")
-                exit(0)
-
-            if next_beep is None:
-                base = dt.datetime.combine(dt.date.today(), dt.time(9, 15))
-                next_beep = base + dt.timedelta(minutes=((dt.datetime.now() - base).seconds // 600 + 1) * 10)
-            if dt.datetime.now() >= next_beep:
-                winsound.Beep(1000, 1000)  # 3 seconds
-                next_beep += dt.timedelta(minutes=10)
-
-            try:
-                ul_live_quote = kite.quote(under_lying_symbol)
-                ul_ltp = ul_live_quote[under_lying_symbol]['last_price']
-                ul_ltp_round = round(ul_ltp / STRIKE_MULTIPLE) * STRIKE_MULTIPLE
-                option_pe = OPTIONS_EXCHANGE + PART_SYMBOL + str(ul_ltp_round) + 'PE'
-                option_ce = OPTIONS_EXCHANGE + PART_SYMBOL + str(ul_ltp_round) + 'CE'
-                option_quotes = kite.quote([option_pe, option_ce])
-            except Exception as e:
-                print(f"An error occurred: {e}")
-                tm.sleep(2)
+            # Show pre-market status but DO NOT block the UI
+            if now.time() < oUtils.MARKET_START_TIME:
+                set_status(f"Waiting for market open at {oUtils.MARKET_START_TIME.strftime('%H:%M')} IST…")
+                time.sleep(0.5)
                 continue
 
-            # Replace the trigger check with:
-            if trigger_value and ul_ltp > trigger_value and beep_count < 3:
-                winsound.Beep(2000, 1500)
-                beep_count += 1
+            # Market end: stop fetch but leave figure open (user can close)
+            if now.time() > oUtils.MARKET_END_TIME:
+                set_status("Market closed. No new data.")
+                time.sleep(1.0)
+                continue
 
-            option_premium_value = 0
-            for trading_symbol, live_quote in option_quotes.items():
-                option_premium_value += (live_quote['last_price'] * NO_OF_LOTS)
+            # periodic beep
+            if now >= next_beep:
+                try:
+                    winsound.Beep(1000, 800)  # 0.8s
+                except Exception:
+                    pass
+                next_beep += dt.timedelta(minutes=BEEP_INTERVAL_MIN)
 
-            if highest_options_premium_value is None or option_premium_value > highest_options_premium_value:
-                highest_options_premium_value = option_premium_value
+            # --- Quotes ---
+            try:
+                ul_live_quote = kite.quote(under_lying_symbol)
+                ul_ltp = float(ul_live_quote[under_lying_symbol]["last_price"])
+                ul_ltp_round = round_to_multiple(ul_ltp, STRIKE_MULTIPLE)
 
-            if original_options_premium_value is None:
-                original_options_premium_value = option_premium_value
+                option_pe = OPTIONS_EXCHANGE + PART_SYMBOL + str(ul_ltp_round) + "PE"
+                option_ce = OPTIONS_EXCHANGE + PART_SYMBOL + str(ul_ltp_round) + "CE"
+                option_quotes = kite.quote([option_pe, option_ce])
+            except Exception as e:
+                set_status(f"Quote fetch failed. Retrying… ({e})")
+                time.sleep(2)
+                continue
+
+            try:
+                ce_ltp = float(option_quotes[option_ce]["last_price"])
+                pe_ltp = float(option_quotes[option_pe]["last_price"])
+            except KeyError:
+                set_status("CE/PE quote missing (symbol rolled?). Retrying…")
+                time.sleep(POLL_SEC)
+                continue
+
+            option_premium_value = (ce_ltp + pe_ltp) * NO_OF_LOTS
+
+            if highest_prem is None or option_premium_value > highest_prem:
+                highest_prem = option_premium_value
+            if original_prem is None:
+                original_prem = option_premium_value
 
             print(
-                f"Strike:{ul_ltp_round}. Current PREM is: {option_premium_value}(CE:{option_quotes[option_ce]['last_price']} PE:{option_quotes[option_pe]['last_price']}),  original : {original_options_premium_value} and highest : {highest_options_premium_value} at {datetime.now(indian_timezone).time()}.")
+                f"Strike:{ul_ltp_round} | PREM:{option_premium_value:.2f} "
+                f"(CE:{ce_ltp:.2f} PE:{pe_ltp:.2f}) | "
+                f"orig:{original_prem:.2f} | high:{highest_prem:.2f} | {now.strftime('%H:%M:%S %Z')}"
+            )
 
+            set_status("")  # hide overlay once data is flowing
             add_data(now, option_premium_value)
-            print(f"Fetched at {now.strftime('%H:%M:%S')}: {option_premium_value:.2f}")
-            time.sleep(2)
+            time.sleep(POLL_SEC)
+
     except Exception as e:
-        print(f"Error in data fetching thread: {e}")
+        print(f"[ERROR] Data fetch thread crashed: {e}")
         traceback.print_exc()
+        set_status(f"Fetcher crashed: {e}")
 
-
-# --- Main execution ---
-if __name__ == '__main__':
-
+# ------------- Main -------------
+if __name__ == "__main__":
+    # Init Kite
     kite = oUtils.intialize_kite_api()
 
-    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS, MIN_LOTS = oUtils.get_instruments(
-        kite)
+    # Load instrument config
+    (
+        UNDER_LYING_EXCHANGE,
+        UNDERLYING,
+        OPTIONS_EXCHANGE,
+        PART_SYMBOL,
+        NO_OF_LOTS,
+        STRIKE_MULTIPLE,
+        STOPLOSS_POINTS,
+        MIN_LOTS,
+    ) = oUtils.get_instruments(kite)
 
-    under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
+    under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING  # keep your original concat
 
-    while datetime.now(indian_timezone).time() < oUtils.MARKET_START_TIME:
-        pass
+    # Start fetcher immediately (UI shows status pre-market instead of blocking)
+    t = threading.Thread(target=fetch_data_loop, daemon=True)
+    t.start()
 
-    threading.Thread(target=fetch_data_loop, daemon=True).start()
-    ani = FuncAnimation(fig, animate, interval=500)
+    # Start animation (suppress cache warning)
+    ani = FuncAnimation(
+        fig,
+        animate,
+        init_func=init_anim,
+        interval=REFRESH_MS,
+        blit=False,
+        cache_frame_data=False,
+        save_count=MAX_POINTS,
+    )
+
+    # Show chart (real GUI window via TkAgg/QtAgg)
     plt.show()
