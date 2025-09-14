@@ -6,6 +6,69 @@ import time
 indian_timezone = pytz.timezone('Asia/Calcutta')
 kite = oUtils.intialize_kite_api()
 
+def cancel_all_open_orders():
+    try:
+        orders = kite.orders()
+        cancellable_status = {
+            "OPEN", "TRIGGER PENDING", "AMO REQ RECEIVED",
+            "MODIFY PENDING", "CANCEL PENDING", "VALIDATION PENDING"
+        }
+        to_cancel = [o for o in orders if o.get("status") in cancellable_status]
+        if not to_cancel:
+            print("ℹ️ No open orders to cancel.")
+            return
+
+        for o in to_cancel:
+            try:
+                kite.cancel_order(variety=o["variety"], order_id=o["order_id"])
+                print(f"🧹 Cancelled order {o['order_id']} ({o.get('tradingsymbol','')}, {o.get('status')})")
+            except Exception as ce:
+                print(f"❌ Could not cancel order {o.get('order_id')}: {ce}")
+    except Exception as e:
+        print(f"❌ Error while fetching/cancelling orders: {e}")
+
+def square_off_all_positions():
+    try:
+        positions = kite.positions()
+        net_positions = positions.get('net', [])
+        live = [p for p in net_positions if p.get('quantity', 0) != 0]
+
+        if not live:
+            print("ℹ️ No live positions to square off.")
+            return
+
+        for p in live:
+            try:
+                qty = abs(int(p['quantity']))
+                if qty == 0:
+                    continue
+                # Opposite transaction
+                txn = kite.TRANSACTION_TYPE_SELL if p['quantity'] > 0 else kite.TRANSACTION_TYPE_BUY
+
+                order_id = kite.place_order(
+                    variety=kite.VARIETY_REGULAR,
+                    exchange=p['exchange'],
+                    tradingsymbol=p['tradingsymbol'],
+                    transaction_type=txn,
+                    quantity=qty,
+                    product=p.get('product', kite.PRODUCT_NRML),
+                    order_type=kite.ORDER_TYPE_MARKET
+                )
+                side = "SELL" if txn == kite.TRANSACTION_TYPE_SELL else "BUY"
+                print(f"✅ Squared off {p['tradingsymbol']} | qty {qty} via {side} MKT. Order ID: {order_id}")
+            except Exception as pe:
+                print(f"❌ Failed to square off {p.get('tradingsymbol')}: {pe}")
+    except Exception as e:
+        print(f"❌ Error while squaring off positions: {e}")
+
+def exit_all_positions_and_orders():
+    print("🚪 EXIT requested: cancelling open orders and squaring off live positions...")
+    cancel_all_open_orders()
+    # Small pause to let cancellations reflect before placing exit orders
+    time.sleep(0.5)
+    square_off_all_positions()
+    print("🏁 EXIT completed.")
+
 def place_order(symbol, transaction_type, lots, exchange, stoploss_absolute, stoploss_points, is_limit=False, limit_price=None):
     try:
         # Check if symbol already exists in open positions
@@ -92,7 +155,10 @@ def place_order(symbol, transaction_type, lots, exchange, stoploss_absolute, sto
                 return
 
             traded_price = float(executed_order['average_price'])
-            stoploss_price = round(traded_price - stoploss_points if transaction_type == kite.TRANSACTION_TYPE_BUY else traded_price + stoploss_points, 1)
+            stoploss_price = round(
+                traded_price - stoploss_points if transaction_type == kite.TRANSACTION_TYPE_BUY
+                else traded_price + stoploss_points, 1
+            )
 
         sl_order_id = kite.place_order(
             tradingsymbol=symbol,
@@ -119,17 +185,27 @@ if __name__ == '__main__':
     exchange = OPTIONS_EXCHANGE
 
     while True:
-        user_input = input("Enter (e.g., 52500CE B, 52500CE S 230, or 52500CE B L 450): ").strip().upper().split()
+        user_raw = input("Enter (e.g., 52500CE B, 52500CE S 230, 52500CE B L 450) or EXIT: ").strip().upper()
+        if not user_raw:
+            print("❌ Empty input.")
+            continue
+
+        # Global EXIT command
+        if user_raw == "EXIT":
+            exit_all_positions_and_orders()
+            continue
+
+        user_input = user_raw.split()
 
         if len(user_input) < 2:
-            print("❌ Invalid input. Use: 52500CE B [STOPLOSS] or 52500CE B L [PRICE]")
+            print("❌ Invalid input. Use: 52500CE B [STOPLOSS] or 52500CE B L [PRICE] or EXIT")
             continue
 
         suffix_symbol = user_input[0]
         transaction = user_input[1]
 
         if transaction not in ['B', 'S']:
-            print("❌ Transaction must be 'B' or 'S'")
+            print("❌ Transaction must be 'B' or 'S' (or type EXIT)")
             continue
 
         instrument_symbol = PART_SYMBOL.replace(':', '') + suffix_symbol
@@ -170,3 +246,4 @@ if __name__ == '__main__':
             is_limit=is_limit,
             limit_price=limit_price
         )
+
