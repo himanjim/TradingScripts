@@ -18,8 +18,8 @@ def resolve_path(filename: str) -> str:
     downloads_path = os.path.join(os.environ.get("USERPROFILE", ""), "Downloads")
     return os.path.join(downloads_path, filename)
 
-orders_csv = resolve_path("orders (5).csv")
-positions_csv = resolve_path("positions (26).csv")
+orders_csv = resolve_path("orders.csv")
+positions_csv = resolve_path("positions (1).csv")
 
 # -----------------------------
 # Load data
