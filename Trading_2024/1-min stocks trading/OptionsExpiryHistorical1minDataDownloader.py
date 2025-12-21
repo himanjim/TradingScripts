@@ -5,36 +5,40 @@ from typing import List, Dict, Tuple
 
 import pandas as pd
 
-import OptionTradeUtils as oUtils
+import Trading_2024.OptionTradeUtils as oUtils
 
 
 # ========== USER CONFIG ==========
 # Underlying index whose options you want (cash/index symbol on NSE/BSE)
-INDEX_EXCHANGE = "NSE"              # e.g. "NSE" for NIFTY/BANKNIFTY indices
+# INDEX_EXCHANGE = "NSE"              # e.g. "NSE" for NIFTY/BANKNIFTY indices
+INDEX_EXCHANGE = "BSE"
 # INDEX_TRADINGSYMBOL = "NIFTY BANK"  # BANKNIFTY index symbol on NSE cash
-INDEX_TRADINGSYMBOL = "NIFTY 50"
-
+# INDEX_TRADINGSYMBOL = "NIFTY 50"
+INDEX_TRADINGSYMBOL = "SENSEX"
 # Options segment details
-OPTION_EXCHANGE = "NFO"                 # "NFO" for index options
+# OPTION_EXCHANGE = "NFO"                 # "NFO" for index options
+OPTION_EXCHANGE = "BFO"
 # OPTION_TS_PREFIX = "BANKNIFTY"          # tradingsymbol prefix for this index's options
-OPTION_TS_PREFIX = "NIFTY"
+# OPTION_TS_PREFIX = "NIFTY"
+OPTION_TS_PREFIX = "SENSEX"
 ALLOWED_OPTION_TYPES = ("CE", "PE")     # Kite option types
 
 # Strike step for this underlying (BANKNIFTY = 100, NIFTY = 50)
-STRIKE_STEP = 50
+STRIKE_STEP = 100
+# STRIKE_STEP = 50
 
 # Expiry date for which you want all strikes (BANKNIFTY monthly expiry)
 # BANKNIFTY monthly expiry is the LAST TUESDAY of the month.
-EXPIRY_DATE_STR = "16-12-2025"          # DD-MM-YYYY  (set this to actual monthly expiry)
+EXPIRY_DATE_STR = "18-12-2025"          # DD-MM-YYYY  (set this to actual monthly expiry)
 
 # Start date: day after previous monthly expiry
-START_DATE_STR = "10-12-2025"
+START_DATE_STR = "12-12-2025"
 
 # Output folder and filename
 # OUTPUT_DIR = "./BANKNIFTY_20251125_expiry_history"
 # OUTPUT_BASENAME = "BANKNIFTY_20251125_minute"   # used as pickle filename
 OUTPUT_DIR = "./NIFTY_20251125_expiry_history"
-OUTPUT_BASENAME = "NIFTY_20251216_minute"   # used as pickle filename
+OUTPUT_BASENAME = "SENSEX_20251218_minute"   # used as pickle filename
 
 # Trading session times (IST)
 SESSION_START = dtime(9, 15, 0)
