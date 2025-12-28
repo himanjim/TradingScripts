@@ -29,16 +29,16 @@ STRIKE_STEP = 100
 
 # Expiry date for which you want all strikes (BANKNIFTY monthly expiry)
 # BANKNIFTY monthly expiry is the LAST TUESDAY of the month.
-EXPIRY_DATE_STR = "18-12-2025"          # DD-MM-YYYY  (set this to actual monthly expiry)
+EXPIRY_DATE_STR = "24-12-2025"          # DD-MM-YYYY  (set this to actual monthly expiry)
 
 # Start date: day after previous monthly expiry
-START_DATE_STR = "12-12-2025"
+START_DATE_STR = "18-12-2025"
 
 # Output folder and filename
 # OUTPUT_DIR = "./BANKNIFTY_20251125_expiry_history"
 # OUTPUT_BASENAME = "BANKNIFTY_20251125_minute"   # used as pickle filename
 OUTPUT_DIR = "./NIFTY_20251125_expiry_history"
-OUTPUT_BASENAME = "SENSEX_20251218_minute"   # used as pickle filename
+OUTPUT_BASENAME = "SENSEX_20251223_minute"   # used as pickle filename
 
 # Trading session times (IST)
 SESSION_START = dtime(9, 15, 0)
