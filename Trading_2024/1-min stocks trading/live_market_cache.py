@@ -1,24 +1,12 @@
 """
-live_market_cache.py
+live_market_cache.py  (UPDATED + HEARTBEAT GAP FILL)
 
-Live market cache builder for Top-N liquid stocks.
-
-Key design decisions (optimizations + corrections)
-- Uses ONE SQLite DB per day (fast upserts) instead of rewriting 500 Parquets repeatedly.
-- WebSocket builds 1-minute candles live (best way to avoid Kite historical API limits).
-- Historical API backfills only missing segments and is rate-limited.
-- Backfill can be limited to last X minutes (optional) because your scanner only needs last 60 candles.
-
-Inputs
-- Universe CSV with columns: exchange, tradingsymbol (same style as your LiquidStocksScanner.py)
-
-Outputs
-- ./live_cache/YYYY-MM-DD/candles.sqlite  (table: candles)
-- ./live_cache/YYYY-MM-DD/top_500_liquid.csv (cached top list for the day)
-- ./live_cache/YYYY-MM-DD/manifest.json  (last saved minute per symbol)
-
-Requirements
-pip install kiteconnect pandas numpy pyarrow plotly
+Adds (in addition to your current version):
+- HEARTBEAT gap filler: writes flat 1-min candles (vol=0) for minutes with no ticks,
+  so DB becomes continuous and charts don't look broken.
+- Bootstrap last candle state from DB at startup.
+- Uses a separate read-only SQLite connection in the main thread for lightweight seeding
+  (safe with writer thread + WAL).
 """
 
 from __future__ import annotations
@@ -34,51 +22,49 @@ from datetime import datetime, date, time as dtime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
-from kiteconnect import KiteConnect, KiteTicker, exceptions as kite_ex
+from kiteconnect import KiteConnect, KiteTicker
 
-import Trading_2024.OptionTradeUtils as oUtils   # same style as your LiquidStocksScanner.py
+import Trading_2024.OptionTradeUtils as oUtils
 
 
 # ===================== USER CONFIG =====================
 
-# Use the same CSV concept as LiquidStocksScanner.py.
-# Your message had a garbled path; by default we pick the one in your attached LiquidStocksScanner.py.
-# Override via env var UNIVERSE_CSV if needed.
-DEFAULT_UNIVERSE_CSV = r"C:\Users\himan\Downloads\stock_list.csv"
+DEFAULT_UNIVERSE_CSV = r"C:\Users\Local User\Downloads\stock_list.csv"
 UNIVERSE_CSV = os.environ.get("UNIVERSE_CSV", DEFAULT_UNIVERSE_CSV)
 
 TOP_N = 500
 
-# Quote batching for liquidity ranking
 QUOTE_BATCH_SIZE = 100
-QUOTE_RPS = 1.0  # keep <=1 to avoid 429
+QUOTE_RPS = 1.0
 
-# Cache root
 CACHE_ROOT = r"./live_cache"
 
-# Session times (IST-naive)
 SESSION_START = dtime(9, 15)
 SESSION_END = dtime(15, 30)
 
-# AUTO timezone handling (your rule): if timestamps look like ~03:45 at open => UTC-naive => shift +5:30
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
-# WebSocket
-WS_MODE = "full"  # "full" recommended for volume_traded
+WS_MODE = "full"  # full => has volume_traded; quote => may not
 
-# Historical backfill pacing (Kite limits)
-HIST_SLEEP_SEC = 0.40      # increase if you see rate-limit errors
+HIST_SLEEP_SEC = 0.40
 HIST_MAX_RETRIES = 3
 
-# Backfill strategy:
-# - "FULL_DAY": backfill from 09:15 to last closed minute (heavy for 500 symbols)
-# - "LOOKBACK": backfill only last BACKFILL_LOOKBACK_MIN minutes (much lighter; enough for last-60 scan)
-BACKFILL_MODE = "LOOKBACK"
-BACKFILL_LOOKBACK_MIN = 140  # keep > 60; 120-180 is practical
+# We don't need full-day; we need enough to plot + scan reliably
+DISPLAY_BARS_TARGET = 240                 # how many recent 1-min candles to ensure
+BACKFILL_LOOKBACK_MIN = DISPLAY_BARS_TARGET + 30  # floor = now - lookback (>= display)
 
-# Candle DB write batching
 WRITE_FLUSH_SEC = 1.0
 WRITE_BATCH_MAX = 5000
+
+BACKFILL_LOG_EVERY_N_SYMBOLS = 10
+BACKFILL_SWEEP_SUMMARY_EVERY_SEC = 15
+BACKFILL_WAIT_LOG_EVERY_SEC = 10
+
+# ---- HEARTBEAT GAP FILL (DB continuity even without ticks) ----
+HEARTBEAT_FILL_ENABLED = True
+HEARTBEAT_MAX_FILL_MINUTES = 20      # safety: max minutes to fill per symbol per heartbeat
+HEARTBEAT_SEED_BUDGET = 50           # safety: max symbols to seed from DB per heartbeat when baseline missing
+HEARTBEAT_LOG = True
 
 
 # ===================== LOG =====================
@@ -91,7 +77,6 @@ def log(level: str, msg: str) -> None:
 # ===================== TIME HELPERS =====================
 
 def ist_now_naive() -> datetime:
-    # assume local machine time is IST; we keep everything IST-naive
     return datetime.now()
 
 def today_ist() -> date:
@@ -104,7 +89,6 @@ def floor_minute(ts: datetime) -> datetime:
     return ts.replace(second=0, microsecond=0)
 
 def is_utc_like_session_start(ts: datetime) -> bool:
-    # heuristic: UTC-naive shows ~03:45 for IST 09:15
     return (ts.hour == 3 and 35 <= ts.minute <= 55)
 
 def to_ist_naive_auto(ts: datetime) -> datetime:
@@ -134,6 +118,9 @@ def manifest_path(d: date) -> str:
 def top_liquid_path(d: date, top_n: int) -> str:
     return os.path.join(day_dir(d), f"top_{top_n}_liquid.csv")
 
+def day_open_path(d: date) -> str:
+    return os.path.join(day_dir(d), "day_open.json")
+
 
 # ===================== UNIVERSE =====================
 
@@ -156,7 +143,7 @@ def instrument_key(exchange: str, tradingsymbol: str) -> str:
     return f"{exchange.upper()}:{tradingsymbol.strip()}"
 
 
-# ===================== LIQUIDITY (Top 500) =====================
+# ===================== LIQUIDITY (Top N) + Day Open Cache =====================
 
 def chunked(lst: List[str], n: int):
     for i in range(0, len(lst), n):
@@ -167,6 +154,10 @@ def compute_liquidity_metrics(sym_key: str, q: Dict) -> Dict:
 
     last_price = float(q.get("last_price") or 0.0)
     volume = int(q.get("volume") or 0)
+
+    ohlc = q.get("ohlc") or {}
+    day_open = ohlc.get("open")
+    day_open = float(day_open) if day_open is not None else None
 
     depth = q.get("depth") or {}
     buy = depth.get("buy") or []
@@ -190,6 +181,8 @@ def compute_liquidity_metrics(sym_key: str, q: Dict) -> Dict:
     return {
         "exchange": exch,
         "tradingsymbol": ts,
+        "symbol": f"{exch}:{ts}",
+        "day_open": day_open,
         "last_price": last_price,
         "volume": volume,
         "turnover": turnover,
@@ -228,14 +221,9 @@ def load_or_compute_top_liquid(kite: KiteConnect, universe_df: pd.DataFrame, d: 
     out_csv = top_liquid_path(d, top_n)
     ensure_dir(day_dir(d))
 
-    if os.path.isfile(out_csv):
-        log("INFO", f"Top-{top_n} already cached: {out_csv}")
+    if os.path.isfile(out_csv) and os.path.isfile(day_open_path(d)):
+        log("INFO", f"Top-{top_n} + day_open already cached in {day_dir(d)}")
         return pd.read_csv(out_csv)
-
-    # Reality check: if run too early, today's "volume" may be zero or not meaningful.
-    now = ist_now_naive()
-    if now < combine(d, SESSION_START) + timedelta(minutes=2):
-        log("WARN", "You are running before/near market open. Liquidity ranking may be unstable early.")
 
     sym_keys = [instrument_key(r.exchange, r.tradingsymbol) for r in universe_df.itertuples(index=False)]
     log("STEP", f"Computing liquidity snapshot for {len(sym_keys)} instruments (quote API)...")
@@ -244,7 +232,18 @@ def load_or_compute_top_liquid(kite: KiteConnect, universe_df: pd.DataFrame, d: 
     top = pick_top_liquid(liq, top_n)
 
     top.to_csv(out_csv, index=False)
+
+    # Save day_open map (used by scanner)
+    day_open_map = {}
+    for r in top.itertuples(index=False):
+        if getattr(r, "symbol", None) and getattr(r, "day_open", None) is not None:
+            day_open_map[str(r.symbol)] = float(r.day_open)
+
+    with open(day_open_path(d), "w", encoding="utf-8") as f:
+        json.dump(day_open_map, f, indent=2)
+
     log("INFO", f"Saved Top-{len(top)} liquid stocks to {out_csv}")
+    log("INFO", f"Saved day_open map to {day_open_path(d)} ({len(day_open_map)} symbols)")
     return top
 
 
@@ -300,17 +299,17 @@ def build_token_map(kite: KiteConnect, symbols: List[Tuple[str, str]]) -> Dict[T
 
 # ===================== SQLITE STORE =====================
 
-def open_db(path: str) -> sqlite3.Connection:
+def open_db(path: str, check_same_thread: bool) -> sqlite3.Connection:
     ensure_dir(os.path.dirname(path))
-    conn = sqlite3.connect(path, check_same_thread=False)
+    conn = sqlite3.connect(path, check_same_thread=check_same_thread)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA temp_store=MEMORY;")
-    conn.execute("PRAGMA cache_size=-200000;")  # ~200MB page cache if available
+    conn.execute("PRAGMA cache_size=-200000;")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS candles (
             symbol TEXT NOT NULL,
-            ts TEXT NOT NULL,           -- ISO minute (IST-naive)
+            ts TEXT NOT NULL,
             open REAL NOT NULL,
             high REAL NOT NULL,
             low  REAL NOT NULL,
@@ -323,6 +322,10 @@ def open_db(path: str) -> sqlite3.Connection:
     conn.commit()
     return conn
 
+def open_db_ro(path: str) -> sqlite3.Connection:
+    # separate RO connection used only in main thread (safe)
+    return sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=True)
+
 def db_last_ts(conn: sqlite3.Connection, symbol: str) -> Optional[datetime]:
     cur = conn.execute("SELECT ts FROM candles WHERE symbol=? ORDER BY ts DESC LIMIT 1;", (symbol,))
     row = cur.fetchone()
@@ -333,10 +336,6 @@ def db_last_ts(conn: sqlite3.Connection, symbol: str) -> Optional[datetime]:
 def db_count_since(conn: sqlite3.Connection, symbol: str, start_ts: datetime) -> int:
     cur = conn.execute("SELECT COUNT(1) FROM candles WHERE symbol=? AND ts>=?;", (symbol, start_ts.isoformat()))
     return int(cur.fetchone()[0])
-
-def db_distinct_symbols(conn: sqlite3.Connection) -> List[str]:
-    cur = conn.execute("SELECT DISTINCT symbol FROM candles;")
-    return [r[0] for r in cur.fetchall()]
 
 
 # ===================== CANDLE BUILDER =====================
@@ -352,22 +351,11 @@ class CandleRow:
     volume: int
 
 class CandleBuilder:
-    """
-    Builds 1-minute candles from ticks.
-
-    Fix vs earlier draft:
-    - When we force-close a candle due to time (no further ticks), we do NOT keep finalizing same minute forever.
-    """
-
     def __init__(self):
         self.cur_minute: Optional[datetime] = None
         self.o = self.h = self.l = self.c = None
         self.vol = 0
-
-        # cumulative volume from FULL mode ticks (if available)
         self.last_cum_vol: Optional[int] = None
-
-        # last known close (for gap fill if next tick comes late)
         self.last_close: Optional[float] = None
 
     def _start_minute(self, m: datetime, price: float) -> None:
@@ -405,35 +393,28 @@ class CandleBuilder:
             self.vol += inc_vol
             return completed
 
-        # Minute advanced: close previous and fill gaps (flat candles) if needed
         prev = self._finalize_current()
         if prev:
             completed.append(prev)
 
-        # gap fill minutes between cur_minute+1 and m-1
+        # Fill gaps until new minute (flat using last_close)
         gap = self.cur_minute + timedelta(minutes=1)
         while gap < m and self.last_close is not None:
             completed.append((gap, self.last_close, self.last_close, self.last_close, self.last_close, 0))
             gap += timedelta(minutes=1)
 
-        # start new minute
         self._start_minute(m, price)
         self.vol += inc_vol
         return completed
 
     def force_close_if_minute_closed(self, now_ts: datetime) -> List[Tuple[datetime, float, float, float, float, int]]:
-        """
-        If current minute is fully closed (<= last closed minute), finalize it once and reset
-        so we don't keep emitting duplicates.
-        """
         if self.cur_minute is None:
             return []
-
         now_ts = to_ist_naive_auto(now_ts)
         last_closed = floor_minute(now_ts) - timedelta(minutes=1)
         if self.cur_minute <= last_closed:
             prev = self._finalize_current()
-            # RESET: do not keep a "current minute" without tick
+            # reset to avoid duplicate force-close emissions
             self.cur_minute = None
             self.o = self.h = self.l = self.c = None
             self.vol = 0
@@ -470,13 +451,10 @@ class CandleWriter(threading.Thread):
                 buf.clear()
                 last_flush = time.time()
 
-        # final flush
         if buf:
             self._flush(buf)
 
     def _flush(self, rows: List[CandleRow]) -> None:
-        if not rows:
-            return
         data = [(r.symbol, r.ts.isoformat(), r.open, r.high, r.low, r.close, int(r.volume)) for r in rows]
         self.conn.executemany("""
             INSERT OR REPLACE INTO candles(symbol, ts, open, high, low, close, volume)
@@ -503,10 +481,15 @@ def save_manifest(d: date, m: Dict) -> None:
 # ===================== HISTORICAL BACKFILL =====================
 
 class HistoricalBackfiller(threading.Thread):
+    """
+    Uses its own SQLite connection.
+    Ensures at least DISPLAY_BARS_TARGET candles exist for recent window (now-lookback).
+    """
+
     def __init__(
         self,
         kite: KiteConnect,
-        conn: sqlite3.Connection,
+        db_file: str,
         d: date,
         symbols: List[Tuple[str, int]],  # (symbol_key, token)
         stop_event: threading.Event,
@@ -514,55 +497,72 @@ class HistoricalBackfiller(threading.Thread):
     ):
         super().__init__(daemon=True)
         self.kite = kite
-        self.conn = conn
+        self.db_file = db_file
         self.d = d
         self.symbols = symbols
         self.stop_event = stop_event
         self.manifest = manifest
 
-    def _calc_backfill_start(self, now: datetime) -> datetime:
+        self._last_wait_log = 0.0
+        self._last_sweep_log = 0.0
+
+    def _backfill_floor(self, now: datetime) -> datetime:
         session_start = combine(self.d, SESSION_START)
-        if BACKFILL_MODE.upper() == "FULL_DAY":
-            return session_start
-        # LOOKBACK
         lookback = now - timedelta(minutes=BACKFILL_LOOKBACK_MIN)
         return max(session_start, lookback)
 
     def run(self) -> None:
-        log("STEP", f"Historical backfiller started (mode={BACKFILL_MODE}).")
+        log("STEP", f"Historical backfiller started. target_bars={DISPLAY_BARS_TARGET} lookback_min={BACKFILL_LOOKBACK_MIN}")
+        conn = open_db(self.db_file, check_same_thread=True)
+
+        session_start = combine(self.d, SESSION_START)
 
         while not self.stop_event.is_set():
             now = ist_now_naive()
             last_closed = floor_minute(now) - timedelta(minutes=1)
-            session_start = combine(self.d, SESSION_START)
+
             if last_closed < session_start:
+                if (time.time() - self._last_wait_log) >= BACKFILL_WAIT_LOG_EVERY_SEC:
+                    self._last_wait_log = time.time()
+                    log("INFO", f"[BACKFILL] WAIT_MARKET now={now.time()} last_closed={last_closed.time()} session_start={session_start.time()}")
                 time.sleep(2.0)
                 continue
 
-            backfill_floor = self._calc_backfill_start(now)
+            floor = self._backfill_floor(now)
 
-            for sym, token in self.symbols:
+            if (time.time() - self._last_sweep_log) >= BACKFILL_SWEEP_SUMMARY_EVERY_SEC:
+                self._last_sweep_log = time.time()
+                log("INFO", f"[BACKFILL] SWEEP now={now.time()} last_closed={last_closed.time()} floor={floor.time()} symbols={len(self.symbols)}")
+
+            fetched = skipped_have = skipped_uptodate = failed = 0
+
+            for idx, (sym, token) in enumerate(self.symbols, start=1):
                 if self.stop_event.is_set():
                     break
 
-                # If we already have enough candles since backfill_floor, skip.
-                have = db_count_since(self.conn, sym, backfill_floor)
-                if have >= 80:  # >60; enough for scan + cushion
+                have = db_count_since(conn, sym, floor)
+                if have >= DISPLAY_BARS_TARGET:
+                    skipped_have += 1
+                    if (idx % BACKFILL_LOG_EVERY_N_SYMBOLS) == 0:
+                        log("DEBUG", f"[BACKFILL] SKIP_HAVE {sym} have={have} since={floor.time()}")
                     continue
 
-                last_ts = db_last_ts(self.conn, sym)
-                start = backfill_floor if last_ts is None else max(backfill_floor, last_ts + timedelta(minutes=1))
+                last_ts = db_last_ts(conn, sym)
+                start = floor if last_ts is None else max(floor, last_ts + timedelta(minutes=1))
                 end = last_closed
+
                 if start > end:
+                    skipped_uptodate += 1
                     continue
+
+                if (idx % BACKFILL_LOG_EVERY_N_SYMBOLS) == 0:
+                    log("INFO", f"[BACKFILL] FETCH {sym} token={token} start={start.time()} end={end.time()} have={have}")
 
                 time.sleep(HIST_SLEEP_SEC)
 
                 ok = False
                 candles = None
                 for attempt in range(1, HIST_MAX_RETRIES + 1):
-                    if self.stop_event.is_set():
-                        break
                     try:
                         candles = self.kite.historical_data(
                             instrument_token=token,
@@ -574,17 +574,14 @@ class HistoricalBackfiller(threading.Thread):
                         )
                         ok = True
                         break
-                    except kite_ex.GeneralException as e:
-                        log("WARN", f"HIST {sym} attempt {attempt}/{HIST_MAX_RETRIES} failed: {e}")
-                        time.sleep(HIST_SLEEP_SEC * (attempt + 1))
                     except Exception as e:
-                        log("WARN", f"HIST {sym} attempt {attempt}/{HIST_MAX_RETRIES} error: {e}")
+                        log("WARN", f"[BACKFILL] HIST_FAIL {sym} attempt {attempt}/{HIST_MAX_RETRIES} err={e}")
                         time.sleep(HIST_SLEEP_SEC * (attempt + 1))
 
                 if not ok or not candles:
+                    failed += 1
                     continue
 
-                # Upsert candles into DB
                 rows = []
                 for c in candles:
                     ts = to_ist_naive_auto(c["date"])
@@ -595,17 +592,26 @@ class HistoricalBackfiller(threading.Thread):
                         int(c.get("volume") or 0),
                     ))
 
-                self.conn.executemany("""
+                conn.executemany("""
                     INSERT OR REPLACE INTO candles(symbol, ts, open, high, low, close, volume)
                     VALUES (?, ?, ?, ?, ?, ?, ?);
                 """, rows)
-                self.conn.commit()
+                conn.commit()
 
-                # manifest update
+                fetched += 1
                 self.manifest.setdefault("last_saved", {})[sym] = end.isoformat()
 
+                if (idx % BACKFILL_LOG_EVERY_N_SYMBOLS) == 0:
+                    log("INFO", f"[BACKFILL] UPSERT {sym} rows={len(rows)}")
+
             save_manifest(self.d, self.manifest)
+            log("INFO", f"[BACKFILL] SWEEP_DONE fetched={fetched} skip_have={skipped_have} skip_uptodate={skipped_uptodate} failed={failed}")
             time.sleep(5.0)
+
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 # ===================== LIVE RUNNER =====================
@@ -616,10 +622,12 @@ class LiveCandleCache:
         self.d = d
         ensure_dir(day_dir(d))
 
-        self.conn = open_db(db_path(d))
+        self.db_file = db_path(d)
+        self.writer_conn = open_db(self.db_file, check_same_thread=False)  # used by writer thread
+        self.ro_conn = open_db_ro(self.db_file)  # read-only in main thread
+
         self.manifest = load_manifest(d)
 
-        # Resolve instrument tokens
         symbols = [(r.exchange, r.tradingsymbol) for r in top_df.itertuples(index=False)]
         token_map = build_token_map(self.kite, symbols)
 
@@ -634,25 +642,27 @@ class LiveCandleCache:
 
         log("INFO", f"Top liquid with tokens resolved: {len(self.symbols)} / {len(top_df)}")
 
-        # builders by token
+        self.token_to_symbol: Dict[int, str] = {tok: sym for sym, tok in self.symbols}
         self.builders: Dict[int, CandleBuilder] = {tok: CandleBuilder() for (_, tok) in self.symbols}
 
-        # writer
+        # ---- Heartbeat state (in-memory last written candle) ----
+        self.last_ts_by_symbol: Dict[str, datetime] = {}
+        self.last_close_by_symbol: Dict[str, float] = {}
+        self._bootstrap_last_state_from_db()
+
         self.stop_event = threading.Event()
         self.write_q: "queue.Queue[CandleRow]" = queue.Queue(maxsize=200000)
-        self.writer = CandleWriter(self.conn, self.write_q, self.stop_event)
+        self.writer = CandleWriter(self.writer_conn, self.write_q, self.stop_event)
 
-        # backfiller
         self.backfiller = HistoricalBackfiller(
             kite=self.kite,
-            conn=self.conn,
+            db_file=self.db_file,
             d=self.d,
             symbols=self.symbols,
             stop_event=self.stop_event,
             manifest=self.manifest,
         )
 
-        # websocket
         self.kws = KiteTicker(self.kite.api_key, self.kite.access_token)
         self.kws.on_connect = self._on_connect
         self.kws.on_ticks = self._on_ticks
@@ -660,6 +670,135 @@ class LiveCandleCache:
         self.kws.on_error = self._on_error
 
         self._last_force_close_min: Optional[datetime] = None
+
+    # ---------- Heartbeat helpers ----------
+
+    def _bootstrap_last_state_from_db(self) -> None:
+        """
+        Loads last candle per symbol from DB so heartbeat filler can start immediately after restart.
+        """
+        try:
+            cur = self.ro_conn.execute("""
+                SELECT c.symbol, c.ts, c.close
+                FROM candles c
+                JOIN (
+                    SELECT symbol, MAX(ts) AS mts
+                    FROM candles
+                    GROUP BY symbol
+                ) m
+                ON c.symbol=m.symbol AND c.ts=m.mts;
+            """)
+            rows = cur.fetchall()
+            for sym, ts_s, close in rows:
+                try:
+                    ts = datetime.fromisoformat(ts_s)
+                    self.last_ts_by_symbol[str(sym)] = ts
+                    self.last_close_by_symbol[str(sym)] = float(close)
+                except Exception:
+                    continue
+            if HEARTBEAT_LOG:
+                log("INFO", f"[HEARTBEAT] bootstrapped {len(self.last_ts_by_symbol)} symbols from DB")
+        except Exception as e:
+            log("WARN", f"[HEARTBEAT] bootstrap failed: {e}")
+
+        # Also accept manifest hints (timestamp only)
+        try:
+            last_saved = (self.manifest or {}).get("last_saved", {}) or {}
+            for sym, ts_s in last_saved.items():
+                if sym in self.last_ts_by_symbol:
+                    continue
+                try:
+                    self.last_ts_by_symbol[sym] = datetime.fromisoformat(ts_s)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _db_last_candle_for_symbol(self, sym: str) -> Optional[Tuple[datetime, float]]:
+        """
+        Read last candle for a symbol from RO connection.
+        Used only for seeding when no in-memory baseline exists yet.
+        """
+        try:
+            cur = self.ro_conn.execute(
+                "SELECT ts, close FROM candles WHERE symbol=? ORDER BY ts DESC LIMIT 1;",
+                (sym,)
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return datetime.fromisoformat(row[0]), float(row[1])
+        except Exception:
+            return None
+
+    def _record_last_written(self, sym: str, ts: datetime, close: float) -> None:
+        """
+        Updates in-memory last candle + manifest for this symbol.
+        """
+        if ts is None:
+            return
+        prev = self.last_ts_by_symbol.get(sym)
+        if prev is None or ts >= prev:
+            self.last_ts_by_symbol[sym] = ts
+            self.last_close_by_symbol[sym] = float(close)
+        self.manifest.setdefault("last_saved", {})[sym] = ts.isoformat()
+
+    def _heartbeat_fill_gaps(self, last_closed: datetime) -> None:
+        """
+        Ensures every minute exists in DB by filling missing minutes with flat candles (vol=0)
+        from last known close. This removes gaps when no ticks arrive.
+        """
+        if not HEARTBEAT_FILL_ENABLED:
+            return
+
+        inserted_total = 0
+        symbols_touched = 0
+
+        seed_budget = HEARTBEAT_SEED_BUDGET
+
+        for sym, tok in self.symbols:
+            last_ts = self.last_ts_by_symbol.get(sym)
+            last_close = self.last_close_by_symbol.get(sym)
+
+            # Seed from DB if baseline missing (limited budget per heartbeat)
+            if (last_ts is None or last_close is None) and seed_budget > 0:
+                seeded = self._db_last_candle_for_symbol(sym)
+                seed_budget -= 1
+                if seeded:
+                    last_ts, last_close = seeded
+                    self.last_ts_by_symbol[sym] = last_ts
+                    self.last_close_by_symbol[sym] = last_close
+
+            if last_ts is None or last_close is None:
+                continue
+
+            if last_ts >= last_closed:
+                continue
+
+            gap_minutes = int((last_closed - last_ts).total_seconds() // 60)
+            if gap_minutes <= 0:
+                continue
+
+            fill_n = min(gap_minutes, HEARTBEAT_MAX_FILL_MINUTES)
+
+            inserted = 0
+            for k in range(1, fill_n + 1):
+                ts_fill = last_ts + timedelta(minutes=k)
+                try:
+                    self.write_q.put_nowait(CandleRow(sym, ts_fill, last_close, last_close, last_close, last_close, 0))
+                    self._record_last_written(sym, ts_fill, last_close)
+                    inserted += 1
+                except queue.Full:
+                    break
+
+            if inserted > 0:
+                inserted_total += inserted
+                symbols_touched += 1
+
+        if HEARTBEAT_LOG and inserted_total > 0:
+            log("DEBUG", f"[HEARTBEAT] filled {inserted_total} candles across {symbols_touched} symbols up to {last_closed.time()}")
+
+    # ---------- Websocket callbacks ----------
 
     def _on_connect(self, ws, response):
         tokens = [tok for (_, tok) in self.symbols]
@@ -684,24 +823,26 @@ class LiveCandleCache:
         log("WARN", f"WebSocket error: code={code} reason={reason}")
 
     def _force_close_once_per_minute(self):
-        """
-        Ensures we finalize a minute even if last tick of that minute never arrived.
-        """
         now = ist_now_naive()
         now_min = floor_minute(now)
         if self._last_force_close_min == now_min:
             return
         self._last_force_close_min = now_min
 
+        last_closed = now_min - timedelta(minutes=1)
+
+        # 1) force-close builders (for symbols that had ticks within a minute)
         for sym, tok in self.symbols:
             b = self.builders.get(tok)
             if not b:
                 continue
             completed = b.force_close_if_minute_closed(now)
-            for c in completed:
-                ts, o, h, l, cl, v = c
+            for ts, o, h, l, cl, v in completed:
                 self.write_q.put(CandleRow(sym, ts, o, h, l, cl, v))
-                self.manifest.setdefault("last_saved", {})[sym] = ts.isoformat()
+                self._record_last_written(sym, ts, cl)
+
+        # 2) heartbeat fill gaps (for symbols that had NO ticks)
+        self._heartbeat_fill_gaps(last_closed)
 
         save_manifest(self.d, self.manifest)
 
@@ -720,34 +861,25 @@ class LiveCandleCache:
             if price is None:
                 continue
 
-            cum_vol = None
-            # FULL mode often provides volume_traded; if not present, keep volume 0
-            if WS_MODE.lower() == "full":
-                cum_vol = t.get("volume_traded")
+            cum_vol = t.get("volume_traded") if WS_MODE.lower() == "full" else None
 
             completed = self.builders[tok].update(ts, float(price), cum_vol)
             if completed:
-                # map token -> symbol string
-                # (small linear lookup; for 500 it's fine)
-                sym = None
-                for s, tk in self.symbols:
-                    if tk == tok:
-                        sym = s
-                        break
-                if sym is None:
+                sym = self.token_to_symbol.get(tok)
+                if not sym:
                     continue
-
-                for c in completed:
-                    c_ts, o, h, l, cl, v = c
+                for c_ts, o, h, l, cl, v in completed:
                     self.write_q.put(CandleRow(sym, c_ts, o, h, l, cl, v))
-                    self.manifest.setdefault("last_saved", {})[sym] = c_ts.isoformat()
+                    self._record_last_written(sym, c_ts, cl)
 
-        # once per minute force-close
         self._force_close_once_per_minute()
+
+    # ---------- Lifecycle ----------
 
     def start(self):
         log("STEP", f"Starting live cache for {self.d}")
-        log("INFO", f"DB: {db_path(self.d)}")
+        log("INFO", f"Universe CSV: {UNIVERSE_CSV}")
+        log("INFO", f"DB: {self.db_file}")
         self.kws.connect(threaded=False)
 
     def stop(self):
@@ -762,7 +894,11 @@ class LiveCandleCache:
             pass
         save_manifest(self.d, self.manifest)
         try:
-            self.conn.close()
+            self.ro_conn.close()
+        except Exception:
+            pass
+        try:
+            self.writer_conn.close()
         except Exception:
             pass
 
