@@ -1,12 +1,12 @@
 """
-live_market_cache.py  (UPDATED + HEARTBEAT GAP FILL)
+live_market_cache.py  (UPDATED + HEARTBEAT THREAD + SESSION CLAMP + SAFE QUEUE + BACKFILL THROTTLE)
 
-Adds (in addition to your current version):
-- HEARTBEAT gap filler: writes flat 1-min candles (vol=0) for minutes with no ticks,
-  so DB becomes continuous and charts don't look broken.
-- Bootstrap last candle state from DB at startup.
-- Uses a separate read-only SQLite connection in the main thread for lightweight seeding
-  (safe with writer thread + WAL).
+Fixes / adds:
+- Dedicated heartbeat thread: gap fill + force-close runs even when no ticks arrive.
+- Session clamp: never fill candles beyond SESSION_END (last candle at 15:29 if end=15:30).
+- Safe non-blocking queue writes: prevents websocket callback from freezing if queue is full.
+- Backfiller throttling: caps historical calls per sweep for TOP_N=500.
+- Locking: thread-safe shared state between tick callbacks and heartbeat thread.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ HIST_SLEEP_SEC = 0.40
 HIST_MAX_RETRIES = 3
 
 # We don't need full-day; we need enough to plot + scan reliably
-DISPLAY_BARS_TARGET = 240                 # how many recent 1-min candles to ensure
+DISPLAY_BARS_TARGET = 240
 BACKFILL_LOOKBACK_MIN = DISPLAY_BARS_TARGET + 30  # floor = now - lookback (>= display)
 
 WRITE_FLUSH_SEC = 1.0
@@ -60,11 +60,22 @@ BACKFILL_LOG_EVERY_N_SYMBOLS = 10
 BACKFILL_SWEEP_SUMMARY_EVERY_SEC = 15
 BACKFILL_WAIT_LOG_EVERY_SEC = 10
 
-# ---- HEARTBEAT GAP FILL (DB continuity even without ticks) ----
+# ---- HEARTBEAT GAP FILL ----
 HEARTBEAT_FILL_ENABLED = True
-HEARTBEAT_MAX_FILL_MINUTES = 20      # safety: max minutes to fill per symbol per heartbeat
-HEARTBEAT_SEED_BUDGET = 50           # safety: max symbols to seed from DB per heartbeat when baseline missing
+HEARTBEAT_MAX_FILL_MINUTES = 20
+HEARTBEAT_SEED_BUDGET = 50
 HEARTBEAT_LOG = True
+
+# ---- HEARTBEAT THREAD ----
+HEARTBEAT_THREAD_ENABLED = True
+HEARTBEAT_POLL_SEC = 0.8
+
+# ---- SAFE QUEUE ----
+DROP_LOG_EVERY = 1000
+
+# ---- BACKFILL THROTTLE ----
+BACKFILL_MAX_FETCH_PER_SWEEP = 25     # <=25 historical calls per loop; prevents API hammering
+BACKFILL_LOOP_SLEEP_SEC = 5.0
 
 
 # ===================== LOG =====================
@@ -99,6 +110,18 @@ def to_ist_naive_auto(ts: datetime) -> datetime:
     if is_utc_like_session_start(ts):
         return ts + IST_OFFSET
     return ts
+
+def session_bounds(d: date) -> Tuple[datetime, datetime, datetime]:
+    """
+    Returns:
+      session_start_dt,
+      session_end_dt,
+      session_last_closed_dt (last 1-min candle close time, i.e. end-1min)
+    """
+    ss = combine(d, SESSION_START)
+    se = combine(d, SESSION_END)
+    last_closed = floor_minute(se) - timedelta(minutes=1)
+    return ss, se, last_closed
 
 
 # ===================== PATHS =====================
@@ -233,7 +256,6 @@ def load_or_compute_top_liquid(kite: KiteConnect, universe_df: pd.DataFrame, d: 
 
     top.to_csv(out_csv, index=False)
 
-    # Save day_open map (used by scanner)
     day_open_map = {}
     for r in top.itertuples(index=False):
         if getattr(r, "symbol", None) and getattr(r, "day_open", None) is not None:
@@ -306,6 +328,7 @@ def open_db(path: str, check_same_thread: bool) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA temp_store=MEMORY;")
     conn.execute("PRAGMA cache_size=-200000;")
+    conn.execute("PRAGMA busy_timeout=3000;")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS candles (
             symbol TEXT NOT NULL,
@@ -323,7 +346,6 @@ def open_db(path: str, check_same_thread: bool) -> sqlite3.Connection:
     return conn
 
 def open_db_ro(path: str) -> sqlite3.Connection:
-    # separate RO connection used only in main thread (safe)
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=True)
 
 def db_last_ts(conn: sqlite3.Connection, symbol: str) -> Optional[datetime]:
@@ -414,7 +436,6 @@ class CandleBuilder:
         last_closed = floor_minute(now_ts) - timedelta(minutes=1)
         if self.cur_minute <= last_closed:
             prev = self._finalize_current()
-            # reset to avoid duplicate force-close emissions
             self.cur_minute = None
             self.o = self.h = self.l = self.c = None
             self.vol = 0
@@ -484,6 +505,7 @@ class HistoricalBackfiller(threading.Thread):
     """
     Uses its own SQLite connection.
     Ensures at least DISPLAY_BARS_TARGET candles exist for recent window (now-lookback).
+    Throttled to avoid hammering Kite historical API for TOP_N=500.
     """
 
     def __init__(
@@ -491,7 +513,7 @@ class HistoricalBackfiller(threading.Thread):
         kite: KiteConnect,
         db_file: str,
         d: date,
-        symbols: List[Tuple[str, int]],  # (symbol_key, token)
+        symbols: List[Tuple[str, int]],
         stop_event: threading.Event,
         manifest: Dict,
     ):
@@ -505,26 +527,29 @@ class HistoricalBackfiller(threading.Thread):
 
         self._last_wait_log = 0.0
         self._last_sweep_log = 0.0
+        self._rr_idx = 0  # round-robin pointer
 
     def _backfill_floor(self, now: datetime) -> datetime:
-        session_start = combine(self.d, SESSION_START)
-        lookback = now - timedelta(minutes=BACKFILL_LOOKBACK_MIN)
-        return max(session_start, lookback)
+        ss, se, _ = session_bounds(self.d)
+        now2 = min(now, se)  # never drift beyond market end
+        lookback = now2 - timedelta(minutes=BACKFILL_LOOKBACK_MIN)
+        return max(ss, lookback)
 
     def run(self) -> None:
         log("STEP", f"Historical backfiller started. target_bars={DISPLAY_BARS_TARGET} lookback_min={BACKFILL_LOOKBACK_MIN}")
         conn = open_db(self.db_file, check_same_thread=True)
 
-        session_start = combine(self.d, SESSION_START)
+        ss, se, last_session_closed = session_bounds(self.d)
 
         while not self.stop_event.is_set():
             now = ist_now_naive()
             last_closed = floor_minute(now) - timedelta(minutes=1)
+            last_closed = min(last_closed, last_session_closed)
 
-            if last_closed < session_start:
+            if last_closed < ss:
                 if (time.time() - self._last_wait_log) >= BACKFILL_WAIT_LOG_EVERY_SEC:
                     self._last_wait_log = time.time()
-                    log("INFO", f"[BACKFILL] WAIT_MARKET now={now.time()} last_closed={last_closed.time()} session_start={session_start.time()}")
+                    log("INFO", f"[BACKFILL] WAIT_MARKET now={now.time()} last_closed={last_closed.time()} session_start={ss.time()}")
                 time.sleep(2.0)
                 continue
 
@@ -532,19 +557,29 @@ class HistoricalBackfiller(threading.Thread):
 
             if (time.time() - self._last_sweep_log) >= BACKFILL_SWEEP_SUMMARY_EVERY_SEC:
                 self._last_sweep_log = time.time()
-                log("INFO", f"[BACKFILL] SWEEP now={now.time()} last_closed={last_closed.time()} floor={floor.time()} symbols={len(self.symbols)}")
+                log("INFO", f"[BACKFILL] SWEEP now={now.time()} last_closed={last_closed.time()} floor={floor.time()} symbols={len(self.symbols)} rr={self._rr_idx}")
 
             fetched = skipped_have = skipped_uptodate = failed = 0
+            calls_this_sweep = 0
 
-            for idx, (sym, token) in enumerate(self.symbols, start=1):
+            n = len(self.symbols)
+            if n == 0:
+                time.sleep(5.0)
+                continue
+
+            # Round-robin over symbols; stop after BACKFILL_MAX_FETCH_PER_SWEEP calls
+            for step in range(n):
                 if self.stop_event.is_set():
                     break
+                if calls_this_sweep >= BACKFILL_MAX_FETCH_PER_SWEEP:
+                    break
+
+                idx = (self._rr_idx + step) % n
+                sym, token = self.symbols[idx]
 
                 have = db_count_since(conn, sym, floor)
                 if have >= DISPLAY_BARS_TARGET:
                     skipped_have += 1
-                    if (idx % BACKFILL_LOG_EVERY_N_SYMBOLS) == 0:
-                        log("DEBUG", f"[BACKFILL] SKIP_HAVE {sym} have={have} since={floor.time()}")
                     continue
 
                 last_ts = db_last_ts(conn, sym)
@@ -555,8 +590,9 @@ class HistoricalBackfiller(threading.Thread):
                     skipped_uptodate += 1
                     continue
 
-                if (idx % BACKFILL_LOG_EVERY_N_SYMBOLS) == 0:
-                    log("INFO", f"[BACKFILL] FETCH {sym} token={token} start={start.time()} end={end.time()} have={have}")
+                calls_this_sweep += 1
+                if (calls_this_sweep % BACKFILL_LOG_EVERY_N_SYMBOLS) == 0:
+                    log("INFO", f"[BACKFILL] FETCH {sym} token={token} start={start.time()} end={end.time()} have={have} (call {calls_this_sweep}/{BACKFILL_MAX_FETCH_PER_SWEEP})")
 
                 time.sleep(HIST_SLEEP_SEC)
 
@@ -601,17 +637,33 @@ class HistoricalBackfiller(threading.Thread):
                 fetched += 1
                 self.manifest.setdefault("last_saved", {})[sym] = end.isoformat()
 
-                if (idx % BACKFILL_LOG_EVERY_N_SYMBOLS) == 0:
-                    log("INFO", f"[BACKFILL] UPSERT {sym} rows={len(rows)}")
+            self._rr_idx = (self._rr_idx + 1) % n
 
             save_manifest(self.d, self.manifest)
-            log("INFO", f"[BACKFILL] SWEEP_DONE fetched={fetched} skip_have={skipped_have} skip_uptodate={skipped_uptodate} failed={failed}")
-            time.sleep(5.0)
+            log("INFO", f"[BACKFILL] SWEEP_DONE fetched={fetched} skip_have={skipped_have} skip_uptodate={skipped_uptodate} failed={failed} calls={calls_this_sweep}")
+            time.sleep(BACKFILL_LOOP_SLEEP_SEC)
 
         try:
             conn.close()
         except Exception:
             pass
+
+
+# ===================== HEARTBEAT THREAD =====================
+
+class MinuteHeartbeat(threading.Thread):
+    def __init__(self, runner: "LiveCandleCache", stop_event: threading.Event):
+        super().__init__(daemon=True)
+        self.runner = runner
+        self.stop_event = stop_event
+
+    def run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self.runner._force_close_once_per_minute()
+            except Exception as e:
+                log("WARN", f"[HEARTBEAT_THREAD] err={e}")
+            time.sleep(HEARTBEAT_POLL_SEC)
 
 
 # ===================== LIVE RUNNER =====================
@@ -623,8 +675,8 @@ class LiveCandleCache:
         ensure_dir(day_dir(d))
 
         self.db_file = db_path(d)
-        self.writer_conn = open_db(self.db_file, check_same_thread=False)  # used by writer thread
-        self.ro_conn = open_db_ro(self.db_file)  # read-only in main thread
+        self.writer_conn = open_db(self.db_file, check_same_thread=False)
+        self.ro_conn = open_db_ro(self.db_file)
 
         self.manifest = load_manifest(d)
 
@@ -645,7 +697,10 @@ class LiveCandleCache:
         self.token_to_symbol: Dict[int, str] = {tok: sym for sym, tok in self.symbols}
         self.builders: Dict[int, CandleBuilder] = {tok: CandleBuilder() for (_, tok) in self.symbols}
 
-        # ---- Heartbeat state (in-memory last written candle) ----
+        # thread-safe shared state (ticks thread + heartbeat thread)
+        self.state_lock = threading.RLock()
+
+        # heartbeat last written candle state
         self.last_ts_by_symbol: Dict[str, datetime] = {}
         self.last_close_by_symbol: Dict[str, float] = {}
         self._bootstrap_last_state_from_db()
@@ -663,6 +718,11 @@ class LiveCandleCache:
             manifest=self.manifest,
         )
 
+        self.heartbeat_thread: Optional[MinuteHeartbeat] = None
+
+        # dropped write stats
+        self._dropped = 0
+
         self.kws = KiteTicker(self.kite.api_key, self.kite.access_token)
         self.kws.on_connect = self._on_connect
         self.kws.on_ticks = self._on_ticks
@@ -671,12 +731,21 @@ class LiveCandleCache:
 
         self._last_force_close_min: Optional[datetime] = None
 
+    # ---------- Safe queue ----------
+
+    def _safe_put(self, row: CandleRow) -> bool:
+        try:
+            self.write_q.put_nowait(row)
+            return True
+        except queue.Full:
+            self._dropped += 1
+            if (self._dropped % DROP_LOG_EVERY) == 1:
+                log("WARN", f"[QUEUE] FULL. dropped={self._dropped} (latest symbol={row.symbol})")
+            return False
+
     # ---------- Heartbeat helpers ----------
 
     def _bootstrap_last_state_from_db(self) -> None:
-        """
-        Loads last candle per symbol from DB so heartbeat filler can start immediately after restart.
-        """
         try:
             cur = self.ro_conn.execute("""
                 SELECT c.symbol, c.ts, c.close
@@ -701,7 +770,7 @@ class LiveCandleCache:
         except Exception as e:
             log("WARN", f"[HEARTBEAT] bootstrap failed: {e}")
 
-        # Also accept manifest hints (timestamp only)
+        # Manifest hints
         try:
             last_saved = (self.manifest or {}).get("last_saved", {}) or {}
             for sym, ts_s in last_saved.items():
@@ -715,10 +784,6 @@ class LiveCandleCache:
             pass
 
     def _db_last_candle_for_symbol(self, sym: str) -> Optional[Tuple[datetime, float]]:
-        """
-        Read last candle for a symbol from RO connection.
-        Used only for seeding when no in-memory baseline exists yet.
-        """
         try:
             cur = self.ro_conn.execute(
                 "SELECT ts, close FROM candles WHERE symbol=? ORDER BY ts DESC LIMIT 1;",
@@ -732,9 +797,6 @@ class LiveCandleCache:
             return None
 
     def _record_last_written(self, sym: str, ts: datetime, close: float) -> None:
-        """
-        Updates in-memory last candle + manifest for this symbol.
-        """
         if ts is None:
             return
         prev = self.last_ts_by_symbol.get(sym)
@@ -744,23 +806,22 @@ class LiveCandleCache:
         self.manifest.setdefault("last_saved", {})[sym] = ts.isoformat()
 
     def _heartbeat_fill_gaps(self, last_closed: datetime) -> None:
-        """
-        Ensures every minute exists in DB by filling missing minutes with flat candles (vol=0)
-        from last known close. This removes gaps when no ticks arrive.
-        """
         if not HEARTBEAT_FILL_ENABLED:
+            return
+
+        ss, se, last_session_closed = session_bounds(self.d)
+        last_closed = min(last_closed, last_session_closed)
+        if last_closed < ss:
             return
 
         inserted_total = 0
         symbols_touched = 0
-
         seed_budget = HEARTBEAT_SEED_BUDGET
 
-        for sym, tok in self.symbols:
+        for sym, _tok in self.symbols:
             last_ts = self.last_ts_by_symbol.get(sym)
             last_close = self.last_close_by_symbol.get(sym)
 
-            # Seed from DB if baseline missing (limited budget per heartbeat)
             if (last_ts is None or last_close is None) and seed_budget > 0:
                 seeded = self._db_last_candle_for_symbol(sym)
                 seed_budget -= 1
@@ -771,6 +832,10 @@ class LiveCandleCache:
 
             if last_ts is None or last_close is None:
                 continue
+
+            # Don't fill past market close or before market start
+            if last_ts < ss:
+                last_ts = ss
 
             if last_ts >= last_closed:
                 continue
@@ -784,11 +849,12 @@ class LiveCandleCache:
             inserted = 0
             for k in range(1, fill_n + 1):
                 ts_fill = last_ts + timedelta(minutes=k)
-                try:
-                    self.write_q.put_nowait(CandleRow(sym, ts_fill, last_close, last_close, last_close, last_close, 0))
+                if ts_fill > last_closed:
+                    break
+                if self._safe_put(CandleRow(sym, ts_fill, last_close, last_close, last_close, last_close, 0)):
                     self._record_last_written(sym, ts_fill, last_close)
                     inserted += 1
-                except queue.Full:
+                else:
                     break
 
             if inserted > 0:
@@ -815,6 +881,11 @@ class LiveCandleCache:
         if not self.backfiller.is_alive():
             self.backfiller.start()
 
+        if HEARTBEAT_THREAD_ENABLED and self.heartbeat_thread is None:
+            self.heartbeat_thread = MinuteHeartbeat(self, self.stop_event)
+            self.heartbeat_thread.start()
+            log("INFO", "[HEARTBEAT_THREAD] started")
+
     def _on_close(self, ws, code, reason):
         log("WARN", f"WebSocket closed: code={code} reason={reason}")
         self.stop_event.set()
@@ -823,55 +894,63 @@ class LiveCandleCache:
         log("WARN", f"WebSocket error: code={code} reason={reason}")
 
     def _force_close_once_per_minute(self):
-        now = ist_now_naive()
-        now_min = floor_minute(now)
-        if self._last_force_close_min == now_min:
-            return
-        self._last_force_close_min = now_min
+        with self.state_lock:
+            now = ist_now_naive()
+            now_min = floor_minute(now)
+            if self._last_force_close_min == now_min:
+                return
+            self._last_force_close_min = now_min
 
-        last_closed = now_min - timedelta(minutes=1)
+            ss, se, last_session_closed = session_bounds(self.d)
+            last_closed = now_min - timedelta(minutes=1)
+            last_closed = min(last_closed, last_session_closed)
 
-        # 1) force-close builders (for symbols that had ticks within a minute)
-        for sym, tok in self.symbols:
-            b = self.builders.get(tok)
-            if not b:
-                continue
-            completed = b.force_close_if_minute_closed(now)
-            for ts, o, h, l, cl, v in completed:
-                self.write_q.put(CandleRow(sym, ts, o, h, l, cl, v))
-                self._record_last_written(sym, ts, cl)
+            if last_closed < ss:
+                return
 
-        # 2) heartbeat fill gaps (for symbols that had NO ticks)
-        self._heartbeat_fill_gaps(last_closed)
+            # 1) force-close builders
+            for sym, tok in self.symbols:
+                b = self.builders.get(tok)
+                if not b:
+                    continue
+                completed = b.force_close_if_minute_closed(now)
+                for ts, o, h, l, cl, v in completed:
+                    if self._safe_put(CandleRow(sym, ts, o, h, l, cl, v)):
+                        self._record_last_written(sym, ts, cl)
 
-        save_manifest(self.d, self.manifest)
+            # 2) heartbeat fill gaps (no ticks case)
+            self._heartbeat_fill_gaps(last_closed)
+
+            save_manifest(self.d, self.manifest)
 
     def _on_ticks(self, ws, ticks: List[Dict]):
-        for t in ticks:
-            tok = t.get("instrument_token")
-            if tok not in self.builders:
-                continue
-
-            ts = t.get("exchange_timestamp") or t.get("timestamp")
-            if not ts:
-                continue
-            ts = to_ist_naive_auto(ts)
-
-            price = t.get("last_price")
-            if price is None:
-                continue
-
-            cum_vol = t.get("volume_traded") if WS_MODE.lower() == "full" else None
-
-            completed = self.builders[tok].update(ts, float(price), cum_vol)
-            if completed:
-                sym = self.token_to_symbol.get(tok)
-                if not sym:
+        with self.state_lock:
+            for t in ticks:
+                tok = t.get("instrument_token")
+                if tok not in self.builders:
                     continue
-                for c_ts, o, h, l, cl, v in completed:
-                    self.write_q.put(CandleRow(sym, c_ts, o, h, l, cl, v))
-                    self._record_last_written(sym, c_ts, cl)
 
+                ts = t.get("exchange_timestamp") or t.get("timestamp")
+                if not ts:
+                    continue
+                ts = to_ist_naive_auto(ts)
+
+                price = t.get("last_price")
+                if price is None:
+                    continue
+
+                cum_vol = t.get("volume_traded") if WS_MODE.lower() == "full" else None
+
+                completed = self.builders[tok].update(ts, float(price), cum_vol)
+                if completed:
+                    sym = self.token_to_symbol.get(tok)
+                    if not sym:
+                        continue
+                    for c_ts, o, h, l, cl, v in completed:
+                        if self._safe_put(CandleRow(sym, c_ts, o, h, l, cl, v)):
+                            self._record_last_written(sym, c_ts, cl)
+
+        # call once; fast no-op if already done by heartbeat thread
         self._force_close_once_per_minute()
 
     # ---------- Lifecycle ----------
@@ -886,6 +965,11 @@ class LiveCandleCache:
         self.stop_event.set()
         try:
             self.kws.close()
+        except Exception:
+            pass
+        try:
+            if self.heartbeat_thread is not None:
+                self.heartbeat_thread.join(timeout=2.0)
         except Exception:
             pass
         try:
