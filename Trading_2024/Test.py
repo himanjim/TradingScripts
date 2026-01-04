@@ -1,366 +1,423 @@
+"""
+make_bra_doc_with_14_figures.py
+
+What this does
+- Takes:
+  A) AI component Sharma Himanshu_VSI_manuscript_min_IEEE.docx
+  B) Blockchain_component_2025_12_18_CONSOLIDATED.docx
+  C) Sharma_InternetVoting_BlockchainResearchApplications_TextOnly.docx
+- Extracts ALL images from A and B (typically 7 + 7 = 14)
+- Inserts them into C exactly per your 14-figure insertion plan:
+  Figure 1..14 with:
+    - required in-text mentions (exact wording from your plan)
+    - captions "Figure n. ..."
+    - center alignment, inline images, blank line after caption
+- Outputs: Sharma_InternetVoting_BRA_With14Figures.docx
+
+Requirements
+  pip install python-docx pillow
+"""
+
 import os
-import time
-from datetime import datetime, date, time as dtime, timedelta
-from typing import List, Dict, Tuple
+import re
+import zipfile
+import hashlib
+from dataclasses import dataclass
+from typing import List, Optional, Dict
 
-import pandas as pd
-
-import OptionTradeUtils as oUtils
-
-
-# ========== USER CONFIG ==========
-# Underlying index whose options you want (cash/index symbol on NSE/BSE)
-INDEX_EXCHANGE = "NSE"              # e.g. "NSE" for NIFTY/BANKNIFTY indices
-# INDEX_TRADINGSYMBOL = "NIFTY BANK"  # BANKNIFTY index symbol on NSE cash
-INDEX_TRADINGSYMBOL = "NIFTY 50"
-
-# Options segment details
-OPTION_EXCHANGE = "NFO"                 # "NFO" for index options
-# OPTION_TS_PREFIX = "BANKNIFTY"          # tradingsymbol prefix for this index's options
-OPTION_TS_PREFIX = "NIFTY"
-ALLOWED_OPTION_TYPES = ("CE", "PE")     # Kite option types
-
-# Strike step for this underlying (BANKNIFTY = 100, NIFTY = 50)
-STRIKE_STEP = 50
-
-# Expiry date for which you want all strikes (BANKNIFTY monthly expiry)
-# BANKNIFTY monthly expiry is the LAST TUESDAY of the month.
-EXPIRY_DATE_STR = "16-12-2025"          # DD-MM-YYYY  (set this to actual monthly expiry)
-
-# Start date: day after previous monthly expiry
-START_DATE_STR = "10-12-2025"
-
-# Output folder and filename
-# OUTPUT_DIR = "./BANKNIFTY_20251125_expiry_history"
-# OUTPUT_BASENAME = "BANKNIFTY_20251125_minute"   # used as pickle filename
-OUTPUT_DIR = "./NIFTY_20251125_expiry_history"
-OUTPUT_BASENAME = "NIFTY_20251216_minute"   # used as pickle filename
-
-# Trading session times (IST)
-SESSION_START = dtime(9, 15, 0)
-SESSION_END   = dtime(15, 30, 0)
+from PIL import Image
+from docx import Document
+from docx.shared import Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.text.paragraph import Paragraph
 
 
-# ========== HELPERS ==========
-def parse_date_dmy(dstr: str) -> date:
-    """Parse DD-MM-YYYY (your config format)."""
-    return datetime.strptime(dstr, "%d-%m-%Y").date()
+# =========================
+# CONFIG: set your paths
+# =========================
+A_DOC = r"G:\My Drive\PhD\My Research papers\Master documents\AI component Sharma Himanshu_VSI_manuscript_min_IEEE.docx"
+B_DOC = r"G:\My Drive\PhD\My Research papers\Master documents\Blockchain_component_2025_12_18_CONSOLIDATED.docx"
+C_DOC = r"C:\Users\himan\Downloads\Sharma_InternetVoting_BlockchainResearchApplications_TextOnly.docx"
+OUT_DOC = r"C:\Users\himan\Downloads\Sharma_InternetVoting_BlockchainResearchApplications_Images.docx"
+
+WORKDIR = r"_tmp_extracted_figs"  # temp folder
 
 
-def normalize_expiry(e) -> date:
+# =========================
+# Robust text matching
+# =========================
+def _as_text(x):
+    return x.text if hasattr(x, "text") else ("" if x is None else str(x))
+
+
+def _norm(s: str) -> str:
+    s = _as_text(s)
+    s = s.replace("\xa0", " ")                 # NBSP -> space
+    s = re.sub(r"\s+", " ", s).strip()         # collapse whitespace
+    return s.casefold()
+
+
+def find_para(
+    doc: Document,
+    *,
+    equals: Optional[str] = None,
+    startswith: Optional[str] = None,
+    contains: Optional[str] = None,
+    regex: Optional[str] = None,
+    start: int = 0,
+) -> Optional[Paragraph]:
     """
-    Normalize expiry from instruments dump to a date object.
-    It can be a date, datetime, or string in ISO / DMY format.
+    Robust paragraph finder.
+    - equals/startswith/contains are matched after normalization
+    - regex is applied on the raw paragraph text (IGNORECASE)
     """
-    if isinstance(e, date) and not isinstance(e, datetime):
-        return e
-    if isinstance(e, datetime):
-        return e.date()
-    if isinstance(e, str):
-        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%Y-%m-%d %H:%M:%S"):
-            try:
-                return datetime.strptime(e, fmt).date()
-            except ValueError:
-                continue
-        # last resort: try fromisoformat
-        try:
-            return datetime.fromisoformat(e).date()
-        except Exception:
-            pass
-    raise ValueError(f"Cannot parse expiry value: {e!r}")
+    paras = doc.paragraphs
+    for i in range(start, len(paras)):
+        raw = paras[i].text
+        t = _norm(raw)
+
+        if equals is not None and t == _norm(equals):
+            return paras[i]
+        if startswith is not None and t.startswith(_norm(startswith)):
+            return paras[i]
+        if contains is not None and _norm(contains) in t:
+            return paras[i]
+        if regex is not None and re.search(regex, raw, flags=re.IGNORECASE):
+            return paras[i]
+    return None
 
 
-def date_chunks(start_dt: datetime, end_dt: datetime, days_per_chunk: int = 30) -> List[Tuple[datetime, datetime]]:
-    """Split [start_dt, end_dt] into inclusive chunks of at most days_per_chunk days."""
-    chunks: List[Tuple[datetime, datetime]] = []
-    cur_start = start_dt
-    one_day = timedelta(days=1)
-    while cur_start <= end_dt:
-        cur_end = min(cur_start + timedelta(days=days_per_chunk) - one_day, end_dt)
-        chunks.append((cur_start, cur_end))
-        cur_start = cur_end + one_day
-    return chunks
+def require(p: Optional[Paragraph], what: str) -> Paragraph:
+    if p is None:
+        raise ValueError(f"Could not find required paragraph for: {what}")
+    return p
 
 
-def get_instrument_token(kite, exchange: str, tradingsymbol: str) -> Tuple[int, str]:
-    """Return (instrument_token, real_exchange) for a given tradingsymbol on a specific exchange."""
-    ex = (exchange or "").upper().strip()
-    wanted = tradingsymbol.strip()
-
-    print(f"[INFO] Fetching instruments for exchange={ex} to resolve '{wanted}' ...")
-    instruments = kite.instruments(ex)
-    matches = [r for r in instruments if str(r.get("tradingsymbol", "")).upper() == wanted.upper()]
-    if not matches:
-        raise ValueError(f"Instrument not found on {ex}: '{wanted}'")
-    row = matches[0]
-    print(f"[INFO] Resolved {wanted} → token={row['instrument_token']} on exchange={row['exchange']}")
-    return int(row["instrument_token"]), row["exchange"]
+def append_sentence(paragraph: Optional[Paragraph], sentence: str) -> None:
+    paragraph = require(paragraph, f"append_sentence -> {sentence[:80]}...")
+    t = paragraph.text.rstrip()
+    if t and not t.endswith((".", "!", "?")):
+        paragraph.add_run(".")
+    paragraph.add_run((" " + sentence) if t else sentence)
 
 
-def fetch_history_minute(kite, instrument_token: int, from_dt: datetime, to_dt: datetime, label: str = "") -> List[Dict]:
+# =========================
+# Paragraph insertion helpers
+# =========================
+def insert_paragraph_after(paragraph: Paragraph, text: Optional[str] = None) -> Paragraph:
+    new_p = OxmlElement("w:p")
+    paragraph._p.addnext(new_p)
+    new_para = Paragraph(new_p, paragraph._parent)
+    if text is not None:
+        new_para.add_run(text)
+    return new_para
+
+
+def first_nonempty_paragraph_after_heading(doc: Document, heading_para: Paragraph) -> Paragraph:
     """
-    Fetch 1-minute historical data between from_dt and to_dt (inclusive), chunked to avoid limits.
-    label: human-readable instrument name for logging.
+    Finds the first non-empty paragraph after heading_para in the *current* doc.
+    (Safe even after insertions.)
     """
-    interval = "minute"
-    sleep_between_calls_sec = 0.25
-    chunks = date_chunks(from_dt, to_dt, days_per_chunk=30)
-
-    print(f"[INFO] Fetching {interval} data for {label} (token={instrument_token}) "
-          f"from {from_dt} to {to_dt} in {len(chunks)} chunk(s).")
-
-    all_rows: List[Dict] = []
-    for idx, (c_from, c_to) in enumerate(chunks, start=1):
-        print(f"  [CHUNK {idx}/{len(chunks)}] {c_from} → {c_to}")
-        for attempt in range(1, 6):  # up to 5 attempts with simple backoff
-            try:
-                rows = kite.historical_data(
-                    instrument_token=instrument_token,
-                    from_date=c_from,
-                    to_date=c_to,
-                    interval=interval,
-                    continuous=False,
-                    oi=False
-                )
-                print(f"    [OK] Retrieved {len(rows)} candles on attempt {attempt}.")
-                all_rows.extend(rows)
+    paras = doc.paragraphs
+    # Find by identity (best-effort); fallback to searching by text match if needed.
+    idx = None
+    for i, p in enumerate(paras):
+        if p._p is heading_para._p:
+            idx = i
+            break
+    if idx is None:
+        # fallback: find the first paragraph whose text matches heading text exactly normalized
+        ht = _norm(heading_para.text)
+        for i, p in enumerate(paras):
+            if _norm(p.text) == ht:
+                idx = i
                 break
-            except Exception as e:
-                wait = attempt * 1.5
-                print(f"    [WARN] Error on attempt {attempt} for {label}: {e}. "
-                      f"Retrying in {wait:.1f}s ...")
-                time.sleep(wait)
-        time.sleep(sleep_between_calls_sec)
+    if idx is None:
+        raise ValueError(f"Could not locate heading paragraph again: {heading_para.text!r}")
 
-    print(f"[INFO] Total candles fetched for {label}: {len(all_rows)}")
-    return all_rows
+    for j in range(idx + 1, len(paras)):
+        if paras[j].text.strip():
+            return paras[j]
+    raise ValueError(f"No non-empty paragraph found after heading: {heading_para.text!r}")
 
 
-def rows_to_dataframe(rows: List[Dict]) -> pd.DataFrame:
-    """Convert historical rows to a sorted DataFrame with the usual OHLC columns."""
-    if not rows:
-        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
-    df = pd.DataFrame(rows)
-    for col in ["date", "open", "high", "low", "close", "volume"]:
-        if col not in df.columns:
-            df[col] = None
-    df = df.sort_values("date").reset_index(drop=True)
-    return df
+# =========================
+# Image extraction
+# =========================
+@dataclass
+class ExtractedImage:
+    path: str
+    size_bytes: int
 
 
-def detect_option_type(tradingsymbol: str) -> str:
-    """Return 'CE', 'PE', or '' based on the tradingsymbol suffix."""
-    s = tradingsymbol.upper()
-    if s.endswith("CE"):
-        return "CE"
-    if s.endswith("PE"):
-        return "PE"
-    return ""
+def extract_media(docx_path: str, prefix: str) -> List[ExtractedImage]:
+    """
+    Extracts word/media/image* in document order (image1, image2, ...).
+    Returns list of ExtractedImage.
+    """
+    os.makedirs(WORKDIR, exist_ok=True)
+
+    with zipfile.ZipFile(docx_path, "r") as z:
+        media = [n for n in z.namelist() if n.startswith("word/media/") and not n.endswith("/")]
+
+        def keyfn(n: str):
+            m = re.search(r"image(\d+)", n)
+            return int(m.group(1)) if m else 999999
+
+        media = sorted(media, key=keyfn)
+
+        out: List[ExtractedImage] = []
+        for i, name in enumerate(media, start=1):
+            data = z.read(name)
+            ext = os.path.splitext(name)[1].lower()
+            h = hashlib.sha1(data).hexdigest()[:10]
+            out_path = os.path.join(WORKDIR, f"{prefix}_{i:02d}_{h}{ext}")
+            with open(out_path, "wb") as f:
+                f.write(data)
+            out.append(ExtractedImage(path=out_path, size_bytes=len(data)))
+        return out
 
 
-# ========== CORE LOGIC ==========
-def main():
-    # --- Parse dates and build datetime range ---
-    expiry_date = parse_date_dmy(EXPIRY_DATE_STR)
-    start_date = parse_date_dmy(START_DATE_STR)
-
-    if start_date > expiry_date:
-        raise ValueError("START_DATE must be on or before EXPIRY_DATE")
-
-    from_dt = datetime.combine(start_date, SESSION_START)
-    to_dt = datetime.combine(expiry_date, SESSION_END)
-
-    print("========================================================")
-    print("[CONFIG] Date range:")
-    print(f"         Start (inclusive): {from_dt}")
-    print(f"         End   (inclusive): {to_dt}")
-    print("[CONFIG] Underlying index:")
-    print(f"         {INDEX_EXCHANGE}:{INDEX_TRADINGSYMBOL}")
-    print("[CONFIG] Options universe:")
-    print(f"         Exchange={OPTION_EXCHANGE}, ts_prefix={OPTION_TS_PREFIX}, "
-          f"allowed_types={ALLOWED_OPTION_TYPES}, strike step={STRIKE_STEP}")
-    print(f"[CONFIG] Target expiry date: {expiry_date}")
-    print("========================================================")
-
-    # --- Initialise Kite ---
-    print("[STEP] Initializing Kite API via OptionTradeUtils.intialize_kite_api() ...")
-    kite = oUtils.intialize_kite_api()
-    print("[INFO] Kite API initialized.")
-
-    # --- Fetch underlying index history and compute min/max ---
-    print("\n[STEP] Resolving underlying index instrument token ...")
-    idx_token, idx_ex = get_instrument_token(kite, INDEX_EXCHANGE, INDEX_TRADINGSYMBOL)
-
-    print("\n[STEP] Fetching underlying index historical data ...")
-    idx_rows = fetch_history_minute(
-        kite,
-        idx_token,
-        from_dt,
-        to_dt,
-        label=f"{idx_ex}:{INDEX_TRADINGSYMBOL}"
-    )
-    idx_df = rows_to_dataframe(idx_rows)
-
-    if idx_df.empty:
-        raise RuntimeError("No historical data returned for underlying index in the selected range.")
-
-    low_price = float(idx_df["low"].min())
-    high_price = float(idx_df["high"].max())
-
-    print(f"[INFO] Underlying LOW in period : {low_price:.2f}")
-    print(f"[INFO] Underlying HIGH in period: {high_price:.2f}")
-
-    # --- Derive strike range: one strike below min, one strike above max ---
-    min_strike_base = int(low_price // STRIKE_STEP * STRIKE_STEP)
-    max_strike_base = int((high_price + STRIKE_STEP - 1) // STRIKE_STEP * STRIKE_STEP)
-
-    strike_min = max(min_strike_base - STRIKE_STEP, 0)
-    strike_max = max_strike_base + STRIKE_STEP
-
-    print(f"[INFO] Strike range (one below min, one above max): {strike_min} → {strike_max} (step {STRIKE_STEP})")
-
-    # Add metadata columns to underlying df
-    idx_df.insert(0, "instrument", INDEX_TRADINGSYMBOL)
-    idx_df.insert(1, "exchange", idx_ex)
-    idx_df.insert(2, "name", INDEX_TRADINGSYMBOL)
-    idx_df.insert(3, "type", "UNDERLYING")
-    idx_df.insert(4, "option_type", "")
-    idx_df.insert(5, "strike", None)
-    idx_df.insert(6, "expiry", expiry_date)
-
-    all_dfs = [idx_df]
-
-    # --- Discover all BANKNIFTY options and list expiries ---
-    print("\n[STEP] Loading instruments for options from exchange:", OPTION_EXCHANGE)
-    all_nfo = kite.instruments(OPTION_EXCHANGE)
-    print(f"[INFO] Total instruments on {OPTION_EXCHANGE}: {len(all_nfo)}")
-
-    print(f"[STEP] Filtering instruments for prefix '{OPTION_TS_PREFIX}', types={ALLOWED_OPTION_TYPES} ...")
-    bnf_opts = []
-    for inst in all_nfo:
-        try:
-            tsym = str(inst.get("tradingsymbol", "")).upper()
-            if not tsym.startswith(OPTION_TS_PREFIX.upper()):
-                continue
-            itype = str(inst.get("instrument_type", "")).upper()
-            if itype not in ALLOWED_OPTION_TYPES:
-                # skip futures etc.
-                continue
-            exp = normalize_expiry(inst.get("expiry"))
-            inst["__exp_date__"] = exp
-            bnf_opts.append(inst)
-        except Exception:
-            continue
-
-    if not bnf_opts:
-        print(f"[ERROR] No option instruments (types={ALLOWED_OPTION_TYPES}) in {OPTION_EXCHANGE} "
-              f"starting with '{OPTION_TS_PREFIX}'.")
-        return
-
-    expiry_set = sorted({inst["__exp_date__"] for inst in bnf_opts})
-    print(f"[INFO] Available expiries for {OPTION_TS_PREFIX} options on {OPTION_EXCHANGE}:")
-    for d in expiry_set:
-        print("       ", d)
-
-    if expiry_date not in expiry_set:
-        print("\n[ERROR] Your configured EXPIRY_DATE_STR does NOT match any available option expiry.")
-        print(f"        Configured: {EXPIRY_DATE_STR} → {expiry_date}")
-        print("        Pick one of the above dates and update EXPIRY_DATE_STR, then rerun.")
-        return
-
-    print(f"[INFO] Using expiry date {expiry_date} which is present in option instruments.")
-
-    # --- Narrow down to this expiry and strike band ---
-    print(f"\n[STEP] Filtering BANKNIFTY options for expiry={expiry_date} and strikes in [{strike_min}, {strike_max}] ...")
-    option_instruments = []
-    for inst in bnf_opts:
-        if inst["__exp_date__"] != expiry_date:
-            continue
-        try:
-            strike = int(float(inst.get("strike") or 0))
-        except Exception:
-            continue
-        if strike < strike_min or strike > strike_max:
-            continue
-        option_instruments.append(inst)
-
-    if not option_instruments:
-        print("[WARN] No option instruments found for the given expiry and strike range.")
-        print("       Try widening the strike band or double-checking STRIKE_STEP.")
-        return
-
-    option_instruments.sort(key=lambda r: (int(float(r.get("strike", 0))), r.get("tradingsymbol", "")))
-
-    print(f"[INFO] Filtered options count: {len(option_instruments)}")
-    strikes = sorted(set(int(float(r.get("strike", 0))) for r in option_instruments))
-    print(f"[INFO] Unique strikes in band: {len(strikes)}")
-    if len(strikes) <= 30:
-        print("       Strikes:", strikes)
+def width_for_image(path: str) -> Inches:
+    # Keep within margins (Word A4/Letter typical). Wider diagrams get larger width.
+    with Image.open(path) as im:
+        w, h = im.size
+    aspect = w / max(h, 1)
+    if aspect >= 2.0:
+        return Inches(6.6)
+    elif aspect >= 1.3:
+        return Inches(6.2)
     else:
-        print("       First 10 strikes:", strikes[:10], "... Last 10 strikes:", strikes[-10:])
+        return Inches(5.6)
 
-    # --- Fetch and accumulate history for each option strike ---
-    print("\n[STEP] Fetching historical data for each option instrument in the band ...")
-    total_opts = len(option_instruments)
-    for idx, inst in enumerate(option_instruments, start=1):
-        token = int(inst["instrument_token"])
-        sym = inst["tradingsymbol"]
-        ex = inst["exchange"]
-        strike = int(float(inst.get("strike") or 0))
-        exp = inst["__exp_date__"]
-        name = inst.get("name")
-        opt_type = detect_option_type(sym)
 
-        print(f"\n  [OPTION {idx}/{total_opts}] {ex}:{sym}, strike={strike}, expiry={exp}, type={opt_type}")
-        rows = fetch_history_minute(
-            kite,
-            token,
-            from_dt,
-            to_dt,
-            label=f"{ex}:{sym}"
+def insert_figure_after(paragraph: Paragraph, fig_no: int, img_path: str, caption: str) -> Paragraph:
+    img_p = insert_paragraph_after(paragraph)
+    img_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = img_p.add_run()
+    run.add_picture(img_path, width=width_for_image(img_path))
+
+    cap_p = insert_paragraph_after(img_p, caption)
+    cap_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    blank = insert_paragraph_after(cap_p, "")  # blank line after caption
+    return blank
+
+
+# =========================
+# Main build
+# =========================
+def main():
+    # Validate input paths
+    for p in (A_DOC, B_DOC, C_DOC):
+        if not os.path.exists(p):
+            raise FileNotFoundError(f"Missing file: {p}")
+
+    # Extract images
+    a_imgs = extract_media(A_DOC, "A")  # usually 7
+    b_imgs = extract_media(B_DOC, "B")  # usually 7
+
+    if len(a_imgs) < 7 or len(b_imgs) < 7:
+        raise ValueError(
+            f"Expected at least 7 images each in A and B. Got A={len(a_imgs)}, B={len(b_imgs)}.\n"
+            f"Tip: open {WORKDIR} and verify extracted images."
         )
-        df = rows_to_dataframe(rows)
 
-        if df.empty:
-            print(f"    [SKIP] No data returned for {sym} in selected range.")
-            continue
+    # Default mapping (doc-order based) for your 14-figure plan
+    # A provides: 1,2,3,5,9,10,14  -> A[0],A[1],A[2],A[4],A[3],A[5],A[6]
+    # B provides: 4,6,7,8,11,12,13 -> B[0],B[1],B[2],B[5],B[3],B[4],B[6]
+    fig_img: Dict[int, str] = {
+        1: a_imgs[0].path,
+        2: a_imgs[1].path,
+        3: a_imgs[2].path,
+        4: b_imgs[0].path,
+        5: a_imgs[4].path,
+        6: b_imgs[1].path,
+        7: b_imgs[2].path,
+        8: b_imgs[5].path,
+        9: a_imgs[3].path,
+        10: a_imgs[5].path,
+        11: b_imgs[3].path,
+        12: b_imgs[4].path,
+        13: b_imgs[6].path,
+        14: a_imgs[6].path,
+    }
 
-        # Add metadata columns
-        df.insert(0, "instrument", sym)
-        df.insert(1, "exchange", ex)
-        df.insert(2, "name", name)
-        df.insert(3, "type", "OPTION")
-        df.insert(4, "option_type", opt_type)
-        df.insert(5, "strike", strike)
-        df.insert(6, "expiry", exp)
+    # Captions EXACTLY per your pasted plan
+    captions = {
+        1: "Figure 1. End-to-end system architecture for assisted internet voting, combining biometric verification and a permissioned blockchain core under multi-trustee governance.",
+        2: "Figure 2. Assisted kiosk voting workflow showing biometric verification, ballot casting, receipt generation, and re-voting support.",
+        3: "Figure 3. Remote personal-device voting flow illustrating the additional client-integrity and coercion risks relative to assisted endpoints.",
+        4: "Figure 4. Three-trustee governance model implemented on a permissioned Fabric network, enforcing checks-and-balances through endorsement and access control.",
+        5: "Figure 5. Prototype Fabric network topology used in evaluation, showing trustee organizations, peers, ordering service, and channel participation.",
+        6: "Figure 6. Audit and dispute-resolution workflow using on-chain integrity anchors, private data boundaries, and event-driven operational evidence.",
+        7: "Figure 7. QR receipt construction and verification flow for inclusion and supersession, designed to avoid transferable proof of vote choice.",
+        8: "Figure 8. Result publication and key-custody model supporting aggregate-only decryption while preventing recovery of individual vote choices.",
+        9: "Figure 9. Production-style biometric verification and de-duplication stack with separated inference and vector search services for predictable tail latency.",
+        10: "Figure 10. Illustrative identity artifact motivating election-scoped identifiers and strict separation of civil identity from ballot records.",
+        11: "Figure 11. Benchmark summary of vote-casting throughput and latency distribution under the baseline configuration.",
+        12: "Figure 12. Tail-latency behavior under high concurrency, emphasizing p95/p99 operational implications.",
+        13: "Figure 13. Comparative benchmark outcomes for Raft versus SmartBFT under identical application semantics.",
+        14: "Figure 14. Conceptual illustration of the intended voter interaction model for assisted internet voting.",
+    }
 
-        print(f"    [INFO] Candles for {sym}: {len(df)}")
-        all_dfs.append(df)
+    # In-text mentions EXACTLY per your plan
+    mentions = {
+        1: "Figure 1 summarizes the end-to-end architecture and the division of responsibilities across the identity, AI, client, and blockchain layers.",
+        2: "Figure 2 outlines the assisted kiosk workflow, including biometric gating, ballot submission, receipt issuance, and re-voting.",
+        3: "Figure 3 contrasts a remote personal-device flow and highlights the stronger client-integrity assumptions such a mode would require.",
+        4: "Figure 4 depicts the three-trustee governance model as instantiated through authenticated MSP identities, endorsement rules, and privacy partitioning.",
+        5: "Figure 5 shows the benchmark network topology used to evaluate vote casting and election lifecycle operations under the trustee model.",
+        6: "Figure 6 summarizes the audit and dispute-resolution workflow enabled by immutable ledger history, private collections, and structured events.",
+        7: "Figure 7 illustrates how the QR receipt binds to committed ledger state and supports inclusion and supersession checks without revealing vote choice.",
+        8: "Figure 8 presents the aggregate-only decryption concept and key-custody separation required to prevent decryption of individual ballots.",
+        9: "Figure 9 shows the deployable inference-and-search stack used for biometric verification and large-scale de-duplication.",
+        10: "Figure 10 provides an illustrative identity artifact motivating election-scoped serials and strict separation between civil identity and voting records.",
+        11: "Figure 11 summarizes the primary throughput and latency distribution observed under the baseline ordering configuration.",
+        12: "Figure 12 highlights tail-latency behavior under high concurrency, which determines queueing at peak booth load.",
+        13: "Figure 13 contrasts Raft and SmartBFT outcomes under the same application workload and endorsement regime.",
+        14: "Figure 14 provides a high-level conceptual illustration of the intended voter interaction model.",
+    }
 
-    # --- Concatenate all into a single DataFrame and save as pickle ---
-    print("\n[STEP] Concatenating all instruments into a single DataFrame ...")
-    if not all_dfs:
-        print("[ERROR] No dataframes to concatenate. Nothing to save.")
-        return
+    doc = Document(C_DOC)
 
-    master_df = pd.concat(all_dfs, ignore_index=True)
-    print(f"[INFO] Master DataFrame shape: {master_df.shape[0]} rows × {master_df.shape[1]} columns")
+    # -----------------------------
+    # Figure 1: after exact paragraph
+    # -----------------------------
+    p = require(find_para(doc, equals="The end-to-end system comprises five components."),
+                "Figure 1 insertion anchor: 'The end-to-end system comprises five components.'")
+    append_sentence(p, mentions[1])
+    insert_figure_after(p, 1, fig_img[1], captions[1])
 
-    # Ensure date column is datetime
-    if "date" in master_df.columns:
-        master_df["date"] = pd.to_datetime(master_df["date"])
+    # -----------------------------------
+    # Figure 2: after workflow paragraph
+    # Plan says after paragraph that starts “Workflow overview.”
+    # In merged C, the workflow paragraph begins “A voter presents at a managed voting endpoint.”
+    # -----------------------------------
+    p = require(find_para(doc, startswith="A voter presents at a managed voting endpoint."),
+                "Figure 2 insertion anchor: workflow paragraph")
+    append_sentence(p, mentions[2])
+    blank_after_fig2 = insert_figure_after(p, 2, fig_img[2], captions[2])
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    pickle_path = os.path.join(OUTPUT_DIR, f"{OUTPUT_BASENAME}.pkl")
+    # -----------------------------------
+    # Figure 3: immediately after Figure 2,
+    # right after paragraph explaining unsupervised personal-device not claimed.
+    # If such paragraph isn't present, we insert one right after Figure 2 block.
+    # -----------------------------------
+    scope_para = insert_paragraph_after(
+        blank_after_fig2,
+        "The design does not claim to solve fully unsupervised personal-device internet voting. "
+        "Remote casting on arbitrary devices increases exposure to malware, coercion, and unverifiable client integrity in ways that the governance layer cannot fully compensate for. "
+        + mentions[3]
+    )
+    insert_figure_after(scope_para, 3, fig_img[3], captions[3])
 
-    print(f"[STEP] Saving master DataFrame to pickle: {pickle_path}")
-    master_df.to_pickle(pickle_path)
-    print("[DONE] Saved successfully.")
+    # -----------------------------------
+    # Figure 4: after opening paragraph in Blockchain Module
+    # starts “Hyperledger Fabric provides the permissioning, policy, and audit substrate…”
+    # -----------------------------------
+    p = require(find_para(doc, startswith="Hyperledger Fabric provides the permissioning, policy, and audit substrate"),
+                "Figure 4 insertion anchor: Blockchain Module opening paragraph")
+    append_sentence(p, mentions[4])
+    insert_figure_after(p, 4, fig_img[4], captions[4])
 
-    print("\n[HOW TO USE LATER]")
-    print("  import pandas as pd")
-    print(f"  df = pd.read_pickle(r'{pickle_path}')")
-    print("  # Now filter by instrument / type / strike / expiry as needed.")
+    # -----------------------------------
+    # Figure 5: under “Network and channel topology”
+    # after the first paragraph after that heading
+    # -----------------------------------
+    head = require(find_para(doc, equals="Network and channel topology."),
+                   "Figure 5 heading: 'Network and channel topology.'")
+    p = first_nonempty_paragraph_after_heading(doc, head)
+    append_sentence(p, mentions[5])
+    insert_figure_after(p, 5, fig_img[5], captions[5])
+
+    # -----------------------------------
+    # Figure 6: after paragraph starting “Audit-grade metadata without turning the ledger into a surveillance log.”
+    # -----------------------------------
+    p = require(find_para(doc, startswith="Audit-grade metadata without turning the ledger into a surveillance log."),
+                "Figure 6 anchor: audit-grade metadata paragraph")
+    append_sentence(p, mentions[6])
+    insert_figure_after(p, 6, fig_img[6], captions[6])
+
+    # -----------------------------------
+    # Figure 7: under “Receipt binding and voter-side verifiability.”
+    # right after you describe what the QR contains (we place after first paragraph after heading)
+    # -----------------------------------
+    head = require(find_para(doc, equals="Receipt binding and voter-side verifiability."),
+                   "Figure 7 heading: 'Receipt binding and voter-side verifiability.'")
+    p = first_nonempty_paragraph_after_heading(doc, head)
+    append_sentence(p, mentions[7])
+    insert_figure_after(p, 7, fig_img[7], captions[7])
+
+    # -----------------------------------
+    # Figure 8: under “Encrypted tallying and aggregate-only decryption.”
+    # insert after the paragraph ending with point: individual ballots confidential, only aggregates decrypted
+    # We locate heading and then choose first substantive paragraph after it.
+    # -----------------------------------
+    head = require(find_para(doc, equals="Encrypted tallying and aggregate-only decryption."),
+                   "Figure 8 heading: 'Encrypted tallying and aggregate-only decryption.'")
+    p = first_nonempty_paragraph_after_heading(doc, head)
+    append_sentence(p, mentions[8])
+    insert_figure_after(p, 8, fig_img[8], captions[8])
+
+    # -----------------------------------
+    # Figure 9: AI Module after paragraph “Vector search service for de-duplication.”
+    # -----------------------------------
+    p = require(find_para(doc, startswith="Vector search service for de-duplication."),
+                "Figure 9 anchor: 'Vector search service for de-duplication.'")
+    append_sentence(p, mentions[9])
+    insert_figure_after(p, 9, fig_img[9], captions[9])
+
+    # -----------------------------------
+    # Figure 10: AI Module under “Privacy-by-design posture.”
+    # Insert after the paragraph where you say embeddings/templates are sensitive and raw images minimized.
+    # In merged C, that paragraph starts “Biometrics create persistent identifiers…”
+    # -----------------------------------
+    p = require(find_para(doc, startswith="Biometrics create persistent identifiers"),
+                "Figure 10 anchor: privacy-by-design paragraph")
+    append_sentence(p, mentions[10])
+    insert_figure_after(p, 10, fig_img[10], captions[10])
+
+    # -----------------------------------
+    # Figure 11: Implementation and Evaluation after “Results and operational interpretation.”
+    # -----------------------------------
+    p = require(find_para(doc, startswith="Results and operational interpretation."),
+                "Figure 11 anchor: 'Results and operational interpretation.'")
+    append_sentence(p, mentions[11])
+    insert_figure_after(p, 11, fig_img[11], captions[11])
+
+    # -----------------------------------
+    # Figure 12: after paragraph discussing tail latency (p95/p99)
+    # -----------------------------------
+    p = find_para(doc, contains="p95") if find_para(doc, contains="p95") else find_para(doc, contains="tail latency")
+    p = require(p, "Figure 12 anchor: tail latency paragraph (p95/p99 or 'tail latency')")
+    append_sentence(p, mentions[12])
+    insert_figure_after(p, 12, fig_img[12], captions[12])
+
+    # -----------------------------------
+    # Figure 13: after paragraph comparing Raft vs SmartBFT
+    # Plan says after the paragraph where you compare Raft vs SmartBFT.
+    # In merged C there is a paragraph starting “Raft versus SmartBFT choice.”
+    # -----------------------------------
+    p = find_para(doc, startswith="Raft versus SmartBFT choice.") or find_para(doc, regex=r"Raft.*SmartBFT")
+    p = require(p, "Figure 13 anchor: Raft vs SmartBFT paragraph")
+    append_sentence(p, mentions[13])
+    insert_figure_after(p, 13, fig_img[13], captions[13])
+
+    # -----------------------------------
+    # Figure 14: Discussion section after paragraph about usability/inclusivity and voter experience.
+    # We anchor on “Biometric risks and inclusivity.”
+    # -----------------------------------
+    p = require(find_para(doc, startswith="Biometric risks and inclusivity."),
+                "Figure 14 anchor: 'Biometric risks and inclusivity.'")
+    append_sentence(p, mentions[14])
+    insert_figure_after(p, 14, fig_img[14], captions[14])
+
+    doc.save(OUT_DOC)
+    print(f"OK: wrote {OUT_DOC}")
+    print(f"Extracted images are in: {os.path.abspath(WORKDIR)}")
+    print("If any figure-image mapping looks swapped, adjust the fig_img mapping block near the top.")
 
 
 if __name__ == "__main__":

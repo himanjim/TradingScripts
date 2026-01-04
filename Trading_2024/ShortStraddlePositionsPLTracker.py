@@ -15,6 +15,7 @@ def exit_trade(_position):
                      quantity=_position['quantity'],
                      order_type=kite.ORDER_TYPE_MARKET,
                      product=_position['product'],
+                     tag=oUtils.SS_ORDER_TAG,
                      )
 
 def get_positions_from_orders(kite_):
@@ -24,7 +25,7 @@ def get_positions_from_orders(kite_):
     _all_positions = []
     # Iterate over each row in the filtered DataFrame
     for index, row in df.iterrows():
-        if row['product'] in ('NRML', 'MIS') and row['variety'] in ('regular'):
+        if row['product'] in ('NRML', 'MIS') and row['variety'] in ('regular') and str(row.get('tag', '')) == oUtils.ORDER_TAG:
             _all_positions.append(
                 {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
                  'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})

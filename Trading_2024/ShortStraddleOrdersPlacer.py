@@ -10,8 +10,8 @@ def place_order(_pe, _ce, _transaction, _lots, _exchange):
     open_positions = [p['tradingsymbol'] for p in net_positions if p['quantity'] != 0]
 
     if _pe in open_positions or _ce in open_positions:
-        print(
-            f"⛔ Trade skipped: Existing position found in {option_pe if option_pe in open_positions else option_ce}\n")
+        existing = _pe if _pe in open_positions else _ce
+        print(f"⛔ Trade skipped: Existing position found in {existing}\n")
         return
 
     kite.place_order(tradingsymbol=_pe,
@@ -21,6 +21,7 @@ def place_order(_pe, _ce, _transaction, _lots, _exchange):
                      quantity=_lots,
                      order_type=kite.ORDER_TYPE_MARKET,
                      product=kite.PRODUCT_NRML,
+                     tag=oUtils.SS_ORDER_TAG,
                      )
 
     kite.place_order(tradingsymbol=_ce,
@@ -30,6 +31,7 @@ def place_order(_pe, _ce, _transaction, _lots, _exchange):
                      quantity=_lots,
                      order_type=kite.ORDER_TYPE_MARKET,
                      product=kite.PRODUCT_NRML,
+                     tag=oUtils.SS_ORDER_TAG,
                      )
     print(f"Placed {_transaction} order for : {_pe} and {_ce} at {datetime.now(indian_timezone).time()}.")
 
