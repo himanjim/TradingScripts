@@ -25,7 +25,7 @@ def get_positions_from_orders(kite_):
     _all_positions = []
     # Iterate over each row in the filtered DataFrame
     for index, row in df.iterrows():
-        if row['product'] in ('NRML', 'MIS') and row['variety'] in ('regular') and str(row.get('tag', '')) == oUtils.ORDER_TAG:
+        if row['product'] in ('NRML', 'MIS') and row['variety'] in ('regular') and str(row.get('tag', '')) == oUtils.SS_ORDER_TAG:
             _all_positions.append(
                 {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
                  'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
@@ -44,16 +44,16 @@ def any_active_positions(kite_):
 
 if __name__ == '__main__':
     MAX_PROFIT = 2000
-    max_loss = -3000
-    MAX_PROFIT_EROSION = 3000
+    max_loss = -4000
+    MAX_PROFIT_EROSION = 4000
     sleep_time = 2
-    max_profit_set = None
+    max_profit_set = 682
     # second_trade_execute = False
 
     indian_timezone = pytz.timezone('Asia/Calcutta')
 
     kite = oUtils.intialize_kite_api()
-    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS, MIN_LOTS = oUtils.get_instruments(kite)
+    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS, MIN_LOTS, LONG_STRADDLE_STRIKE_DISTANCE = oUtils.get_instruments(kite)
     PART_SYMBOL = PART_SYMBOL.replace(':', '')
     under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
 

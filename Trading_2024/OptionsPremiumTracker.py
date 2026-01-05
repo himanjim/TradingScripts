@@ -227,6 +227,7 @@ if __name__ == "__main__":
         STRIKE_MULTIPLE,
         STOPLOSS_POINTS,
         MIN_LOTS,
+        LONG_STRADDLE_STRIKE_DISTANCE
     ) = oUtils.get_instruments(kite)
 
     under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING  # keep your original concat

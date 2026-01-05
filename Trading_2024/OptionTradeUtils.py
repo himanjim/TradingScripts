@@ -6,7 +6,7 @@ KITE_API_KEY = '453dipfh64qcl484'
 KITE_API_SECRET = 'cnt30fp12ftbzk7s0a84ieqv8wbquer4'
 
 
-KITE_ACCESS_CODE = 'wMqNRfxpuCEhkgJEmfgmnXCbMbx84uom'
+KITE_ACCESS_CODE = '6Ie5f14EhZmiJBVdBtRvAPoI5f38VXgh'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 30, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
@@ -22,11 +22,12 @@ def get_instruments(kite_):
         OPTIONS_EXCHANGE = kite_.EXCHANGE_NFO
         # PART_SYMBOL = ':NIFTY25508'
         # PART_SYMBOL = ':NIFTY25O20'
-        PART_SYMBOL = ':NIFTY25D16'
-        NO_OF_LOTS = 300
+        # PART_SYMBOL = ':NIFTY25D16'
+        PART_SYMBOL = ':NIFTY26106'
+        NO_OF_LOTS = 650
         STRIKE_MULTIPLE = 50
         STOPLOSS_POINTS = 10
-        MINIMUM_LOTS = 75
+        MINIMUM_LOTS = 65
         LONG_STRADDLE_STRIKE_DISTANCE= 1000
     elif choice == 2:
         UNDER_LYING_EXCHANGE = kite_.EXCHANGE_BSE
