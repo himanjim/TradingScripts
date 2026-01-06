@@ -20,26 +20,47 @@ def exit_trade(_position):
 
 def get_positions_from_orders(kite_):
     orders = kite_.orders()
-    # Create pandas DataFrame from the list of orders
     df = pd.DataFrame(orders)
+
     _all_positions = []
-    # Iterate over each row in the filtered DataFrame
-    for index, row in df.iterrows():
-        if row['product'] in ('NRML', 'MIS') and row['variety'] in ('regular') and str(row.get('tag', '')) == oUtils.SS_ORDER_TAG:
-            _all_positions.append(
-                {'exchange': row['exchange'], 'tradingsymbol': row['tradingsymbol'], 'quantity': row['quantity'],
-                 'price': row['average_price'], 'product': row['product'], 'type': row['transaction_type']})
+    for _, row in df.iterrows():
+        if (
+            row.get('product') in ('NRML', 'MIS')
+            and row.get('variety') == 'regular'
+            and str(row.get('tag', '')) == oUtils.SS_ORDER_TAG
+            and row.get('status') in ('OPEN', 'COMPLETE')  # ignore cancelled/rejected
+        ):
+            _all_positions.append({
+                'exchange': row['exchange'],
+                'tradingsymbol': row['tradingsymbol'],
+                'quantity': row['quantity'],
+                'price': row['average_price'],
+                'product': row['product'],
+                'type': row['transaction_type'],
+            })
 
     return _all_positions
 
-def any_active_positions(kite_):
-    positions_live = kite_.positions()
 
-    return all(
-        item['average_price'] == 0
-        for item in positions_live['day']
-        if item['product'] in ('NRML', 'MIS')
-    )
+def any_active_positions(kite_):
+    # If there are no tagged positions left (qty==0), then no active positions for this strategy
+    positions_live = kite_.positions()
+    day = positions_live.get('day', [])
+
+    # Build a set of tradingsymbols that belong to the tag (from orders)
+    tagged_positions = get_positions_from_orders(kite_)
+    tagged_symbols = {p['tradingsymbol'] for p in tagged_positions}
+
+    # Check only those symbols in live positions
+    tagged_live = [p for p in day if p.get('tradingsymbol') in tagged_symbols and p.get('product') in ('NRML', 'MIS')]
+
+    # If none exist, then no active tagged positions
+    if not tagged_live:
+        return True
+
+    # No active if all are flat (qty==0)
+    return all(p.get('quantity', 0) == 0 for p in tagged_live)
+
 
 
 if __name__ == '__main__':
@@ -47,7 +68,7 @@ if __name__ == '__main__':
     max_loss = -4000
     MAX_PROFIT_EROSION = 4000
     sleep_time = 2
-    max_profit_set = 682
+    max_profit_set = None
     # second_trade_execute = False
 
     indian_timezone = pytz.timezone('Asia/Calcutta')

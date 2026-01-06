@@ -6,6 +6,7 @@ import time
 import threading
 import traceback
 import datetime as dt
+from pandas.api.types import DatetimeTZDtype
 
 # --- force GUI backend so PyCharm shows a real window (not SciView) ---
 import matplotlib
@@ -39,14 +40,37 @@ data_dir = os.path.join(downloads_path, DATA_SUBDIR)
 os.makedirs(data_dir, exist_ok=True)
 DATA_FILE = os.path.join(data_dir, f"premium_data_{today_str}.csv")
 
+_TZ_RE = r"(Z|[+-]\d{2}:?\d{2})$"  # matches Z, +0530, +05:30
+
+def parse_ts_to_ist(s: pd.Series) -> pd.Series:
+    """
+    Make any timestamp Series (strings/naive/aware/mixed) consistently tz-aware IST.
+    - If row has tz suffix -> parse as UTC then convert to IST
+    - Else -> parse as naive and localize as IST
+    """
+    # Already tz-aware dtype
+    if isinstance(getattr(s, "dtype", None), DatetimeTZDtype):
+        return s.dt.tz_convert(INDIA_TZ)
+
+    # Work in string space for mixed/object columns
+    s_str = s.astype("string")
+    has_tz = s_str.str.contains(_TZ_RE, regex=True, na=False)
+
+    aware = pd.to_datetime(s_str.where(has_tz), errors="coerce", utc=True).dt.tz_convert(INDIA_TZ)
+
+    naive = pd.to_datetime(s_str.where(~has_tz), errors="coerce")
+    naive = naive.dt.tz_localize(INDIA_TZ, nonexistent="shift_forward", ambiguous="NaT")
+
+    return aware.fillna(naive)
+
+
 # ------------- DataFrame init -------------
 if os.path.exists(DATA_FILE):
-    df = pd.read_csv(DATA_FILE, parse_dates=["timestamp"])
-    if not pd.api.types.is_datetime64tz_dtype(df["timestamp"]):
-        # localize old rows to IST for consistency
-        df["timestamp"] = df["timestamp"].dt.tz_localize(INDIA_TZ, nonexistent="shift_forward", ambiguous="NaT")
+    df = pd.read_csv(DATA_FILE)
+    df["timestamp"] = parse_ts_to_ist(df["timestamp"])
 else:
     df = pd.DataFrame(columns=["timestamp", "value"])
+
 
 lock = threading.Lock()
 
@@ -72,7 +96,9 @@ fig, ax = plt.subplots(figsize=(10, 6))
 ax.set_title("Options Premium (CE+PE) — Live")
 ax.set_xlabel("Time (IST)")
 ax.set_ylabel("Premium × Lots (₹)")
-ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S", tz=INDIA_TZ))
+ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+
 fig.autofmt_xdate()
 
 # overlay shown when no data yet / pre-market, etc.
@@ -83,8 +109,12 @@ status_artist = ax.text(
 def add_data(ts: dt.datetime, val: float):
     """Thread-safe append to df and persist to CSV. Caps in-memory rows."""
     global df
-    if ts.tzinfo is None:
-        ts = INDIA_TZ.localize(ts)
+    ts = pd.Timestamp(ts)
+    if ts.tz is None:
+        ts = ts.tz_localize(INDIA_TZ)
+    else:
+        ts = ts.tz_convert(INDIA_TZ)
+
     with lock:
         new_row = pd.DataFrame({"timestamp": [ts], "value": [val]})
         df = pd.concat([df, new_row], ignore_index=True)
@@ -117,9 +147,8 @@ def animate(_frame):
         ax.autoscale_view()
         return (line, status_artist)
 
-    x = pd.to_datetime(local["timestamp"])
-    if not pd.api.types.is_datetime64tz_dtype(x):
-        x = x.dt.tz_localize(INDIA_TZ, nonexistent="shift_forward", ambiguous="NaT")
+    x = parse_ts_to_ist(local["timestamp"])
+
     y = pd.to_numeric(local["value"], errors="coerce")
 
     line.set_data(x, y)
