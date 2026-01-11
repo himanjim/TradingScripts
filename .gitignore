@@ -1,1 +1,4 @@
-/2024 trading/cache/data/
+/Trading_2024/cache/data/
+/Trading_2024/1-min stocks trading/stock_history_parquet/
+/Trading_2024/1-min stocks trading/stock_history_cache/
+/Trading_2024/cache/

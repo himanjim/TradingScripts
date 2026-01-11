@@ -4,7 +4,6 @@ import ScrapUtils as sutils
 import time
 
 import GenericStatPrinter as gstats
-import ScrapUtils as nse_bse
 import Utils as util
 import csv
 

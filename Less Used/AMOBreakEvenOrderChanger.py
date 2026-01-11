@@ -1,6 +1,5 @@
 import traceback
 from datetime import datetime, time
-import face_recognition
 import time as sleep_time
 
 import ScrapUtils as nse_bse

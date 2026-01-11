@@ -1,5 +1,4 @@
 import traceback
-from datetime import datetime
 
 import time as sleeptime
 from upstox_api.api import LiveFeedType

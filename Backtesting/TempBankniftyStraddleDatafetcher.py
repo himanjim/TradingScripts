@@ -1,6 +1,5 @@
 import csv
 import datetime
-import math
 import time
 import traceback
 import urllib.parse
