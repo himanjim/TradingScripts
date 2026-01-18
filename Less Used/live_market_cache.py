@@ -271,7 +271,7 @@ def load_or_compute_top_liquid(kite: KiteConnect, universe_df: pd.DataFrame, d: 
 
 # ===================== INSTRUMENT TOKENS =====================
 
-INSTRUMENTS_CACHE_DIR = r"./kite_instruments_cache"
+INSTRUMENTS_CACHE_DIR = r"../Trading_2024/1-min stocks trading/kite_instruments_cache"
 INSTRUMENTS_CACHE_TTL_DAYS = 7
 
 def _instruments_cache_file(exchange: str) -> str:

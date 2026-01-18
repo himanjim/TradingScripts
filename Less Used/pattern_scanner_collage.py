@@ -12,7 +12,7 @@ import webbrowser
 
 # ================== CONFIG ==================
 
-PARQUET_DIR = "./stock_history_parquet"
+PARQUET_DIR = "../Trading_2024/1-min stocks trading/stock_history_parquet"
 OUTPUT_HTML = "pattern_scan_collage.html"
 
 # Read only this many calendar days back to reliably find prev trading day for CPR pivots (Pattern B)
