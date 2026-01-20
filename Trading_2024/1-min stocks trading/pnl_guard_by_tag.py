@@ -34,12 +34,12 @@ def has_open_tag_positions(kite) -> bool:
 
 
 # ---------- CONFIG ----------
-SYMBOL = "NSE:RELIANCE"
-EXIT_EPOCHS = [1462]
+SYMBOL = "NSE:FEDERALBNK"
+EXIT_EPOCHS = [272.77]
 
 POLL_SEC = 1
 PRODUCT = "MIS"
-PAPER = True
+PAPER = False
 TAG = oUtils.STOCK_INTRADAY_TAG
 ONLY_TODAY_TAGGED = True
 
@@ -82,7 +82,7 @@ def tagged_symbols_and_open_orders(kite):
         if ONLY_TODAY_TAGGED and not _is_today_ist(str(o.get("order_timestamp", ""))):
             continue
         syms.add(f'{o["exchange"]}:{o["tradingsymbol"]}')
-        if o.get("status") in ("OPEN", "TRIGGER PENDING", "VALIDATION PENDING", "PUT ORDER REQ RECEIVED"):
+        if o.get("status") in ("OPEN", "TRIGGER PENDING", "VALIDATION PENDING", "PUT ORDER REQ RECEIVED", "PARTIAL"):
             open_oids.append(o["order_id"])
     return syms, open_oids
 
@@ -152,6 +152,12 @@ def main():
         now_utc = dt.datetime.now(dt.timezone.utc)
         cur_candle = _candle_id_ist(now_utc)
 
+        # If position already got closed (e.g., SL hit elsewhere), stop guarding and exit.
+        if not has_open_tag_positions(kite):
+            print(f"[EXIT] No open {PRODUCT} positions found for TAG={TAG}. Exiting.")
+            cancel_open_tag_orders(kite)   # cleanup any remaining open orders
+            return
+
         if prev is None:
             prev = ltp
             armed_lvl = float(EXIT_EPOCHS[idx])
@@ -169,9 +175,13 @@ def main():
                 print(f"[ARM] idx={idx} lvl={armed_lvl} dir={armed_dir} ltp={ltp} candle={cur_candle}")
 
         if done:
-            print("[DONE] Exit epochs complete -> cancel open TAG orders + square-off TAG positions.")
-            cancel_open_tag_orders(kite)
+            print("[DONE] Exit epochs complete -> square-off TAG positions, then cancel open TAG orders.")
             squareoff_tag_positions(kite)
+
+            # Give the square-off order(s) a moment to reach OMS, then cancel any leftover open orders (e.g., SL/target).
+            time.sleep(1)
+            cancel_open_tag_orders(kite)
+
             beep()  # <-- beep on exit action
             return
 
