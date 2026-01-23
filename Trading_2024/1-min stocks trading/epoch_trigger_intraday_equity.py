@@ -11,12 +11,12 @@ import time, math, datetime as dt, pytz
 import Trading_2024.OptionTradeUtils as oUtils
 import math
 # ---------- CONFIG ----------
-SYMBOL = "NSE:RELIANCE"
-EPOCHS = [1460]
+SYMBOL = "NSE:HDFCBANK"
+EPOCHS = [920.77]
 
 POLL_SEC = 1
-ABS_RISK = 300.0
-SL_PRICE = 1455.41
+ABS_RISK = 3000.0
+SL_PRICE = 923.84
 TICK_SIZE = 0.10  # NSE cash equities are usually 0.05 or 0.10 depending on script
 
 PRODUCT = "MIS"
@@ -190,7 +190,14 @@ def main():
 
     print(f"ENTRY-SCAN {SYMBOL} EPOCHS={EPOCHS} | SL={SL_PRICE} | risk=₹{ABS_RISK} | tag={TAG}")
     while True:
-        ltp = float(kite.quote([SYMBOL])[SYMBOL]["last_price"])
+        try:
+            q = kite.quote([SYMBOL])
+            ltp = float(q[SYMBOL]["last_price"])
+        except Exception as e:
+            print(f"[WARN] quote() failed for {SYMBOL}: {e}. Retrying in 2s...")
+            time.sleep(2)
+            continue
+
         now_utc = dt.datetime.now(dt.timezone.utc)
         cur_candle = _candle_id_ist(now_utc)
 

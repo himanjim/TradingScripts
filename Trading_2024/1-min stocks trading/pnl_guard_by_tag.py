@@ -34,8 +34,8 @@ def has_open_tag_positions(kite) -> bool:
 
 
 # ---------- CONFIG ----------
-SYMBOL = "NSE:FEDERALBNK"
-EXIT_EPOCHS = [272.77]
+SYMBOL = "NSE:ICICIBANK"
+EXIT_EPOCHS = [1335.7]
 
 POLL_SEC = 1
 PRODUCT = "MIS"
@@ -148,7 +148,14 @@ def main():
 
     print(f"EXIT-GUARD {SYMBOL} EXIT_EPOCHS={EXIT_EPOCHS} (separate 1-min candle) tag={TAG}")
     while True:
-        ltp = float(kite.quote([SYMBOL])[SYMBOL]["last_price"])
+        try:
+            q = kite.quote([SYMBOL])
+            ltp = float(q[SYMBOL]["last_price"])
+        except Exception as e:
+            print(f"[WARN] quote() failed for {SYMBOL}: {e}. Retrying in 2s...")
+            time.sleep(2)
+            continue
+
         now_utc = dt.datetime.now(dt.timezone.utc)
         cur_candle = _candle_id_ist(now_utc)
 
