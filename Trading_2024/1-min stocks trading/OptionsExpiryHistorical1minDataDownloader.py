@@ -34,12 +34,14 @@ except Exception:  # pragma: no cover
 #
 # Optional env overrides:
 #   RUN_DATE="YYYY-MM-DD" or "DD-MM-YYYY"
-#   TARGET_INDEX="NIFTY" | "BANKNIFTY" | "SENSEX"
-#   OUTPUT_DIR="..."
-#   OUTPUT_BASENAME="..."
+#   TARGET_INDEX="NIFTY" | "BANKNIFTY" | "SENSEX"   (forces a single download)
+#   OUTPUT_DIR="..."                               (base dir; per-index subdirs created if multiple)
+#   OUTPUT_BASENAME="..."                          (base name; per-index suffixes added if multiple)
 #
-# Collision note (last Tuesday): defaults to BANKNIFTY monthly.
-# To force NIFTY that day: set TARGET_INDEX=NIFTY
+# IMPORTANT CHANGE:
+#   On last Tuesday of the month (or shifted-to-Monday if Tue holiday),
+#   BOTH NIFTY weekly and BANKNIFTY monthly can expire on the same day.
+#   If TARGET_INDEX is NOT set, this script will download BOTH series on that day.
 
 
 @dataclass(frozen=True)
@@ -91,7 +93,7 @@ def _iter_chunks_by_date(from_dt: datetime, to_dt: datetime, days_per_chunk: int
     """
     Chunk a datetime range by date boundaries without losing intraday minutes.
 
-    IMPORTANT bugfix: do NOT end a chunk at the chunk's start-time (e.g., 09:15),
+    IMPORTANT: do NOT end a chunk at the chunk's start-time (e.g., 09:15),
     otherwise you lose the entire day after 09:15 for each chunk end-date.
     """
     if from_dt > to_dt:
@@ -110,10 +112,20 @@ def _iter_chunks_by_date(from_dt: datetime, to_dt: datetime, days_per_chunk: int
     return chunks
 
 
-def get_instrument_token(kite, exchange: str, tradingsymbol: str) -> Tuple[int, str]:
+def _kite_instruments_cached(kite, exchange: str, cache: Dict[str, List[Dict]]) -> List[Dict]:
+    ex = exchange.upper().strip()
+    if ex not in cache:
+        print(f"[STEP] Loading instruments dump for {ex} ...")
+        cache[ex] = kite.instruments(ex)
+        print(f"[INFO] Total instruments on {ex}: {len(cache[ex])}")
+    return cache[ex]
+
+
+def get_instrument_token(kite, exchange: str, tradingsymbol: str, cache: Dict[str, List[Dict]]) -> Tuple[int, str]:
+    """Return (instrument_token, real_exchange) for a given tradingsymbol on a specific exchange."""
     ex = (exchange or "").upper().strip()
     wanted = tradingsymbol.strip().upper()
-    instruments = kite.instruments(ex)
+    instruments = _kite_instruments_cached(kite, ex, cache)
     for r in instruments:
         if str(r.get("tradingsymbol", "")).upper() == wanted:
             return int(r["instrument_token"]), str(r.get("exchange", ex))
@@ -228,15 +240,6 @@ def _is_banknifty_monthly_symbol(tsym: str, expiry_date: date) -> bool:
     return u.startswith(base) and not u.startswith(base + dd)
 
 
-def _load_instruments_cached(kite, exchange: str, cache: Dict[str, List[Dict]]) -> List[Dict]:
-    ex = exchange.upper().strip()
-    if ex not in cache:
-        print(f"[STEP] Loading instruments dump for {ex} ...")
-        cache[ex] = kite.instruments(ex)
-        print(f"[INFO] Total instruments on {ex}: {len(cache[ex])}")
-    return cache[ex]
-
-
 def _count_options_for_expiry(instruments: List[Dict], ts_prefix: str, expiry_date: date) -> Tuple[int, int]:
     """Return (total_count, banknifty_monthly_count)."""
     prefix_u = ts_prefix.upper().strip()
@@ -261,26 +264,31 @@ def _count_options_for_expiry(instruments: List[Dict], ts_prefix: str, expiry_da
     return total, monthly
 
 
-def pick_autoconfig_for_date(kite, run_date: date) -> AutoConfig:
+def pick_autoconfigs_for_date(kite, run_date: date, cache: Dict[str, List[Dict]]) -> List[AutoConfig]:
+    """
+    Return a list of configs to download.
+
+    If TARGET_INDEX is set => forced single config.
+    Else:
+      - If Sensex expiry exists today => only SENSEX (BFO)
+      - If it's last-Tuesday-of-month (or shifted-to-Monday) AND both NIFTY + BANKNIFTY expiries exist today => download both
+      - Else download whichever exists today (preferring BANKNIFTY monthly when clearly present)
+    """
     forced = (os.environ.get("TARGET_INDEX") or "").strip().upper()
-    if forced and forced not in {"NIFTY", "BANKNIFTY", "SENSEX"}:
-        raise ValueError("TARGET_INDEX must be NIFTY, BANKNIFTY, or SENSEX")
 
     cfg_nifty = AutoConfig("NIFTY_WEEKLY", "NSE", "NIFTY 50", "NFO", "NIFTY", 50, "WEEK")
     cfg_bank = AutoConfig("BANKNIFTY_MONTHLY", "NSE", "NIFTY BANK", "NFO", "BANKNIFTY", 100, "MONTH")
     cfg_sensex = AutoConfig("SENSEX_WEEKLY", "BSE", "SENSEX", "BFO", "SENSEX", 100, "WEEK")
 
-    if forced == "NIFTY":
-        return cfg_nifty
-    if forced == "BANKNIFTY":
-        return cfg_bank
-    if forced == "SENSEX":
-        return cfg_sensex
+    if forced:
+        if forced not in {"NIFTY", "BANKNIFTY", "SENSEX"}:
+            raise ValueError("TARGET_INDEX must be NIFTY, BANKNIFTY, or SENSEX")
+        return [cfg_nifty] if forced == "NIFTY" else [cfg_bank] if forced == "BANKNIFTY" else [cfg_sensex]
 
-    cache: Dict[str, List[Dict]] = {}
-    nfo = _load_instruments_cached(kite, "NFO", cache)
+    # load instruments (cached)
+    nfo = _kite_instruments_cached(kite, "NFO", cache)
     try:
-        bfo = _load_instruments_cached(kite, "BFO", cache)
+        bfo = _kite_instruments_cached(kite, "BFO", cache)
     except Exception:
         bfo = []
 
@@ -288,22 +296,27 @@ def pick_autoconfig_for_date(kite, run_date: date) -> AutoConfig:
     bank_total, bank_monthly = _count_options_for_expiry(nfo, "BANKNIFTY", run_date)
     nifty_total, _ = _count_options_for_expiry(nfo, "NIFTY", run_date)
 
+    # SENSEX expiry day: treat as exclusive target
     if sensex_total > 0:
-        return cfg_sensex
+        return [cfg_sensex]
 
-    if bank_monthly > 0:
-        return cfg_bank
+    # "last Tuesday" detector (or Monday shift if Tue holiday)
+    last_tue = _last_weekday_of_month(run_date.year, run_date.month, weekday=1)  # Tuesday
+    is_last_tue_or_shifted = (run_date == last_tue) or (run_date.weekday() == 0 and run_date + timedelta(days=1) == last_tue)
 
-    # heuristic last Tuesday (or Monday if last Tuesday is holiday and expiry shifted)
-    last_tue = _last_weekday_of_month(run_date.year, run_date.month, weekday=1)
-    if bank_total > 0 and (run_date == last_tue or (run_date.weekday() == 0 and run_date + timedelta(days=1) == last_tue)):
-        return cfg_bank
+    has_bank_monthly_today = bank_monthly > 0 or (bank_total > 0 and is_last_tue_or_shifted)
+    has_nifty_today = nifty_total > 0
 
-    if nifty_total > 0:
-        return cfg_nifty
+    # NEW: on last Tuesday (or shift), download BOTH if both exist today
+    if is_last_tue_or_shifted and has_bank_monthly_today and has_nifty_today:
+        return [cfg_bank, cfg_nifty]
 
+    if has_bank_monthly_today:
+        return [cfg_bank]
+    if has_nifty_today:
+        return [cfg_nifty]
     if bank_total > 0:
-        return cfg_bank
+        return [cfg_bank]
 
     raise RuntimeError(
         f"Could not auto-detect target index for run_date={run_date}. "
@@ -351,37 +364,53 @@ def compute_start_date(kite, idx_token: int, expiry_date: date, lookback: str) -
     raise ValueError(f"Unknown lookback: {lookback!r}")
 
 
-# ========== CORE LOGIC ==========
-def main():
-    print("[STEP] Initializing Kite API ...")
-    kite = oUtils.intialize_kite_api()
-    print("[INFO] Kite API initialized.")
-
-    run_date = _parse_run_date_env()
+def download_for_cfg(
+    kite,
+    run_date: date,
+    cfg: AutoConfig,
+    instruments_cache: Dict[str, List[Dict]],
+    multi_run: bool,
+) -> Tuple[str, int]:
+    """Execute one full download pass for a given cfg. Returns (pickle_path, total_rows)."""
     expiry_date = run_date
-    cfg = pick_autoconfig_for_date(kite, run_date)
 
-    print("========================================================")
-    print("[CONFIG] Auto-selected target:", cfg.label)
+    print("\n========================================================")
+    print("[CONFIG] Target:", cfg.label)
     print("[CONFIG] Underlying:", f"{cfg.index_exchange}:{cfg.index_tradingsymbol}")
     print("[CONFIG] Options:", f"{cfg.option_exchange} prefix={cfg.option_ts_prefix} step={cfg.strike_step}")
     print("[CONFIG] Expiry date:", expiry_date)
     print("========================================================")
 
-    idx_token, idx_ex = get_instrument_token(kite, cfg.index_exchange, cfg.index_tradingsymbol)
+    # Resolve underlying token (also used for trading-day probing)
+    idx_token, idx_ex = get_instrument_token(kite, cfg.index_exchange, cfg.index_tradingsymbol, instruments_cache)
 
+    # Compute start_date using actual trading day probing
     start_date = compute_start_date(kite, idx_token, expiry_date, cfg.lookback)
 
     from_dt = datetime.combine(start_date, SESSION_START)
     to_dt = datetime.combine(expiry_date, SESSION_END)
 
-    output_dir = (os.environ.get("OUTPUT_DIR") or "").strip() or f"./{cfg.option_ts_prefix}_{expiry_date:%Y%m%d}_expiry_history"
-    output_basename = (os.environ.get("OUTPUT_BASENAME") or "").strip() or f"{cfg.option_ts_prefix}_{expiry_date:%Y%m%d}_minute"
+    base_output_dir = (os.environ.get("OUTPUT_DIR") or "").strip()
+    base_output_name = (os.environ.get("OUTPUT_BASENAME") or "").strip()
+
+    default_dir = f"./{cfg.option_ts_prefix}_{expiry_date:%Y%m%d}_expiry_history"
+    output_dir = base_output_dir or default_dir
+
+    # If multi-run and user passed OUTPUT_DIR, avoid collisions by creating per-index subdir
+    if multi_run and base_output_dir:
+        output_dir = os.path.join(base_output_dir, cfg.option_ts_prefix)
+
+    default_basename = f"{cfg.option_ts_prefix}_{expiry_date:%Y%m%d}_minute"
+    output_basename = base_output_name or default_basename
+
+    # If multi-run and user passed OUTPUT_BASENAME, avoid collisions by suffixing
+    if multi_run and base_output_name:
+        output_basename = f"{base_output_name}_{cfg.option_ts_prefix}"
 
     print("[CONFIG] Date range:", from_dt, "→", to_dt)
     print("[CONFIG] Output:", output_dir, "/", output_basename + ".pkl")
 
-    # Underlying
+    # ---------- UNDERLYING ----------
     print("\n[STEP] Fetching underlying index minute data ...")
     idx_rows = fetch_history_minute(kite, idx_token, from_dt, to_dt, label=f"{idx_ex}:{cfg.index_tradingsymbol}")
     idx_df = rows_to_dataframe(idx_rows)
@@ -392,7 +421,7 @@ def main():
     high_price = float(idx_df["high"].max())
     print(f"[INFO] Underlying LOW/HIGH in period: {low_price:.2f} / {high_price:.2f}")
 
-    # Strike band
+    # Strike band: one below min, one above max
     step = cfg.strike_step
     min_strike_base = int(low_price // step * step)
     max_strike_base = int((high_price + step - 1) // step * step)
@@ -410,10 +439,9 @@ def main():
 
     all_dfs = [idx_df]
 
-    # Options
+    # ---------- OPTIONS ----------
     print("\n[STEP] Loading option instruments:", cfg.option_exchange)
-    all_opts = kite.instruments(cfg.option_exchange)
-    print(f"[INFO] Instruments on {cfg.option_exchange}: {len(all_opts)}")
+    all_opts = _kite_instruments_cached(kite, cfg.option_exchange, instruments_cache)
 
     prefix_u = cfg.option_ts_prefix.upper()
     filtered = []
@@ -433,22 +461,28 @@ def main():
                 continue
             strike = int(float(inst.get("strike") or 0))
             if strike_min <= strike <= strike_max:
-                inst["__exp_date__"] = exp
-                inst["__strike_i__"] = strike
-                filtered.append(inst)
+                inst2 = dict(inst)  # copy so we don't mutate cache object
+                inst2["__exp_date__"] = exp
+                inst2["__strike_i__"] = strike
+                filtered.append(inst2)
         except Exception:
             continue
 
     if expiry_date not in expiry_set:
-        print("[ERROR] No options found with expiry equal to run date.")
-        print("        Run date:", expiry_date)
-        print("        Available expiries:", sorted(expiry_set))
-        print("        If you're backfilling, set RUN_DATE=YYYY-MM-DD and rerun.")
-        return
+        raise RuntimeError(
+            f"No options found with expiry equal to run date for {cfg.option_ts_prefix} on {cfg.option_exchange}. "
+            f"Run date={expiry_date}"
+        )
 
     if not filtered:
         print("[WARN] No options found for expiry + strike band. Consider widening strike band.")
-        return
+        # still save underlying only for consistency
+        master_df = pd.concat(all_dfs, ignore_index=True)
+        master_df["date"] = pd.to_datetime(master_df["date"])
+        os.makedirs(output_dir, exist_ok=True)
+        pickle_path = os.path.join(output_dir, f"{output_basename}.pkl")
+        master_df.to_pickle(pickle_path)
+        return pickle_path, len(master_df)
 
     filtered.sort(key=lambda r: (r["__strike_i__"], r.get("tradingsymbol", "")))
     print(f"[INFO] Options to download: {len(filtered)}")
@@ -491,6 +525,37 @@ def main():
 
     print("[DONE] Saved:", pickle_path)
     print("Rows:", len(master_df))
+    return pickle_path, len(master_df)
+
+
+# ========== ENTRYPOINT ==========
+def main():
+    print("[STEP] Initializing Kite API ...")
+    kite = oUtils.intialize_kite_api()
+    print("[INFO] Kite API initialized.")
+
+    instruments_cache: Dict[str, List[Dict]] = {}
+
+    run_date = _parse_run_date_env()
+    cfgs = pick_autoconfigs_for_date(kite, run_date, instruments_cache)
+    multi_run = len(cfgs) > 1
+
+    print("========================================================")
+    print("[RUN] Date (expiry):", run_date)
+    print("[RUN] Targets:", ", ".join([c.option_ts_prefix for c in cfgs]))
+    if multi_run:
+        print("[RUN] Multi-download mode: ON (separate outputs per target)")
+    print("========================================================")
+
+    results: List[Tuple[str, str, int]] = []
+    for cfg in cfgs:
+        pkl, nrows = download_for_cfg(kite, run_date, cfg, instruments_cache, multi_run=multi_run)
+        results.append((cfg.option_ts_prefix, pkl, nrows))
+
+    print("\n==================== SUMMARY ====================")
+    for prefix, pkl, nrows in results:
+        print(f"{prefix}: {nrows} rows -> {pkl}")
+    print("=================================================")
 
 
 if __name__ == "__main__":
