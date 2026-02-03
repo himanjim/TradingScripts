@@ -17,14 +17,14 @@ import pytz
 import Trading_2024.OptionTradeUtils as oUtils
 
 # ---------- CONFIG ----------
-SYMBOL = "NSE:ICICIBANK"
-EPOCHS = [1348.68]
+SYMBOL = "NSE:IRFC"
+EPOCHS = [115.5]
 
 POLL_SEC = 1
 RETRY_SEC = 2  # retry delay for quote/orders/positions
 
 ABS_RISK = 3000.0
-SL_PRICE = 1354.69
+SL_PRICE = 116.5
 
 PRODUCT = "MIS"
 PAPER = False
@@ -33,7 +33,7 @@ ONLY_TODAY_TAGGED = True  # prevents old tagged symbols from being used for squa
 
 # Tick size + entry behavior
 TICK_SIZE = 0.10
-ENTRY_WAIT_SEC = 10
+ENTRY_WAIT_SEC = 30
 
 SMART_LIMIT_MODE = "CROSS"   # "CROSS" or "JOIN"
 # CROSS: buy at best_ask, sell at best_bid (higher fill probability)
@@ -282,7 +282,7 @@ def place_entry_and_slm(kite, side, qty, entry_quote_item: dict):
         transaction_type=side,
         quantity=qty,
         product=PRODUCT,
-        order_type=kite.ORDER_TYPE_LIMIT,
+        order_type=kite.ORDER_TYPE_MARKET,
         price=entry_px,
         validity=kite.VALIDITY_DAY,
         tag=TAG

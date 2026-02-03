@@ -34,8 +34,8 @@ def has_open_tag_positions(kite) -> bool:
 
 
 # ---------- CONFIG ----------
-SYMBOL = "NSE:ICICIBANK"
-EXIT_EPOCHS = [1335.7]
+SYMBOL = "NSE:IRFC"
+EXIT_EPOCHS = [114.3]
 
 POLL_SEC = 1
 PRODUCT = "MIS"
