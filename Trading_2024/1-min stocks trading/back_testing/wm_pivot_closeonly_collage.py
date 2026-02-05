@@ -772,7 +772,7 @@ def scan_one_file(path: str, session_date: date, cutoff_dt: datetime) -> Optiona
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--date",default="2025-12-02", help="Analysis date YYYY-MM-DD (IST)")
+    ap.add_argument("--date",default="2025-12-01", help="Analysis date YYYY-MM-DD (IST)")
     args = ap.parse_args()
 
     session_date = datetime.strptime(args.date, "%Y-%m-%d").date()
