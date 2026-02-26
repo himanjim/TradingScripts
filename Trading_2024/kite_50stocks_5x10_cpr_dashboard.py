@@ -1,108 +1,90 @@
-# kite_50stocks_5x10_cpr_matplotlib.py
-# 50 NSE stocks 1-min candlesticks in a 5x10 Matplotlib window + CPR pivots (P, BC, TC, R1, S1).
+# kite_20stocks_plotly_grid_4x5_fast.py
+# First 20 symbols from your 50-stock list. 4 columns x 5 rows grid, fixed boxes + borders,
+# per-chart axes, bold names, page zoom slider, Plotly zoom per chart.
 #
-# BEHAVIOR
-# - During market hours: refresh in a loop, incrementally fetching only new 1-min candles (fast).
-# - Outside market hours: fetch FULL DAY 1-min candles for the LAST TRADING DAY, render ONCE, and EXIT.
-#
-# FIXES / IMPROVEMENTS (per your feedback)
-# - Draw in a Matplotlib window (no browser/HTML).
-# - Candles are clearly visible (colored bodies + wicks).
-# - Pivots always visible: y-limits expanded to include pivot levels.
-# - Much faster rendering: show x tick labels only on bottom row, y tick labels only on left column;
-#   sparse x ticks (every 30 min).
-# - Removed unnecessary daily "probe" calls in intraday loop (pivots won't change during session).
-# - Atomic + stable: no blank "Starting..." page possible.
-#
-# NOTES
-# - 50 panels is heavy; keep LOOKBACK_MINUTES reasonable (60–150).
-# - If you want an even faster version, ask for "artist reuse" optimization.
+# Optimizations:
+# - Layout updates applied in one shot (fewer dict assignments).
+# - Incremental minute fetching (cache) to cut API + speed refresh.
+# - Pivots as scatter lines (faster than shapes).
+# - Robust IST-naive datetime for Kite historical API (avoids invalid from date).
 
+import os
 import time
 import datetime as dt
 from dataclasses import dataclass
 from collections import deque
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Tuple
 
 import pandas as pd
 from kiteconnect import exceptions as kite_ex
+import plotly.graph_objects as go
 
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from matplotlib.lines import Line2D
-from matplotlib.patches import Rectangle
-
-# Your reference init
 import Trading_2024.OptionTradeUtils as oUtils
 
 
-# ==========================================================
-# USER CONFIG
-# ==========================================================
+# =========================
+# CONFIG
+# =========================
 
-SYMBOLS_50 = [
+# First 20 from your earlier 50-list:
+SYMBOLS_20 = [
     "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK",
     "SBIN", "LT", "ITC", "HINDUNILVR", "BHARTIARTL",
     "AXISBANK", "KOTAKBANK", "ASIANPAINT", "MARUTI", "M&M",
-    "TITAN", "SUNPHARMA", "NTPC", "ONGC", "POWERGRID",
-    "BAJFINANCE", "BAJAJFINSV", "HCLTECH", "WIPRO", "TECHM",
-    "ULTRACEMCO", "ADANIPORTS", "TATASTEEL", "JSWSTEEL", "HINDALCO",
-    "COALINDIA", "DRREDDY", "APOLLOHOSP", "DIVISLAB", "CIPLA",
-    "NESTLEIND", "BRITANNIA", "SBILIFE", "HDFCLIFE", "INDUSINDBK",
-    "GRASIM", "SBIN", "HEROMOTOCO", "EICHERMOT", "BAJAJ-AUTO",
-    "BPCL", "TATACONSUM", "SHRIRAMFIN", "ADANIENT", "PIDILITIND"
+    "TITAN", "SUNPHARMA", "NTPC", "ONGC", "POWERGRID"
 ]
-SYMBOL_SET = set(SYMBOLS_50)
+SYMBOL_SET = set(SYMBOLS_20)
 
 EXCHANGE = "NSE"
 
-ROWS = 10
-COLS = 5
+GRID_COLS = 4
+GRID_ROWS = 5
+assert GRID_COLS * GRID_ROWS == 20
 
-# During-market view window
 LOOKBACK_MINUTES = 120
-
-# Refresh cadence during market (real cadence limited by API calls)
 REFRESH_SECONDS = 25
 
-# Historical API safety (commonly ~3 req/sec for historical)
-HIST_MAX_CALLS_PER_SEC = 3
+OUTPUT_HTML = os.path.abspath("kite_20stocks_4x5_plotly.html")
+OPEN_BROWSER = True
 
-MAX_RETRIES = 5
-RETRY_BACKOFF_BASE_SEC = 1.8
-NETWORK_JITTER_SEC = 0.12
-
-# Market session (IST)
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 SESSION_START = dt.time(9, 15)
 SESSION_END = dt.time(15, 30)
 
-# Drawing: candle width in days (1 minute = 1/(24*60))
-CANDLE_WIDTH = (1.0 / (24 * 60)) * 0.70
+HIST_MAX_CALLS_PER_SEC = 3
+MAX_RETRIES = 5
+RETRY_BACKOFF_BASE_SEC = 1.8
+NETWORK_JITTER_SEC = 0.10
 
-# Styling
-UP_COLOR = "#1a7f37"     # green-ish
-DOWN_COLOR = "#d1242f"   # red-ish
-WICK_ALPHA = 0.85
-BODY_ALPHA = 0.70
+EXIT_AFTER_MARKET_CLOSE_SNAPSHOT = True
 
-# X ticks sparsity
-XTICK_MINUTE_INTERVAL = 30
+# Make boxes near-square: reduced width + increased height
+FIG_WIDTH_PX = 1180
+FIG_HEIGHT_PX = 1550
 
+# Increase separation
+PAD_X = 0.032
+PAD_Y = 0.036
 
-# ==========================================================
-# Logging
-# ==========================================================
+# Pivot colors + width
+PIV_COLORS = {"R1": "orange", "TC": "purple", "P": "black", "BC": "blue", "S1": "green"}
+PIV_WIDTH = {"R1": 1.0, "TC": 1.1, "P": 1.6, "BC": 1.1, "S1": 1.0}
 
+# Grid border styling
+CELL_BORDER_COLOR = "rgba(0,0,0,0.35)"
+CELL_BORDER_WIDTH = 1
+
+# =========================
+# LOG
+# =========================
 def log(level: str, msg: str):
     now = dt.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
     print(f"{now} [{level}] {msg}")
 
 
-# ==========================================================
+# =========================
 # Rate limiter
-# ==========================================================
-
+# =========================
 class RateLimiter:
     def __init__(self, max_calls: int, per_seconds: float = 1.0):
         self.max_calls = max_calls
@@ -117,17 +99,14 @@ class RateLimiter:
             if len(self.calls) < self.max_calls:
                 self.calls.append(now)
                 return
-            wait_for = self.per_seconds - (now - self.calls[0]) + 0.01
-            time.sleep(max(0.01, wait_for))
-
+            time.sleep(max(0.01, self.per_seconds - (now - self.calls[0]) + 0.01))
 
 rate_limiter = RateLimiter(HIST_MAX_CALLS_PER_SEC, 1.0)
 
 
-# ==========================================================
+# =========================
 # Pivots
-# ==========================================================
-
+# =========================
 @dataclass(frozen=True)
 class PivotLevels:
     P: float
@@ -146,47 +125,56 @@ def compute_pivots(H: float, L: float, C: float, ref_day: dt.date) -> PivotLevel
     return PivotLevels(P=P, BC=BC, TC=TC, R1=R1, S1=S1, ref_day=ref_day)
 
 
-# ==========================================================
+# =========================
 # Time helpers
-# ==========================================================
-
+# =========================
 def now_ist() -> dt.datetime:
     return dt.datetime.now(IST)
 
-def market_session_bounds(d: dt.date) -> Tuple[dt.datetime, dt.datetime]:
+def market_bounds(d: dt.date) -> Tuple[dt.datetime, dt.datetime]:
     return (
         dt.datetime.combine(d, SESSION_START, tzinfo=IST),
         dt.datetime.combine(d, SESSION_END, tzinfo=IST),
     )
 
 def is_market_open(ts: dt.datetime) -> bool:
-    s, e = market_session_bounds(ts.date())
+    s, e = market_bounds(ts.date())
     return s <= ts <= e
 
+def floor_to_minute(t: dt.datetime) -> dt.datetime:
+    return t.replace(second=0, microsecond=0)
+
+def to_ist_naive(t: dt.datetime) -> dt.datetime:
+    # Zerodha historical often behaves better with tz-naive local time
+    if t.tzinfo is None:
+        return floor_to_minute(t)
+    return floor_to_minute(t.astimezone(IST).replace(tzinfo=None))
+
 def clamp_intraday_window(end_dt: dt.datetime, lookback_min: int) -> Tuple[dt.datetime, dt.datetime]:
-    s, e = market_session_bounds(end_dt.date())
+    s, e = market_bounds(end_dt.date())
     to_dt = min(end_dt, e)
     from_dt = to_dt - dt.timedelta(minutes=lookback_min)
     if from_dt < s:
         from_dt = s
     return from_dt, to_dt
 
-def full_day_window(d: dt.date) -> Tuple[dt.datetime, dt.datetime]:
-    return market_session_bounds(d)
 
-
-# ==========================================================
+# =========================
 # Kite helpers
-# ==========================================================
-
+# =========================
 def safe_historical_data(kite, token: int, from_dt: dt.datetime, to_dt: dt.datetime, interval: str, label: str):
+    f = to_ist_naive(from_dt)
+    t = to_ist_naive(to_dt)
+    if f >= t:
+        return []
+
     for attempt in range(1, MAX_RETRIES + 1):
         rate_limiter.wait()
         try:
             rows = kite.historical_data(
                 instrument_token=token,
-                from_date=from_dt,
-                to_date=to_dt,
+                from_date=f,
+                to_date=t,
                 interval=interval,
                 continuous=False,
                 oi=False,
@@ -224,97 +212,31 @@ def normalize_minute_df_ist(df: pd.DataFrame) -> pd.DataFrame:
     return df.dropna(subset=["date"]).reset_index(drop=True)
 
 
-# ==========================================================
-# Matplotlib candlestick + pivots
-# ==========================================================
-
-def draw_candles(ax, df: pd.DataFrame):
-    # Convert times to matplotlib date float
-    x = mdates.date2num(df["date"].dt.tz_convert(IST).dt.to_pydatetime())
-    o = df["open"].to_numpy()
-    h = df["high"].to_numpy()
-    l = df["low"].to_numpy()
-    c = df["close"].to_numpy()
-
-    for xi, oi, hi, li, ci in zip(x, o, h, l, c):
-        up = ci >= oi
-        col = UP_COLOR if up else DOWN_COLOR
-
-        # wick
-        ax.add_line(Line2D([xi, xi], [li, hi], color=col, linewidth=0.55, alpha=WICK_ALPHA))
-
-        # body
-        y0 = min(oi, ci)
-        height = abs(ci - oi)
-        if height < 1e-9:
-            height = 1e-9
-        rect = Rectangle(
-            (xi - CANDLE_WIDTH / 2.0, y0),
-            CANDLE_WIDTH,
-            height,
-            facecolor=col,
-            edgecolor=col,
-            linewidth=0.35,
-            alpha=BODY_ALPHA
-        )
-        ax.add_patch(rect)
-
-    ax.set_xlim(x[0], x[-1])
-
-def draw_pivots(ax, piv: PivotLevels):
-    # Dotted lines. Always draw all 5.
-    ax.axhline(piv.R1, linewidth=0.7, linestyle=":", alpha=0.9)
-    ax.axhline(piv.TC, linewidth=0.7, linestyle=":", alpha=0.9)
-    ax.axhline(piv.P,  linewidth=0.7, linestyle=":", alpha=0.9)
-    ax.axhline(piv.BC, linewidth=0.7, linestyle=":", alpha=0.9)
-    ax.axhline(piv.S1, linewidth=0.7, linestyle=":", alpha=0.9)
-
-def set_ylim_include_pivots(ax, df: pd.DataFrame, piv: Optional[PivotLevels]):
-    lo = float(df["low"].min())
-    hi = float(df["high"].max())
-    if piv is not None:
-        lo = min(lo, piv.S1, piv.BC, piv.P, piv.TC, piv.R1)
-        hi = max(hi, piv.S1, piv.BC, piv.P, piv.TC, piv.R1)
-    if hi <= lo:
-        hi = lo + 1.0
-    pad = (hi - lo) * 0.06
-    ax.set_ylim(lo - pad, hi + pad)
-
-
-# ==========================================================
+# =========================
 # Pivot day logic
-# ==========================================================
-
-def determine_last_trading_day(kite, probe_token: int) -> dt.date:
+# =========================
+def determine_last_td_and_ref_day(kite, probe_token: int) -> Tuple[dt.date, dt.date]:
     end_dt = now_ist()
-    start_dt = end_dt - dt.timedelta(days=30)
-    rows = safe_historical_data(kite, probe_token, start_dt, end_dt, "day", "probe day lastTD")
+    start_dt = end_dt - dt.timedelta(days=60)
+    rows = safe_historical_data(kite, probe_token, start_dt, end_dt, "day", "probe calendar")
     df = rows_to_df(rows)
     if df.empty:
-        return now_ist().date()
+        d = end_dt.date()
+        return d, d
     df["d"] = pd.to_datetime(df["date"], errors="coerce").dt.date
-    return df["d"].dropna().iloc[-1]
-
-def determine_ref_day_for_pivots(kite, probe_token: int, last_td: dt.date) -> dt.date:
-    end_dt = now_ist()
-    start_dt = end_dt - dt.timedelta(days=40)
-    rows = safe_historical_data(kite, probe_token, start_dt, end_dt, "day", "probe day refDay")
-    df = rows_to_df(rows)
-    if df.empty:
-        return last_td
-    df["d"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+    df = df.dropna(subset=["d"]).reset_index(drop=True)
+    last_td = df["d"].iloc[-1]
     prevs = df[df["d"] < last_td]
-    if prevs.empty:
-        return last_td
-    return prevs["d"].iloc[-1]
+    ref = prevs["d"].iloc[-1] if not prevs.empty else last_td
+    return last_td, ref
 
 def load_pivots_for_ref_day(kite, sym_to_token: Dict[str, int], ref_day: dt.date) -> Dict[str, PivotLevels]:
     end_dt = now_ist()
-    start_dt = end_dt - dt.timedelta(days=45)
+    start_dt = end_dt - dt.timedelta(days=80)
     out: Dict[str, PivotLevels] = {}
-    for sym in SYMBOLS_50:
-        token = sym_to_token[sym]
-        rows = safe_historical_data(kite, token, start_dt, end_dt, "day", f"{sym} day pivots")
+    for sym in SYMBOLS_20:
+        tok = sym_to_token[sym]
+        rows = safe_historical_data(kite, tok, start_dt, end_dt, "day", f"{sym} day pivots")
         df = rows_to_df(rows)
         if df.empty:
             continue
@@ -327,10 +249,183 @@ def load_pivots_for_ref_day(kite, sym_to_token: Dict[str, int], ref_day: dt.date
     return out
 
 
-# ==========================================================
-# Rendering controller
-# ==========================================================
+# =========================
+# Plotly grid builder
+# =========================
+def build_plotly_grid(symbol_to_df: Dict[str, pd.DataFrame],
+                      pivots: Dict[str, PivotLevels],
+                      title: str) -> go.Figure:
+    fig = go.Figure()
 
+    cell_w = (1.0 - PAD_X * (GRID_COLS + 1)) / GRID_COLS
+    cell_h = (1.0 - PAD_Y * (GRID_ROWS + 1)) / GRID_ROWS
+
+    layout_updates = {}
+    shapes = []
+    annotations = []
+
+    for idx, sym in enumerate(SYMBOLS_20, start=1):
+        r = (idx - 1) // GRID_COLS  # 0..4 (top->bottom)
+        c = (idx - 1) % GRID_COLS   # 0..3
+
+        y_top = 1.0 - PAD_Y - r * (cell_h + PAD_Y)
+        y_bottom = y_top - cell_h
+        x_left = PAD_X + c * (cell_w + PAD_X)
+        x_right = x_left + cell_w
+
+        # Border rectangle
+        shapes.append(dict(
+            type="rect",
+            x0=x_left, x1=x_right,
+            y0=y_bottom, y1=y_top,
+            xref="paper", yref="paper",
+            line=dict(color=CELL_BORDER_COLOR, width=CELL_BORDER_WIDTH),
+            fillcolor="rgba(0,0,0,0)",
+            layer="below"
+        ))
+
+        layout_updates[f"xaxis{idx}"] = dict(
+            domain=[x_left, x_right],
+            anchor=f"y{idx}",
+            showgrid=True,
+            ticks="outside",
+            tickfont=dict(size=10),
+            rangeslider=dict(visible=False),
+            zeroline=False,
+        )
+        layout_updates[f"yaxis{idx}"] = dict(
+            domain=[y_bottom, y_top],
+            anchor=f"x{idx}",
+            showgrid=True,
+            ticks="outside",
+            tickfont=dict(size=10),
+            zeroline=False,
+        )
+
+        # Bold stock label (fixed position in cell)
+        annotations.append(dict(
+            x=x_left + 0.006,
+            y=y_top - 0.006,
+            xref="paper",
+            yref="paper",
+            text=f"<b>{sym}</b>",
+            showarrow=False,
+            xanchor="left",
+            yanchor="top",
+            font=dict(size=12),
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="rgba(0,0,0,0.15)",
+            borderwidth=1
+        ))
+
+        df = symbol_to_df.get(sym)
+        if df is None or df.empty:
+            continue
+
+        # Candlestick
+        fig.add_trace(go.Candlestick(
+            x=df["date"],
+            open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+            increasing_line_width=1,
+            decreasing_line_width=1,
+            xaxis=f"x{idx}",
+            yaxis=f"y{idx}",
+            showlegend=False,
+            name=sym
+        ))
+
+        # Pivots as fast line traces
+        piv = pivots.get(sym)
+        if piv:
+            x0 = df["date"].iloc[0]
+            x1 = df["date"].iloc[-1]
+            levels = {"R1": piv.R1, "TC": piv.TC, "P": piv.P, "BC": piv.BC, "S1": piv.S1}
+            for name, y in levels.items():
+                fig.add_trace(go.Scatter(
+                    x=[x0, x1],
+                    y=[y, y],
+                    mode="lines",
+                    line=dict(color=PIV_COLORS[name], width=PIV_WIDTH.get(name, 1.1)),
+                    hoverinfo="skip",
+                    xaxis=f"x{idx}",
+                    yaxis=f"y{idx}",
+                    showlegend=False
+                ))
+
+    fig.update_layout(
+        **layout_updates,
+        shapes=shapes,
+        annotations=annotations,
+        title=dict(text=title, x=0.01),
+        width=FIG_WIDTH_PX,
+        height=FIG_HEIGHT_PX,
+        margin=dict(l=20, r=20, t=70, b=20),
+        template="plotly_white",
+        dragmode="zoom",
+        showlegend=False
+    )
+    return fig
+
+
+def write_html(fig: go.Figure, out_html: str, refresh_sec: int):
+    plot_html = fig.to_html(include_plotlyjs="cdn", full_html=False)
+    html = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta http-equiv="refresh" content="{refresh_sec}">
+  <title>Kite 20 Stocks 4x5</title>
+  <style>
+    body {{ margin:0; font-family: Arial, sans-serif; }}
+    .topbar {{
+      position: sticky; top: 0; background: #fff; border-bottom: 1px solid #ddd;
+      padding: 8px 10px; z-index: 9999; display:flex; gap:16px; align-items:center;
+    }}
+    .wrap {{ padding: 10px; }}
+    #scaleWrap {{ transform-origin: 0 0; }}
+    input[type=range] {{ width: 220px; }}
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div><b>4×5 NSE Dashboard (20 stocks)</b> (auto-refresh {refresh_sec}s)</div>
+    <div>Page zoom:
+      <input id="zoom" type="range" min="60" max="180" value="100" />
+      <span id="zv">100%</span>
+    </div>
+    <div style="opacity:0.7;">Drag inside any chart to zoom; double-click to reset.</div>
+  </div>
+
+  <div class="wrap">
+    <div id="scaleWrap">{plot_html}</div>
+  </div>
+
+<script>
+(function() {{
+  var zoom = document.getElementById('zoom');
+  var zv = document.getElementById('zv');
+  var scaleWrap = document.getElementById('scaleWrap');
+
+  function apply() {{
+    var s = Number(zoom.value) / 100;
+    scaleWrap.style.transform = "scale(" + s + ")";
+    zv.textContent = zoom.value + '%';
+  }}
+  zoom.addEventListener('input', apply);
+  apply();
+}})();
+</script>
+</body>
+</html>"""
+    tmp = out_html + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(html)
+    os.replace(tmp, out_html)
+
+
+# =========================
+# Main
+# =========================
 def main():
     log("STEP", "Initializing Kite ...")
     kite = oUtils.intialize_kite_api()
@@ -344,180 +439,98 @@ def main():
         if ts in SYMBOL_SET:
             sym_to_token[ts] = int(r["instrument_token"])
 
-    missing = [s for s in SYMBOLS_50 if s not in sym_to_token]
+    missing = [s for s in SYMBOLS_20 if s not in sym_to_token]
     if missing:
         raise ValueError(f"Symbols not found in NSE instruments: {missing}")
 
-    probe_token = sym_to_token[SYMBOLS_50[0]]
-
-    asof = now_ist()
-    market_open = is_market_open(asof)
-
-    # Determine last trading day + pivot ref day
-    last_td = determine_last_trading_day(kite, probe_token)
-    ref_day = determine_ref_day_for_pivots(kite, probe_token, last_td)
+    probe_token = sym_to_token[SYMBOLS_20[0]]
+    last_td, ref_day = determine_last_td_and_ref_day(kite, probe_token)
     log("INFO", f"last_trading_day={last_td} | pivot_ref_day={ref_day}")
 
-    log("STEP", "Loading pivots for all symbols (once) ...")
+    log("STEP", "Loading pivots ...")
     pivots = load_pivots_for_ref_day(kite, sym_to_token, ref_day)
-    log("INFO", f"Pivots ready for {len(pivots)}/{len(SYMBOLS_50)} symbols.")
+    log("INFO", f"Pivots ready for {len(pivots)}/20 symbols.")
 
-    # Matplotlib setup (single window)
-    plt.ion()
-    fig, axes = plt.subplots(ROWS, COLS, figsize=(24, 13), constrained_layout=True)
-
-    # Pre-set tick locators/formatters once (faster than per-refresh)
-    locator = mdates.MinuteLocator(interval=XTICK_MINUTE_INTERVAL)
-    formatter = mdates.DateFormatter("%H:%M", tz=IST)
-
-    for i in range(ROWS * COLS):
-        ax = axes[i // COLS][i % COLS]
-        ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(formatter)
-
-    def render(symbol_to_df: Dict[str, pd.DataFrame], title_line: str):
-        fig.suptitle(title_line, fontsize=14)
-
-        for i, sym in enumerate(SYMBOLS_50):
-            ax = axes[i // COLS][i % COLS]
-            ax.cla()  # slightly lighter than clear() in practice
-
-            df = symbol_to_df.get(sym)
-            ax.set_title(sym, fontsize=8, pad=1)
-
-            if df is None or df.empty:
-                ax.set_xticks([])
-                ax.set_yticks([])
-                continue
-
-            draw_candles(ax, df)
-
-            piv = pivots.get(sym)
-            if piv is not None:
-                draw_pivots(ax, piv)
-                set_ylim_include_pivots(ax, df, piv)
-            else:
-                set_ylim_include_pivots(ax, df, None)
-
-            ax.grid(True, linewidth=0.25, alpha=0.6)
-
-            # Show x labels only on bottom row; y labels only on left column
-            is_bottom = (i // COLS) == (ROWS - 1)
-            is_left = (i % COLS) == 0
-            ax.tick_params(axis="x", labelsize=7, labelbottom=is_bottom)
-            ax.tick_params(axis="y", labelsize=7, labelleft=is_left)
-
-            # Apply pre-created locator/formatter (cla() resets them)
-            ax.xaxis.set_major_locator(locator)
-            ax.xaxis.set_major_formatter(formatter)
-
-        fig.canvas.draw()
-        fig.canvas.flush_events()
-
-    # ----------------------------------------------------------
-    # MARKET CLOSED MODE: full-day snapshot once, then wait for close
-    # ----------------------------------------------------------
-    if not market_open:
-        day_from, day_to = full_day_window(last_td)
-        log("INFO", f"Market closed now. Fetching FULL DAY once for {last_td} and exiting after window close.")
-
-        symbol_to_df: Dict[str, pd.DataFrame] = {}
-        for idx, sym in enumerate(SYMBOLS_50, start=1):
-            token = sym_to_token[sym]
-            try:
-                rows = safe_historical_data(
-                    kite, token, day_from, day_to, "minute",
-                    f"{sym} full-day minute {idx}/{len(SYMBOLS_50)}"
-                )
-                df = normalize_minute_df_ist(rows_to_df(rows))
-                symbol_to_df[sym] = df
-            except Exception as e:
-                log("ERROR", f"{sym}: full-day fetch failed: {e}")
-                symbol_to_df[sym] = pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
-
-        title = f"FULL DAY | Day={last_td} | Pivots from={ref_day} | As-of={asof.strftime('%Y-%m-%d %H:%M IST')}"
-        render(symbol_to_df, title)
-
-        log("INFO", "Close the Matplotlib window to exit.")
-        plt.ioff()
-        plt.show()
-        return
-
-    # ----------------------------------------------------------
-    # MARKET OPEN MODE: incremental loop
-    # ----------------------------------------------------------
-    log("INFO", "Market open. Starting refresh loop in Matplotlib window.")
+    import webbrowser
+    if OPEN_BROWSER:
+        if not os.path.exists(OUTPUT_HTML):
+            with open(OUTPUT_HTML, "w", encoding="utf-8") as f:
+                f.write("<html><body>Starting...</body></html>")
+        webbrowser.open("file://" + OUTPUT_HTML)
 
     cache_df: Dict[str, pd.DataFrame] = {}
-    last_candle_dt: Dict[str, dt.datetime] = {}
+    last_dt: Dict[str, dt.datetime] = {}
 
     while True:
-        loop_start = time.time()
+        t0 = time.time()
         asof = now_ist()
 
-        if not is_market_open(asof):
-            log("INFO", "Market closed during run. Exiting. Re-run after close for full-day snapshot.")
-            break
+        if not is_market_open(asof) and EXIT_AFTER_MARKET_CLOSE_SNAPSHOT:
+            # full-day snapshot and exit
+            day_start, day_end = market_bounds(last_td)
+            symbol_to_df: Dict[str, pd.DataFrame] = {}
+            for i, sym in enumerate(SYMBOLS_20, start=1):
+                tok = sym_to_token[sym]
+                rows = safe_historical_data(kite, tok, day_start, day_end, "minute", f"{sym} full {i}/20")
+                df = normalize_minute_df_ist(rows_to_df(rows))
+                symbol_to_df[sym] = df
+
+            title = f"FULL DAY {last_td} | Pivots {ref_day} | {asof.strftime('%Y-%m-%d %H:%M IST')}"
+            fig = build_plotly_grid(symbol_to_df, pivots, title)
+            write_html(fig, OUTPUT_HTML, refresh_sec=9999)
+            log("INFO", "Rendered full-day snapshot. Exiting.")
+            return
 
         window_from, window_to = clamp_intraday_window(asof, LOOKBACK_MINUTES)
         symbol_to_df: Dict[str, pd.DataFrame] = {}
 
-        for idx, sym in enumerate(SYMBOLS_50, start=1):
-            token = sym_to_token[sym]
+        for i, sym in enumerate(SYMBOLS_20, start=1):
+            tok = sym_to_token[sym]
             try:
-                # First fetch for symbol
                 if sym not in cache_df or cache_df[sym].empty:
-                    rows = safe_historical_data(
-                        kite, token, window_from, window_to, "minute",
-                        f"{sym} init minute {idx}/{len(SYMBOLS_50)}"
-                    )
+                    rows = safe_historical_data(kite, tok, window_from, window_to, "minute", f"{sym} init {i}/20")
                     df = normalize_minute_df_ist(rows_to_df(rows))
                     cache_df[sym] = df
                     if not df.empty:
-                        last_candle_dt[sym] = df["date"].iloc[-1]
+                        last_dt[sym] = df["date"].iloc[-1]
                     symbol_to_df[sym] = df
                     continue
 
-                last_dt = last_candle_dt.get(sym)
-                inc_from = (last_dt + dt.timedelta(minutes=1)) if last_dt else window_from
+                inc_from = (last_dt.get(sym) + dt.timedelta(minutes=1)) if last_dt.get(sym) else window_from
+                if inc_from < window_from:
+                    inc_from = window_from
+                if inc_from >= window_to:
+                    symbol_to_df[sym] = cache_df[sym]
+                    continue
 
-                if inc_from < window_to:
-                    rows = safe_historical_data(
-                        kite, token, inc_from, window_to, "minute",
-                        f"{sym} inc minute {idx}/{len(SYMBOLS_50)}"
-                    )
-                    inc = normalize_minute_df_ist(rows_to_df(rows))
+                rows = safe_historical_data(kite, tok, inc_from, window_to, "minute", f"{sym} inc {i}/20")
+                inc = normalize_minute_df_ist(rows_to_df(rows))
 
-                    if not inc.empty:
-                        df = pd.concat([cache_df[sym], inc], ignore_index=True)
-                        df = df.drop_duplicates(subset=["date"], keep="last").sort_values("date").reset_index(drop=True)
+                if not inc.empty:
+                    df = pd.concat([cache_df[sym], inc], ignore_index=True)
+                    df = df.drop_duplicates(subset=["date"], keep="last").sort_values("date").reset_index(drop=True)
 
-                        # Trim to last LOOKBACK_MINUTES
-                        latest = df["date"].iloc[-1]
-                        cutoff = latest - pd.Timedelta(minutes=LOOKBACK_MINUTES)
-                        df = df[df["date"] >= cutoff].reset_index(drop=True)
+                    latest = df["date"].iloc[-1]
+                    cutoff = latest - pd.Timedelta(minutes=LOOKBACK_MINUTES)
+                    df = df[df["date"] >= cutoff].reset_index(drop=True)
 
-                        cache_df[sym] = df
-                        last_candle_dt[sym] = df["date"].iloc[-1]
+                    cache_df[sym] = df
+                    last_dt[sym] = df["date"].iloc[-1]
 
                 symbol_to_df[sym] = cache_df[sym]
 
             except Exception as e:
-                log("ERROR", f"{sym}: minute fetch failed: {e}")
-                symbol_to_df[sym] = cache_df.get(
-                    sym, pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
-                )
+                log("ERROR", f"{sym}: {e}")
+                symbol_to_df[sym] = cache_df.get(sym, pd.DataFrame(columns=["date","open","high","low","close","volume"]))
 
-        title = f"INTRADAY LIVE | Window={LOOKBACK_MINUTES}m | Pivots from={ref_day} | As-of={asof.strftime('%H:%M:%S IST')}"
-        render(symbol_to_df, title)
+        title = f"INTRADAY LIVE | 4×5 | {LOOKBACK_MINUTES}m | Pivots {ref_day} | {asof.strftime('%H:%M:%S IST')}"
+        fig = build_plotly_grid(symbol_to_df, pivots, title)
+        write_html(fig, OUTPUT_HTML, refresh_sec=REFRESH_SECONDS)
 
-        elapsed = time.time() - loop_start
+        elapsed = time.time() - t0
         sleep_for = max(1.0, REFRESH_SECONDS - elapsed)
         log("INFO", f"Cycle={elapsed:.1f}s | sleep={sleep_for:.1f}s")
         time.sleep(sleep_for)
-
-    plt.ioff()
-    plt.show()
 
 
 if __name__ == "__main__":

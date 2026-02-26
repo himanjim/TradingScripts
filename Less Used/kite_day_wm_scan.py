@@ -53,7 +53,7 @@ LOOKAHEAD_BARS_VALIDATE = 20
 
 MAX_ANNOTATIONS_PER_TYPE = 10
 
-INSTR_CACHE_DIR = "../Trading_2024/1-min stocks trading/kite_instruments_cache"
+INSTR_CACHE_DIR = "1-min stocks trading/kite_instruments_cache"
 INSTR_CACHE_TTL_DAYS = 7
 
 

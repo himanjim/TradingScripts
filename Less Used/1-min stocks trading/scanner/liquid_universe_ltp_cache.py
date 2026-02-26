@@ -71,7 +71,7 @@ MARKET_OPEN_HHMM = (9, 15)
 MARKET_CLOSE_HHMM = (15, 30)
 
 # Storage
-OUTPUT_DIR = "./live_cache"
+OUTPUT_DIR = "live_cache"
 RESET_ON_START = True
 
 # SQLite tick flush batching

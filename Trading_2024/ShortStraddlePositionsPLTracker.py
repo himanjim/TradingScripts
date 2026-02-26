@@ -2,191 +2,343 @@ import time as tm
 from datetime import datetime
 import pytz
 import OptionTradeUtils as oUtils
-import pandas as pd
-import winsound  # Use only on Windows
+
+# winsound is Windows-only; guard so script doesn't crash on Linux/macOS
+try:
+    import winsound  # type: ignore
+except Exception:
+    winsound = None
 
 
-def exit_trade(_position):
-    kite.place_order(tradingsymbol=_position['tradingsymbol'],
-                     variety=kite.VARIETY_REGULAR,
-                     exchange=_position['exchange'],
-                     transaction_type=kite.TRANSACTION_TYPE_BUY if _position[
-                                                                        'type'] == kite.TRANSACTION_TYPE_SELL else kite.TRANSACTION_TYPE_SELL,
-                     quantity=_position['quantity'],
-                     order_type=kite.ORDER_TYPE_MARKET,
-                     product=_position['product'],
-                     tag=oUtils.SS_ORDER_TAG,
-                     )
-
-def get_positions_from_orders(kite_):
-    orders = kite_.orders()
-    df = pd.DataFrame(orders)
-
-    _all_positions = []
-    for _, row in df.iterrows():
-        if (
-            row.get('product') in ('NRML', 'MIS')
-            and row.get('variety') == 'regular'
-            and str(row.get('tag', '')) == oUtils.SS_ORDER_TAG
-            and row.get('status') in ('OPEN', 'COMPLETE')  # ignore cancelled/rejected
-        ):
-            _all_positions.append({
-                'exchange': row['exchange'],
-                'tradingsymbol': row['tradingsymbol'],
-                'quantity': row['quantity'],
-                'price': row['average_price'],
-                'product': row['product'],
-                'type': row['transaction_type'],
-            })
-
-    return _all_positions
+def beep():
+    try:
+        if winsound:
+            winsound.Beep(2000, 2000)
+    except Exception:
+        pass
 
 
-def any_active_positions(kite_):
-    # If there are no tagged positions left (qty==0), then no active positions for this strategy
-    positions_live = kite_.positions()
-    day = positions_live.get('day', [])
-
-    # Build a set of tradingsymbols that belong to the tag (from orders)
-    tagged_positions = get_positions_from_orders(kite_)
-    tagged_symbols = {p['tradingsymbol'] for p in tagged_positions}
-
-    # Check only those symbols in live positions
-    tagged_live = [p for p in day if p.get('tradingsymbol') in tagged_symbols and p.get('product') in ('NRML', 'MIS')]
-
-    # If none exist, then no active tagged positions
-    if not tagged_live:
-        return True
-
-    # No active if all are flat (qty==0)
-    return all(p.get('quantity', 0) == 0 for p in tagged_live)
+def _parse_ts(s):
+    """
+    Kite timestamps vary. Parse defensively.
+    Returns naive datetime; ordering still works for same-day strings.
+    """
+    if not s:
+        return datetime.min
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(s, fmt)
+            except Exception:
+                pass
+    return datetime.min
 
 
+def exit_trade(kite, position):
+    kite.place_order(
+        tradingsymbol=position["tradingsymbol"],
+        variety=kite.VARIETY_REGULAR,
+        exchange=position["exchange"],
+        transaction_type=(
+            kite.TRANSACTION_TYPE_BUY
+            if position["type"] == kite.TRANSACTION_TYPE_SELL
+            else kite.TRANSACTION_TYPE_SELL
+        ),
+        quantity=position["quantity"],
+        order_type=kite.ORDER_TYPE_MARKET,
+        product=position["product"],
+        tag=oUtils.SS_ORDER_TAG,
+    )
 
-if __name__ == '__main__':
-    MAX_PROFIT = 2000
-    max_loss = -4000
-    MAX_PROFIT_EROSION = 4000
-    sleep_time = 2
-    max_profit_set = None
-    # second_trade_execute = False
 
-    indian_timezone = pytz.timezone('Asia/Calcutta')
+def _get_live_pos_map(kite):
+    """
+    Map tradingsymbol -> live position row (day positions).
+    """
+    pos = kite.positions()
+    day = pos.get("day", [])
+    mp = {}
+    for p in day:
+        ts = p.get("tradingsymbol")
+        if ts:
+            mp[ts] = p
+    return mp
 
+
+def _get_tagged_orders(kite):
+    """
+    Return tagged orders (OPEN/COMPLETE) for MIS/NRML regular variety.
+    """
+    out = []
+    try:
+        for o in kite.orders():
+            if (
+                o.get("product") in ("NRML", "MIS")
+                and o.get("variety") == "regular"
+                and str(o.get("tag", "")) == str(oUtils.SS_ORDER_TAG)
+                and o.get("status") in ("OPEN", "COMPLETE")
+            ):
+                # Must have some fill, otherwise avg price is junk
+                filled = int(o.get("filled_quantity") or 0)
+                if filled > 0:
+                    out.append(o)
+    except Exception:
+        pass
+
+    # Sort by exchange_timestamp/order_timestamp for consistent "latest"
+    out.sort(key=lambda x: _parse_ts(x.get("exchange_timestamp") or x.get("order_timestamp")))
+    return out
+
+
+def pick_latest_open_straddle_from_orders(kite, max_leg_gap_sec=180):
+    """
+    OLD-STYLE selection rule, but corrected:
+    - Choose latest SELL-SELL CE+PE pair from ORDERS (tagged)
+    - Ensure BOTH legs are OPEN in live positions (qty != 0 and net short)
+      so we never compute PNL from a closed straddle.
+
+    Returns:
+      (positions, key)
+      positions = [ {exchange, tradingsymbol, quantity, price, product, type}, ... ]  (2 legs)
+      key = tuple identifying the straddle attempt
+    """
+    orders = _get_tagged_orders(kite)
+    if not orders:
+        return [], None
+
+    live = _get_live_pos_map(kite)
+
+    # Iterate from newest to oldest to find the "latest straddle" by latest orders
+    for i in range(len(orders) - 1, -1, -1):
+        o1 = orders[i]
+        if o1.get("transaction_type") != kite.TRANSACTION_TYPE_SELL:
+            continue
+
+        sym1 = o1.get("tradingsymbol")
+        if not sym1 or not (sym1.endswith("CE") or sym1.endswith("PE")):
+            continue
+
+        base = sym1[:-2]
+        sym2 = base + ("PE" if sym1.endswith("CE") else "CE")
+
+        # Find the most recent SELL order for the other leg *before or around* this time
+        t1 = _parse_ts(o1.get("exchange_timestamp") or o1.get("order_timestamp"))
+        o2 = None
+        t2 = None
+
+        for j in range(i - 1, -1, -1):
+            cand = orders[j]
+            if cand.get("transaction_type") != kite.TRANSACTION_TYPE_SELL:
+                continue
+            if cand.get("tradingsymbol") != sym2:
+                continue
+            t2 = _parse_ts(cand.get("exchange_timestamp") or cand.get("order_timestamp"))
+            o2 = cand
+            break
+
+        if not o2:
+            continue
+
+        # Guard against pairing with an older attempt (same symbol reused)
+        if abs((t1 - t2).total_seconds()) > max_leg_gap_sec:
+            continue
+
+        # Validate BOTH legs are OPEN and SHORT in live positions (exclude closed straddles)
+        p1 = live.get(sym1)
+        p2 = live.get(sym2)
+        if not p1 or not p2:
+            continue
+
+        q1 = int(p1.get("quantity", 0))
+        q2 = int(p2.get("quantity", 0))
+        if q1 == 0 or q2 == 0:
+            continue
+
+        # Must be net short for a short straddle
+        if q1 > 0 or q2 > 0:
+            continue
+
+        # Build positions using:
+        # - entry price from latest SELL orders (avg price)
+        # - quantity from LIVE positions (abs net qty) so exit qty is correct
+        pos = [
+            {
+                "exchange": p1["exchange"],
+                "tradingsymbol": sym1,
+                "quantity": abs(q1),
+                "price": float(o1.get("average_price") or 0.0),
+                "product": p1["product"],
+                "type": kite.TRANSACTION_TYPE_SELL,
+            },
+            {
+                "exchange": p2["exchange"],
+                "tradingsymbol": sym2,
+                "quantity": abs(q2),
+                "price": float(o2.get("average_price") or 0.0),
+                "product": p2["product"],
+                "type": kite.TRANSACTION_TYPE_SELL,
+            },
+        ]
+
+        # Stable key: base + both entry timestamps + symbols
+        key = (
+            base,
+            sym1,
+            sym2,
+            (o1.get("exchange_timestamp") or o1.get("order_timestamp") or ""),
+            (o2.get("exchange_timestamp") or o2.get("order_timestamp") or ""),
+        )
+
+        # Ensure consistent ordering CE then PE for printing
+        pos.sort(key=lambda d: d["tradingsymbol"])
+        return pos, key
+
+    return [], None
+
+
+if __name__ == "__main__":
+    # === HONOR THESE EXACTLY ===
+    MAX_PROFIT = 10000
+    MAX_LOSS = -5000
+    MAX_PROFIT_EROSION = 10000
+
+    max_profit_set = None  # e.g. 14500.0 if restarting and you already saw peak profit ~14500
+
+    BASE_SLEEP = 2.0
+    FAST_SLEEP = 0.75  # don't hammer API
+
+    indian_timezone = pytz.timezone("Asia/Calcutta")
     kite = oUtils.intialize_kite_api()
-    UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL, NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS, MIN_LOTS, LONG_STRADDLE_STRIKE_DISTANCE = oUtils.get_instruments(kite)
-    PART_SYMBOL = PART_SYMBOL.replace(':', '')
-    under_lying_symbol = UNDER_LYING_EXCHANGE + UNDERLYING
 
-    # print(kite.positions())
-    #
-    # exit(0)
+    # Keep your bootstrap (your utils may rely on it)
+    (
+        UNDER_LYING_EXCHANGE,
+        UNDERLYING,
+        OPTIONS_EXCHANGE,
+        PART_SYMBOL,
+        NO_OF_LOTS,
+        STRIKE_MULTIPLE,
+        STOPLOSS_POINTS,
+        MIN_LOTS,
+        LONG_STRADDLE_STRIKE_DISTANCE,
+    ) = oUtils.get_instruments(kite)
 
-    # positions = kite.positions()
-
-#     positions = [{'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY25APR55300PE', 'quantity': 120, 'price': 82.525, 'product': 'NRML', 'type': 'SELL'},
-# {'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY25APR55300CE', 'quantity': 120, 'price': 148.6875, 'product': 'NRML', 'type': 'SELL'}]
-#
-#     [{'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY25APR55300PE', 'quantity': 120, 'price': 82.525, 'product': 'NRML', 'type': 'SELL'}, {'exchange': 'NFO', 'tradingsymbol': 'BANKNIFTY25APR55300CE', 'quantity': 120, 'price': 148.6875, 'product': 'NRML', 'type': 'SELL'}]
-
-    all_positions = get_positions_from_orders(kite)
-    positions = all_positions[-2:]
-
-    print(positions)
-
-    # positions = [{'exchange': 'BFO', 'tradingsymbol': 'SENSEX2560381300PE', 'quantity': 100, 'price': 587.78, 'product': 'NRML', 'type': 'SELL'}, {'exchange': 'BFO', 'tradingsymbol': 'SENSEX2560381300CE', 'quantity': 100, 'price': 547.95, 'product': 'NRML', 'type': 'SELL'}]
-
+    current_key = None
+    positions = []
     symbols = []
-    for position in positions:
-        if position['price'] != 0:
-            symbols.append(position['exchange'] + ':' + position['tradingsymbol'])
 
-    max_pl = 0
-    min_pl = 0
+    max_pl = 0.0
+    min_pl = 0.0
+    sleep_time = BASE_SLEEP
 
-    if len(symbols) == 0:
-        print(f"No active position. Hence exiting.")
-        exit(0)
-
-    oUtils.cancel_all_open_orders(kite)
+    print(f"CONFIG: MAX_PROFIT={MAX_PROFIT} MAX_LOSS={MAX_LOSS} MAX_PROFIT_EROSION={MAX_PROFIT_EROSION}")
 
     while True:
         try:
+            now = datetime.now(indian_timezone)
+            now_t = now.time()
 
-            if datetime.now(indian_timezone).time() > oUtils.MARKET_END_TIME:
-                print(f"Market is closed. Hence exiting.")
-                exit(0)
-
-            if any_active_positions(kite):
-                print("No active positions.")
+            if now_t > oUtils.MARKET_END_TIME:
+                print("Market is closed. Exiting tracker.")
                 break
 
-            live_quotes = kite.quote(symbols)
+            # Re-pick latest OPEN straddle using latest orders, ignoring closed ones
+            new_positions, new_key = pick_latest_open_straddle_from_orders(kite)
 
+            if not new_positions:
+                print("No OPEN tagged short straddle found (latest may be closed).")
+                break
 
-            net_pl = 0
+            # Reset tracking when a new straddle attempt is detected
+            if new_key != current_key:
+                current_key = new_key
+                positions = new_positions
+                symbols = [p["exchange"] + ":" + p["tradingsymbol"] for p in positions]
+                max_pl = 0.0
+                min_pl = 0.0
+                print(f"Tracking latest OPEN straddle (orders-based): {symbols}")
 
-            for position in positions:
-                if position['type'] == kite.TRANSACTION_TYPE_SELL:
-                    position ['pl'] =  ((position['price'] - live_quotes[position['exchange'] + ':' + position['tradingsymbol']]['last_price']) * position['quantity'])
-                else:
-                    position['pl'] = ((live_quotes[position['exchange'] + ':' + position['tradingsymbol']]['last_price'] -
-                                position['price']) * position['quantity'])
+            # LTP fetch (lighter than quote)
+            ltp_map = kite.ltp(symbols)
 
-                net_pl += position['pl']
+            net_pl = 0.0
+            for p in positions:
+                key = p["exchange"] + ":" + p["tradingsymbol"]
+                ltp = float(ltp_map[key]["last_price"])
+                entry = float(p["price"])
+                qty = int(p["quantity"])
 
-            if net_pl > 0 and net_pl > max_pl:
+                # short P/L
+                p["pl"] = (entry - ltp) * qty
+                net_pl += p["pl"]
+
+            if net_pl > max_pl:
                 max_pl = net_pl
 
-            if net_pl < 0 and net_pl < min_pl:
+            if max_profit_set is not None and float(max_profit_set) > max_pl:
+                max_pl = float(max_profit_set)
+
+            if net_pl < min_pl:
                 min_pl = net_pl
 
-            if max_pl > 5000:
-                if max_loss < 0:
-                    max_loss = 0
-            elif max_pl > 10000:
-                if max_loss < 7000:
-                    max_loss = 7000
+            drawdown = max_pl - net_pl
 
-            print(f"Net P/L: {net_pl}. Maximum Profit: {max_pl}. Maximum Loss: {min_pl} at {datetime.now(indian_timezone).time()}.")
-
-            if min_pl < (max_loss * .5):
-                sleep_time = .5
-            elif min_pl < (max_loss * .8):
-                sleep_time = .25
-
-            if max_profit_set and max_profit_set > max_pl:
-                max_pl = max_profit_set
-
-            if net_pl >= MAX_PROFIT:
-
-                for position in positions:
-                    # if position['pl'] < 0 and position['price'] != 0:
-                    exit_trade(position)
-                    print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
-                winsound.Beep(2000, 2000)
-
-                oUtils.cancel_all_open_orders(kite)
-
-                break
-
-            elif net_pl <= max_loss or (max_pl - net_pl) > MAX_PROFIT_EROSION:
-
-                for position in positions:
-                    # if position['pl'] < 0 and position['price'] != 0:
-                    exit_trade(position)
-                    print(f"Position of instrument {position['tradingsymbol']} exited at p/l {position['pl']} at {datetime.now(indian_timezone).time()}.")
-                winsound.Beep(2000, 2000)
-
-                oUtils.cancel_all_open_orders(kite)
-
-                break
-
+            # Sleep tuning (based on CURRENT net_pl, not min_pl history)
+            if net_pl <= (MAX_LOSS * 0.9):      # <= -4500
+                sleep_time = FAST_SLEEP
+            elif net_pl <= (MAX_LOSS * 0.6):    # <= -3000
+                sleep_time = 1.0
             else:
-                tm.sleep(sleep_time)
+                sleep_time = BASE_SLEEP
+
+            # Exit logic (ONLY these)
+            exit_reason = None
+            if net_pl >= MAX_PROFIT:
+                exit_reason = "MAX_PROFIT"
+            elif net_pl <= MAX_LOSS:
+                exit_reason = "STOPLOSS"
+            elif max_pl > 0 and drawdown >= MAX_PROFIT_EROSION:
+                exit_reason = "MAX_PROFIT_EROSION"
+
+            print(
+                f"Net P/L={net_pl:.2f} | Peak={max_pl:.2f} | Min={min_pl:.2f} | "
+                f"Drawdown={drawdown:.2f} | MAX_PROFIT={MAX_PROFIT} | {now_t}"
+            )
+
+            if exit_reason:
+                print(
+                    f"EXIT_TRIGGER={exit_reason} | net_pl={net_pl:.2f} | peak={max_pl:.2f} | drawdown={drawdown:.2f}"
+                )
+
+                # IMPORTANT: re-check live positions once more and exit only if still open
+                live_map = _get_live_pos_map(kite)
+                for p in positions:
+                    lp = live_map.get(p["tradingsymbol"])
+                    if not lp:
+                        continue
+                    q = int(lp.get("quantity", 0))
+                    if q == 0:
+                        continue
+                    # adjust to true open qty
+                    p["quantity"] = abs(q)
+                    p["product"] = lp["product"]
+                    p["exchange"] = lp["exchange"]
+                    p["type"] = kite.TRANSACTION_TYPE_SELL if q < 0 else kite.TRANSACTION_TYPE_BUY
+                    exit_trade(kite, p)
+                    print(f"Exited {p['tradingsymbol']} | leg P/L={p.get('pl', 0.0):.2f}")
+
+                beep()
+
+                # Optional: match your old behavior
+                # oUtils.cancel_all_open_orders(kite)
+
+                break
+
+            tm.sleep(sleep_time)
 
         except Exception as e:
-            # This will catch any exception and print the error message
             print(f"An error occurred: {e}")
-            tm.sleep(2)
+            tm.sleep(2.0)
             continue

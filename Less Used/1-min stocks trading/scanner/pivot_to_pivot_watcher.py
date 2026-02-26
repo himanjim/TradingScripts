@@ -50,7 +50,7 @@ from bisect import bisect_right
 TZ = pytz.timezone("Asia/Kolkata")
 
 # Folder where your writer stores cache_YYYY-MM-DD.sqlite
-CACHE_DIR = "./live_cache"
+CACHE_DIR = "live_cache"
 
 # If you want to hardcode a DB path, set it here. If None, auto-picks latest cache_*.sqlite
 DB_PATH = None

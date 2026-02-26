@@ -52,7 +52,7 @@ DATA_LAG_REF_SWITCH_MIN = 2  # if DB lag > this, use end_ts as ref time for fres
 
 PLOTLY_JS_MODE = "inline"
 
-INSTRUMENTS_CACHE_DIR = "../Trading_2024/1-min stocks trading/kite_instruments_cache"
+INSTRUMENTS_CACHE_DIR = "1-min stocks trading/kite_instruments_cache"
 INSTRUMENTS_CACHE_TTL_DAYS = 7
 
 CPR_PIVOTS_JSON = "cpr_pivots.json"

@@ -9,7 +9,7 @@ import pandas as pd
 
 # ================== USER CONFIG ==================
 
-PARQUET_DIR = "../Trading_2024/1-min stocks trading/stock_history_parquet"
+PARQUET_DIR = "1-min stocks trading/stock_history_parquet"
 OUTPUT_CSV  = "daily_max_gap_open.csv"
 
 # Time interpretation of stored parquet timestamps:
