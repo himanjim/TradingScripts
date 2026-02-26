@@ -309,7 +309,7 @@ if __name__ == "__main__":
 
             if exit_reason:
                 print(
-                    f"EXIT_TRIGGER={exit_reason} | net_pl={net_pl:.2f} | peak={max_pl:.2f} | drawdown={drawdown:.2f}"
+                    f"EXIT_TRIGGER={exit_reason} | net_pl={net_pl:.2f} | peak={max_pl:.2f} | drawdown={drawdown:.2f} | MAX_PROFIT={MAX_PROFIT}"
                 )
 
                 # IMPORTANT: re-check live positions once more and exit only if still open
