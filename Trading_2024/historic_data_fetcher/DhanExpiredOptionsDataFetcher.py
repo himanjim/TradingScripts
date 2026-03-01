@@ -22,7 +22,7 @@ OUT_DIR = os.getenv(
 BATCH_EXPIRIES = int(os.getenv("DHAN_BATCH_EXPIRIES", "2"))
 
 # How far back to generate scheduled expiries
-LOOKBACK_DAYS = int(os.getenv("DHAN_LOOKBACK_DAYS", str(365 * 2)))  # default 2 years
+LOOKBACK_DAYS = int(os.getenv("DHAN_LOOKBACK_DAYS", str(365 * 4)))  # default 2 years
 
 # If the scheduled expiry is a holiday, try shifting back up to this many days
 MAX_SHIFT_BACK_DAYS = int(os.getenv("DHAN_MAX_SHIFT_BACK_DAYS", "7"))
@@ -45,7 +45,7 @@ IDX_I_URL = "https://api.dhan.co/v2/instrument/IDX_I"
 # -----------------------------------------------------------------------------
 # Credentials
 # -----------------------------------------------------------------------------
-ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzcyMjUwNzE2LCJpYXQiOjE3NzIxNjQzMTYsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.KmDhXJiK3lemNmsy_PFv9mxGpmVDW9csAnb_hLO07313dW6F7Mx2nmwH_W51o7-XgtlKfLGurW-_8Mgj-erDbQ").strip()
+ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzcyNDU2NDU0LCJpYXQiOjE3NzIzNzAwNTQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.HShyRcsQuuB7e1LRGDP0HqA9POB_d0-joXIZH_xWPYGut99A-bDIHas4Ce1z0L-IKkImqrl40GO-zw6DNSnMAA").strip()
 if not ACCESS_TOKEN:
     raise SystemExit("Missing DHAN_ACCESS_TOKEN env var.")
 
@@ -85,7 +85,11 @@ EXPIRY_CODE = int(os.getenv("DHAN_EXPIRY_CODE", "1"))
 #   NIFTY weekly: Thu -> Tue after CUTOVER
 #   SENSEX weekly: Tue -> Thu after CUTOVER
 # -----------------------------------------------------------------------------
-CUTOVER = date(2025, 9, 1)
+NIFTY_CUTOVER = date(2025, 9, 1)      # Thu -> Tue (Sep 2025)
+SENSEX_CUTOVER_1 = date(2025, 1, 1)   # Fri -> Tue (Jan 2025)
+SENSEX_CUTOVER_2 = date(2025, 9, 1)   # Tue -> Thu (Sep 2025)
+
+SENSEX_WEEKLY_START = date(2023, 5, 1)  # to avoid useless 2022 scheduling
 
 WEEKDAY_RULES = {
     "NIFTY": {
@@ -186,8 +190,17 @@ def _week_monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 def _nifty_or_sensex_expiry_weekday(sym: str, week_start_monday: date) -> int:
-    rule = WEEKDAY_RULES[sym]
-    return rule["weekday_pre"] if week_start_monday < CUTOVER else rule["weekday_post"]
+    if sym == "NIFTY":
+        return 3 if week_start_monday < NIFTY_CUTOVER else 1  # Thu -> Tue
+
+    if sym == "SENSEX":
+        if week_start_monday < SENSEX_CUTOVER_1:
+            return 4  # Fri (May 2023–Dec 2024)
+        if week_start_monday < SENSEX_CUTOVER_2:
+            return 1  # Tue (Jan 2025–Aug 2025)
+        return 3      # Thu (Sep 2025+)
+
+    raise KeyError(sym)
 
 def _generate_scheduled_weekly_expiries(sym: str, start: date, end: date) -> List[date]:
     """
@@ -253,7 +266,11 @@ def _post_json(
     for attempt in range(retries):
         r = session.post(url, headers=headers, json=payload, timeout=60)
         if r.status_code == 200:
-            return r.json()
+            j_ok = r.json()
+            if isinstance(j_ok, dict):
+                if j_ok.get("status") == "failed" or j_ok.get("errorCode"):
+                    raise RuntimeError(f"HTTP 200 but failed payload: {j_ok}")
+            return j_ok
 
         # Try to parse an error response
         try:
@@ -318,7 +335,7 @@ def _json_to_df(
 
     # ---- Time conversions (readable) ----
     # dt_ist: timezone-aware datetime in Asia/Kolkata
-    dt_utc = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+    dt_utc = pd.to_datetime(df["timestamp"], unit="s", utc=True, errors="coerce")
     df["dt_ist"] = dt_utc.dt.tz_convert(TIMEZONE_IST)
 
     # Additional "readable" column explicitly requested:
@@ -525,7 +542,8 @@ def main():
         cfg = cfgs[sym]
 
         # Scheduled expiries are generated deterministically by weekday rules
-        scheduled = _generate_scheduled_weekly_expiries(sym, start, end)
+        start_eff = max(start, SENSEX_WEEKLY_START) if sym == "SENSEX" else start
+        scheduled = _generate_scheduled_weekly_expiries(sym, start_eff, end)
 
         # Batch them into files
         batches = _batch_pairs(scheduled, BATCH_EXPIRIES)
@@ -601,6 +619,7 @@ def main():
             os.replace(tmp_path, out_path)
 
             print(f"[OK] wrote {out_name} rows={len(out_df)} actual_expiries={actual_expiries}")
+
 
 if __name__ == "__main__":
     main()
