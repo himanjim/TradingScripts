@@ -29,18 +29,18 @@ except Exception:
 # USER CONFIG
 # =============================================================================
 PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"            # <-- change
-ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "10:00")  # "HH:MM"
+ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:30")  # "HH:MM"
 
 def _safe_fname_part(s: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in s)
 
 LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "5000"))
-PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "5000"))
+PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "10000"))
 MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "1"))  # 1 = only one re-entry
 # Re-entry delay after exit (minutes). Default 1 to avoid same-candle re-entry.
 REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "1"))
 
-_DEFAULT_OUT = rf"C:\Users\himan\Downloads\short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}_LL_{_safe_fname_part(str(LOSS_LIMIT_RUPEES))}_PPT_{_safe_fname_part(str(PROFIT_PROTECT_TRIGGER_RUPEES))}_RDM_{_safe_fname_part(str(REENTRY_DELAY_MINUTES))}.xlsx"
+_DEFAULT_OUT = rf"C:\Users\Local User\Downloads\short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}_LL_{_safe_fname_part(str(LOSS_LIMIT_RUPEES))}_PPT_{_safe_fname_part(str(PROFIT_PROTECT_TRIGGER_RUPEES))}_RDM_{_safe_fname_part(str(REENTRY_DELAY_MINUTES))}.xlsx"
 OUTPUT_XLSX = os.getenv("OUTPUT_XLSX", _DEFAULT_OUT)  # if overriding with Windows path, use raw string or \\
 
 FAIL_ON_PICKLE_ERROR = os.getenv("FAIL_ON_PICKLE_ERROR", "0").strip() == "1"
@@ -316,12 +316,14 @@ def _pick_symbol(day_opt: pd.DataFrame, strike: int, opt_type: str) -> Optional[
     syms = sorted(sub["instrument"].astype(str).unique().tolist())
     return syms[0] if syms else None
 
-def _build_leg_series(day_opt: pd.DataFrame, idx_all: pd.DatetimeIndex, strike: int, opt_type: str, symbol: str) -> pd.Series:
+def _build_leg_series(day_opt: pd.DataFrame, idx_all: pd.DatetimeIndex,
+                      strike: int, opt_type: str, symbol: str,
+                      price_col: str = "close") -> pd.Series:
     sub = day_opt[
         (day_opt["strike_int"] == strike) &
         (day_opt["option_type"] == opt_type) &
         (day_opt["instrument"].astype(str) == symbol)
-    ][["date", "close"]].dropna()
+    ][["date", price_col]].dropna()
 
     if sub.empty:
         return pd.Series(index=idx_all, dtype="float64")
@@ -329,7 +331,7 @@ def _build_leg_series(day_opt: pd.DataFrame, idx_all: pd.DatetimeIndex, strike: 
     sub = sub.copy()
     sub["date"] = ensure_ist(sub["date"])
     sub = sub.sort_values("date").drop_duplicates(subset=["date"], keep="last").set_index("date")
-    s = sub["close"].astype(float).reindex(idx_all).ffill()
+    s = sub[price_col].astype(float).reindex(idx_all).ffill()
     return s
 
 def simulate_day_multi_trades(
@@ -372,23 +374,42 @@ def simulate_day_multi_trades(
                             "atm_strike": atm, "reason": "ATM CE/PE not available in pickle band"})
             break
 
-        ce_s = _build_leg_series(day_opt, idx_all, atm, "CE", ce_sym)
-        pe_s = _build_leg_series(day_opt, idx_all, atm, "PE", pe_sym)
+        # Close series (used for entry pricing, profit-protect tracking, and reporting)
+        ce_close = _build_leg_series(day_opt, idx_all, atm, "CE", ce_sym, "close")
+        pe_close = _build_leg_series(day_opt, idx_all, atm, "PE", pe_sym, "close")
+
+        # High/Low series (used only to detect STOPLOSS intraminute extremes)
+        ce_high = _build_leg_series(day_opt, idx_all, atm, "CE", ce_sym, "high")
+        ce_low = _build_leg_series(day_opt, idx_all, atm, "CE", ce_sym, "low")
+        pe_high = _build_leg_series(day_opt, idx_all, atm, "PE", pe_sym, "high")
+        pe_low = _build_leg_series(day_opt, idx_all, atm, "PE", pe_sym, "low")
 
         if cur_entry_ts not in idx_all:
             skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
                             "reason": "Entry timestamp not in session index"})
             break
 
-        ce_entry = ce_s.loc[cur_entry_ts]
-        pe_entry = pe_s.loc[cur_entry_ts]
+        ce_entry = ce_close.loc[cur_entry_ts]
+        pe_entry = pe_close.loc[cur_entry_ts]
         if pd.isna(ce_entry) or pd.isna(pe_entry):
             skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
                             "atm_strike": atm, "reason": "No CE/PE price at entry (after ffill)"})
             break
 
-        pnl_all = (float(ce_entry) - ce_s) * qty + (float(pe_entry) - pe_s) * qty
-        pnl = pnl_all.loc[cur_entry_ts:].dropna()
+        # Close-based PnL (same as before)
+        pnl_close_all = (float(ce_entry) - ce_close) * qty + (float(pe_entry) - pe_close) * qty
+        pnl = pnl_close_all.loc[cur_entry_ts:].dropna()  # keep 'pnl' as close-based for profit-protect
+
+        # STOPLOSS worst-case PnL candidates within each minute:
+        #  A) CE high, PE low
+        pnl_ceHigh_peLow_all = (float(ce_entry) - ce_high) * qty + (float(pe_entry) - pe_low) * qty
+        #  B) CE low, PE high
+        pnl_ceLow_peHigh_all = (float(ce_entry) - ce_low) * qty + (float(pe_entry) - pe_high) * qty
+
+        # Worst-case PnL per minute among (close, A, B)
+        pnl_sl_all = pd.concat([pnl_close_all, pnl_ceHigh_peLow_all, pnl_ceLow_peHigh_all], axis=1).min(axis=1)
+        pnl_sl = pnl_sl_all.loc[cur_entry_ts:].dropna()
+
         if pnl.empty:
             skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
                             "atm_strike": atm, "reason": "PnL series empty after entry"})
@@ -400,8 +421,8 @@ def simulate_day_multi_trades(
         max_profit = float(max(0.0, pnl.max()))
         max_loss = float(min(0.0, pnl.min()))
 
-        stop_hit = pnl <= -LOSS_LIMIT_RUPEES
-        stop_ts = pnl.index[stop_hit.to_numpy().argmax()] if stop_hit.any() else None
+        stop_hit = pnl_sl <= -LOSS_LIMIT_RUPEES
+        stop_ts = pnl_sl.index[stop_hit.to_numpy().argmax()] if stop_hit.any() else None
 
         protect_ts = None
         if profit_protect_enabled:
@@ -427,8 +448,8 @@ def simulate_day_multi_trades(
 
         exit_pnl = float(pnl.loc[exit_ts])
 
-        exit_ce = float(ce_s.loc[exit_ts]) if pd.notna(ce_s.loc[exit_ts]) else float("nan")
-        exit_pe = float(pe_s.loc[exit_ts]) if pd.notna(pe_s.loc[exit_ts]) else float("nan")
+        exit_ce = float(ce_close.loc[exit_ts]) if pd.notna(ce_close.loc[exit_ts]) else float("nan")
+        exit_pe = float(pe_close.loc[exit_ts]) if pd.notna(pe_close.loc[exit_ts]) else float("nan")
 
         dte = int((expiry - dy).days)
 
@@ -493,7 +514,7 @@ def process_pickles_generate_trades(
             if not isinstance(df, pd.DataFrame) or df.empty:
                 continue
 
-            needed_cols = ["date", "name", "type", "option_type", "strike", "expiry", "instrument", "close"]
+            needed_cols = ["date", "name", "type", "option_type", "strike", "expiry", "instrument", "high", "low", "close"]
             missing = [c for c in needed_cols if c not in df.columns]
             if missing:
                 raise ValueError(f"Missing columns {missing} in {p}")

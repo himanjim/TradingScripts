@@ -60,7 +60,7 @@ ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:20")  # HH:MM
 # Defaults chosen to roughly match old fixed values:
 #   If premium_sum_rupees ~ 50,000 => SL 10% ≈ 5,000
 #   If premium_sum_rupees ~ 55,000 => PP 18% ≈ 9,900 ~ 10,000
-LOSS_LIMIT_PCT = float(os.getenv("LOSS_LIMIT_PCT", "0.20"))                  # 10% of premium sum (rupees)
+LOSS_LIMIT_PCT = float(os.getenv("LOSS_LIMIT_PCT", "0.20"))                  # 20% of premium sum (rupees)
 PROFIT_PROTECT_TRIGGER_PCT = float(os.getenv("PROFIT_PROTECT_TRIGGER_PCT", "0.3"))  # 18% of premium sum (rupees)
 MAX_STOPLOSS_RUPEES = abs(float(os.getenv("MAX_STOPLOSS_RUPEES", "5000")))
 
@@ -97,7 +97,7 @@ DEDUP_ACROSS_PICKLES = os.getenv("DEDUP_ACROSS_PICKLES", "1").strip() not in ("0
 def _safe_fname_part(s: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in s)
 
-_DEFAULT_OUT = rf"C:\Users\himan\Downloads\dhan_short_straddle_backtest_reattempt_{_safe_fname_part(ENTRY_TIME_IST)}_LL_{LOSS_LIMIT_PCT}_PPT_{PROFIT_PROTECT_TRIGGER_PCT}_RDM_{REENTRY_DELAY_MINUTES}_MSR_{MAX_STOPLOSS_RUPEES}_MR_{MAX_REATTEMPTS}.xlsx"
+_DEFAULT_OUT = rf"C:\Users\Local User\Downloads\dhan_short_straddle_backtest_reattempt_{_safe_fname_part(ENTRY_TIME_IST)}_LL_{LOSS_LIMIT_PCT}_PPT_{PROFIT_PROTECT_TRIGGER_PCT}_RDM_{REENTRY_DELAY_MINUTES}_MSR_{MAX_STOPLOSS_RUPEES}_MR_{MAX_REATTEMPTS}.xlsx"
 OUTPUT_XLSX = os.getenv("OUTPUT_XLSX", _DEFAULT_OUT)
 
 
@@ -248,12 +248,18 @@ def _normalize_dhan_df(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
     d["strike_int"] = d["strike_num"].round().astype("Int64")
 
     d["close_f"] = pd.to_numeric(d["close"], errors="coerce")
+    # If some old pickles lack high/low, fall back to close
+    d["high_f"] = pd.to_numeric(d["high"] if "high" in d.columns else d["close"], errors="coerce")
+    d["low_f"] = pd.to_numeric(d["low"] if "low" in d.columns else d["close"], errors="coerce")
     d["spot_f"] = pd.to_numeric(d["spot"], errors="coerce")
+
+    d["high_f"] = d["high_f"].fillna(d["close_f"])
+    d["low_f"] = d["low_f"].fillna(d["close_f"])
 
     d["leg"] = d["leg"].astype(str).str.upper().str.strip()
     d = d[d["leg"].isin(["CE", "PE"])]
 
-    d = d.dropna(subset=["ts", "day", "expiry", "strike_int", "close_f", "spot_f"])
+    d = d.dropna(subset=["ts", "day", "expiry", "strike_int", "close_f", "high_f", "low_f", "spot_f"])
     d["strike_int"] = d["strike_int"].astype(int)
     d["close_f"] = d["close_f"].astype(float)
     d["spot_f"] = d["spot_f"].astype(float)
@@ -268,7 +274,7 @@ def _normalize_dhan_df(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
             keep="last"
         )
 
-    keep = ["ts", "day", "underlying", "expiry", "leg", "strike_int", "close_f", "spot_f"]
+    keep = ["ts", "day", "underlying", "expiry", "leg", "strike_int", "close_f", "high_f", "low_f", "spot_f"]
     return d[keep].copy()
 
 
@@ -283,13 +289,19 @@ def _build_underlying_series_from_spot(day_opt: pd.DataFrame, idx_all: pd.Dateti
     sub = sub.sort_values("ts").groupby("ts", as_index=True)["spot_f"].last()
     return sub.reindex(idx_all).ffill()
 
-def _build_leg_series_fixed_strike(day_opt: pd.DataFrame, idx_all: pd.DatetimeIndex, strike: int, leg: str) -> pd.Series:
-    """Collapse close_f to one value per minute for (strike, leg) and forward-fill across the session."""
-    sub = day_opt[(day_opt["strike_int"] == strike) & (day_opt["leg"] == leg)][["ts", "close_f"]].dropna()
+def _build_leg_series_fixed_strike(
+    day_opt: pd.DataFrame,
+    idx_all: pd.DatetimeIndex,
+    strike: int,
+    leg: str,
+    value_col: str = "close_f",
+) -> pd.Series:
+    sub = day_opt[(day_opt["strike_int"] == strike) & (day_opt["leg"] == leg)][["ts", value_col]].dropna()
     if sub.empty:
         return pd.Series(index=idx_all, dtype="float64")
-    sub = sub.sort_values("ts").groupby("ts", as_index=True)["close_f"].last()
+    sub = sub.sort_values("ts").groupby("ts", as_index=True)[value_col].last()
     return sub.reindex(idx_all).ffill()
+
 
 def _missing_streak_minutes(s: pd.Series) -> int:
     """Max consecutive NaN streak length in minutes."""
@@ -352,11 +364,18 @@ def simulate_day_multi_trades_dhan(
 
         atm = round_to_step(float(u_px), step)
 
-        ce_s = _build_leg_series_fixed_strike(day_opt, idx_all, atm, "CE")
-        pe_s = _build_leg_series_fixed_strike(day_opt, idx_all, atm, "PE")
+        # Close series (entry pricing, profit-protect tracking, reporting)
+        ce_close = _build_leg_series_fixed_strike(day_opt, idx_all, atm, "CE", "close_f")
+        pe_close = _build_leg_series_fixed_strike(day_opt, idx_all, atm, "PE", "close_f")
 
-        ce_entry = ce_s.loc[cur_entry_ts]
-        pe_entry = pe_s.loc[cur_entry_ts]
+        # High/Low series (STOPLOSS intraminute extremes)
+        ce_high = _build_leg_series_fixed_strike(day_opt, idx_all, atm, "CE", "high_f")
+        ce_low = _build_leg_series_fixed_strike(day_opt, idx_all, atm, "CE", "low_f")
+        pe_high = _build_leg_series_fixed_strike(day_opt, idx_all, atm, "PE", "high_f")
+        pe_low = _build_leg_series_fixed_strike(day_opt, idx_all, atm, "PE", "low_f")
+
+        ce_entry = ce_close.loc[cur_entry_ts]
+        pe_entry = pe_close.loc[cur_entry_ts]
         if pd.isna(ce_entry) or pd.isna(pe_entry):
             skipped.append({
                 "day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
@@ -383,8 +402,8 @@ def simulate_day_multi_trades_dhan(
         profit_protect_enabled = G > 0
 
         if STRICT_STRIKE_PRESENCE:
-            ce_post = ce_s.loc[cur_entry_ts:]
-            pe_post = pe_s.loc[cur_entry_ts:]
+            ce_post = ce_close.loc[cur_entry_ts:]
+            pe_post = pe_close.loc[cur_entry_ts:]
             max_miss = max(_missing_streak_minutes(ce_post), _missing_streak_minutes(pe_post))
             if max_miss > MAX_MISSING_STREAK_MIN:
                 skipped.append({
@@ -396,8 +415,14 @@ def simulate_day_multi_trades_dhan(
                 break
 
         # Short straddle MTM PnL series (entry - current) * qty for each leg
-        pnl_all = (float(ce_entry) - ce_s) * qty + (float(pe_entry) - pe_s) * qty
-        pnl = pnl_all.loc[cur_entry_ts:].dropna()
+        pnl_close_all = (float(ce_entry) - ce_close) * qty + (float(pe_entry) - pe_close) * qty
+        pnl = pnl_close_all.loc[cur_entry_ts:].dropna()  # keep close-based pnl for profit protect
+
+        pnl_ceHigh_peLow_all = (float(ce_entry) - ce_high) * qty + (float(pe_entry) - pe_low) * qty
+        pnl_ceLow_peHigh_all = (float(ce_entry) - ce_low) * qty + (float(pe_entry) - pe_high) * qty
+
+        pnl_sl_all = pd.concat([pnl_close_all, pnl_ceHigh_peLow_all, pnl_ceLow_peHigh_all], axis=1).min(axis=1)
+        pnl_sl = pnl_sl_all.loc[cur_entry_ts:].dropna()
         if pnl.empty:
             skipped.append({
                 "day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
@@ -414,8 +439,8 @@ def simulate_day_multi_trades_dhan(
         max_loss = float(min(0.0, pnl.min()))
 
         # STOPLOSS: first time pnl crosses <= -LOSS_LIMIT_RUPEES
-        stop_hit = pnl <= -effective_loss_limit_rupees
-        stop_ts = pnl.index[stop_hit.to_numpy().argmax()] if stop_hit.any() else None
+        stop_hit = pnl_sl <= -effective_loss_limit_rupees
+        stop_ts = pnl_sl.index[stop_hit.to_numpy().argmax()] if stop_hit.any() else None
 
         # PROFIT_PROTECT: arm once peak >= G; then exit when pnl <= peak - G
         protect_ts = None
@@ -444,8 +469,8 @@ def simulate_day_multi_trades_dhan(
         if exit_reason == "STOPLOSS" and exit_pnl < -effective_loss_limit_rupees:
             exit_pnl = -float(effective_loss_limit_rupees)
 
-        exit_ce = float(ce_s.loc[exit_ts]) if pd.notna(ce_s.loc[exit_ts]) else float("nan")
-        exit_pe = float(pe_s.loc[exit_ts]) if pd.notna(pe_s.loc[exit_ts]) else float("nan")
+        exit_ce = float(ce_close.loc[exit_ts]) if pd.notna(ce_close.loc[exit_ts]) else float("nan")
+        exit_pe = float(pe_close.loc[exit_ts]) if pd.notna(pe_close.loc[exit_ts]) else float("nan")
 
         dte = int((expiry - dy).days)
 
@@ -605,6 +630,14 @@ def build_actual_trades_df(all_trades_df: pd.DataFrame) -> pd.DataFrame:
     out["chosen_underlying"] = out["day"].map(chosen)
     out = out[out["underlying"] == out["chosen_underlying"]].drop(columns=["chosen_underlying"])
     out = out.sort_values(["day", "trade_seq", "source_pickle"]).reset_index(drop=True)
+
+    # (2) Keep only Expiry day (D0) and Expiry-1 (D-1) trades in the "actual_trades" output
+    dte = pd.to_numeric(out.get("days_to_expiry"), errors="coerce")
+    out = out[dte.isin([0, 1])].copy()
+
+    # (1) success flag for the "actual_trades" sheet
+    out["success"] = (pd.to_numeric(out["exit_pnl"], errors="coerce") > 0).astype(int)
+
     return out
 
 
