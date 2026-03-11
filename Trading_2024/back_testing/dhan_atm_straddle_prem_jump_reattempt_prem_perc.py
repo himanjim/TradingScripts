@@ -30,7 +30,7 @@ import glob
 from dataclasses import dataclass
 from datetime import datetime, date, time as dtime
 from typing import Dict, List, Tuple, Optional, Any
-
+from pathlib import Path
 import pandas as pd
 
 # Optional timezone backends (works on Windows too)
@@ -60,8 +60,8 @@ ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:40")  # HH:MM
 # Defaults chosen to roughly match old fixed values:
 #   If premium_sum_rupees ~ 50,000 => SL 10% ≈ 5,000
 #   If premium_sum_rupees ~ 55,000 => PP 18% ≈ 9,900 ~ 10,000
-LOSS_LIMIT_PCT = float(os.getenv("LOSS_LIMIT_PCT", "0.25"))                  # 20% of premium sum (rupees)
-PROFIT_PROTECT_TRIGGER_PCT = float(os.getenv("PROFIT_PROTECT_TRIGGER_PCT", "0.33"))  # 18% of premium sum (rupees)
+LOSS_LIMIT_PCT = float(os.getenv("LOSS_LIMIT_PCT", "0.20"))                  # 20% of premium sum (rupees)
+PROFIT_PROTECT_TRIGGER_PCT = float(os.getenv("PROFIT_PROTECT_TRIGGER_PCT", "0.3"))  # 18% of premium sum (rupees)
 MAX_STOPLOSS_RUPEES = abs(float(os.getenv("MAX_STOPLOSS_RUPEES", "3000")))
 
 MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "3"))  # "1" => allow one re-entry
@@ -77,6 +77,21 @@ LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "36"))
 QTY_UNITS = {"NIFTY": 325, "SENSEX": 100}
 TRADEABLE = set(QTY_UNITS.keys())
 STRIKE_STEP = {"NIFTY": 50, "SENSEX": 100}
+
+
+# =============================================================================
+# TRANSACTION CHARGES (Zerodha F&O Options — NSE)
+# =============================================================================
+# Each short-straddle attempt = 4 executed orders (sell CE, sell PE, buy CE, buy PE)
+BROKERAGE_PER_ORDER       = 20.0       # ₹20 flat per executed order
+ORDERS_PER_TRADE          = 4          # sell CE + sell PE + buy CE + buy PE
+STT_SELL_PCT              = 0.001      # 0.1% on sell-side premium
+EXCHANGE_TXN_PCT          = 0.0003553  # 0.03553% on premium (NSE options)
+SEBI_PER_CRORE            = 10.0       # ₹10 per crore of turnover
+STAMP_BUY_PCT             = 0.00003    # 0.003% on buy-side premium
+IPFT_PER_CRORE            = 0.010       # ₹0.01 per crore (on premium)
+GST_PCT                   = 0.18       # 18% on (brokerage + txn charges + SEBI)
+INCLUDE_TRANSACTION_COSTS = True       # set False to disable
 
 # Session boundaries (IST)
 SESSION_START_IST = dtime(9, 15)
@@ -97,7 +112,7 @@ DEDUP_ACROSS_PICKLES = os.getenv("DEDUP_ACROSS_PICKLES", "1").strip() not in ("0
 def _safe_fname_part(s: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in s)
 
-_DEFAULT_OUT = rf"C:\Users\Local User\Downloads\dhan_short_straddle_backtest_reattempt_{_safe_fname_part(ENTRY_TIME_IST)}_LL_{LOSS_LIMIT_PCT}_PPT_{PROFIT_PROTECT_TRIGGER_PCT}_RDM_{REENTRY_DELAY_MINUTES}_MSR_{MAX_STOPLOSS_RUPEES}_MR_{MAX_REATTEMPTS}.xlsx"
+_DEFAULT_OUT = rf"{Path.home()}\Downloads\dhan_short_straddle_backtest_reattempt_{_safe_fname_part(ENTRY_TIME_IST)}_LL_{LOSS_LIMIT_PCT}_PPT_{PROFIT_PROTECT_TRIGGER_PCT}_RDM_{REENTRY_DELAY_MINUTES}_MSR_{MAX_STOPLOSS_RUPEES}_MR_{MAX_REATTEMPTS}.xlsx"
 OUTPUT_XLSX = os.getenv("OUTPUT_XLSX", _DEFAULT_OUT)
 
 
@@ -156,6 +171,53 @@ def round_to_step(x: float, step: int) -> int:
     """Round to nearest strike step (e.g., 50 for NIFTY, 100 for SENSEX)."""
     return int(round(x / step) * step)
 
+# =============================================================================
+# TRANSACTION COST CALCULATOR
+# =============================================================================
+def compute_trade_charges(
+    entry_ce: float, entry_pe: float,
+    exit_ce: float, exit_pe: float,
+    qty: int,
+) -> float:
+    """
+    Compute total Zerodha transaction charges for one short-straddle attempt.
+
+    Entry = SELL CE + SELL PE  (2 orders, sell side)
+    Exit  = BUY  CE + BUY  PE (2 orders, buy side)
+
+    Returns total charges in rupees (always positive).
+    """
+    if not INCLUDE_TRANSACTION_COSTS:
+        return 0.0
+
+    # Turnover values (in rupees)
+    entry_turnover = (entry_ce + entry_pe) * qty   # sell side
+    exit_turnover  = (exit_ce + exit_pe) * qty      # buy side
+    total_turnover = entry_turnover + exit_turnover
+
+    # 1. Brokerage: ₹20 × 4 orders
+    brokerage = BROKERAGE_PER_ORDER * ORDERS_PER_TRADE
+
+    # 2. STT: 0.1% on sell-side premium only (entry for short straddle)
+    stt = entry_turnover * STT_SELL_PCT
+
+    # 3. Exchange transaction charges: 0.03553% on both sides
+    txn_charges = total_turnover * EXCHANGE_TXN_PCT
+
+    # 4. SEBI charges: ₹10 per crore on total turnover
+    sebi = total_turnover * SEBI_PER_CRORE / 1_00_00_000
+
+    # 5. Stamp duty: 0.003% on buy side only (exit for short straddle)
+    stamp = exit_turnover * STAMP_BUY_PCT
+
+    # 6. IPFT: ₹0.01 per crore on premium (both sides)
+    ipft = total_turnover * IPFT_PER_CRORE / 1_00_00_000
+
+    # 7. GST: 18% on (brokerage + transaction charges + SEBI charges)
+    gst = (brokerage + txn_charges + sebi) * GST_PCT
+
+    total_charges = brokerage + stt + txn_charges + sebi + stamp + ipft + gst
+    return round(total_charges, 2)
 
 # =============================================================================
 # OUTPUT STRUCTURE
@@ -182,7 +244,9 @@ class TradeRow:
     exit_ce: float
     exit_pe: float
 
-    exit_pnl: float
+    exit_pnl_gross: float  # P&L before charges
+    txn_charges: float  # total transaction charges for this attempt
+    exit_pnl: float  # net P&L after deducting charges
     eod_pnl: float
     max_profit: float
     max_loss: float
@@ -463,14 +527,23 @@ def simulate_day_multi_trades_dhan(
         elif protect_ts is not None:
             exit_ts, exit_reason = protect_ts, "PROFIT_PROTECT"
 
-        exit_pnl = float(pnl.loc[exit_ts])
+        exit_pnl_gross = float(pnl.loc[exit_ts])
 
         # Cap STOPLOSS exit P/L so it never shows worse than the configured stoploss
-        if exit_reason == "STOPLOSS" and exit_pnl < -effective_loss_limit_rupees:
-            exit_pnl = -float(effective_loss_limit_rupees)
+        if exit_reason == "STOPLOSS" and exit_pnl_gross < -effective_loss_limit_rupees:
+            exit_pnl_gross = -float(effective_loss_limit_rupees)
 
         exit_ce = float(ce_close.loc[exit_ts]) if pd.notna(ce_close.loc[exit_ts]) else float("nan")
         exit_pe = float(pe_close.loc[exit_ts]) if pd.notna(pe_close.loc[exit_ts]) else float("nan")
+
+        # Transaction charges
+        txn_charges = compute_trade_charges(
+            entry_ce=float(ce_entry), entry_pe=float(pe_entry),
+            exit_ce=exit_ce if not pd.isna(exit_ce) else 0.0,
+            exit_pe=exit_pe if not pd.isna(exit_pe) else 0.0,
+            qty=qty,
+        )
+        exit_pnl = exit_pnl_gross - txn_charges
 
         dte = int((expiry - dy).days)
 
@@ -497,6 +570,8 @@ def simulate_day_multi_trades_dhan(
                 entry_pe=float(pe_entry),
                 exit_ce=exit_ce,
                 exit_pe=exit_pe,
+                exit_pnl_gross=exit_pnl_gross,
+                txn_charges=txn_charges,
                 exit_pnl=exit_pnl,
                 eod_pnl=eod_pnl,
                 max_profit=max_profit,

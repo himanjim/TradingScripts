@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import glob
 import time
 from dataclasses import dataclass
@@ -28,20 +29,34 @@ except Exception:
 # =============================================================================
 # USER CONFIG
 # =============================================================================
-PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"            # <-- change
+PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
 ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:30")  # "HH:MM"
 
 def _safe_fname_part(s: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in s)
 
+def _get_downloads_folder() -> str:
+    """
+    Returns the current user's default Downloads folder.
+    Falls back to home directory if Downloads is not found.
+    """
+    downloads = Path.home() / "Downloads"
+    return str(downloads if downloads.exists() else Path.home())
+
 LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "5000"))
 PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "10000"))
 MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "1"))  # 1 = only one re-entry
-# Re-entry delay after exit (minutes). Default 1 to avoid same-candle re-entry.
 REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "1"))
 
-_DEFAULT_OUT = rf"C:\Users\Local User\Downloads\short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}_LL_{_safe_fname_part(str(LOSS_LIMIT_RUPEES))}_PPT_{_safe_fname_part(str(PROFIT_PROTECT_TRIGGER_RUPEES))}_RDM_{_safe_fname_part(str(REENTRY_DELAY_MINUTES))}.xlsx"
-OUTPUT_XLSX = os.getenv("OUTPUT_XLSX", _DEFAULT_OUT)  # if overriding with Windows path, use raw string or \\
+_DEFAULT_OUT = os.path.join(
+    _get_downloads_folder(),
+    f"short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}"
+    f"_LL_{_safe_fname_part(str(LOSS_LIMIT_RUPEES))}"
+    f"_PPT_{_safe_fname_part(str(PROFIT_PROTECT_TRIGGER_RUPEES))}"
+    f"_RDM_{_safe_fname_part(str(REENTRY_DELAY_MINUTES))}.xlsx"
+)
+
+OUTPUT_XLSX = os.getenv("OUTPUT_XLSX", _DEFAULT_OUT)
 
 FAIL_ON_PICKLE_ERROR = os.getenv("FAIL_ON_PICKLE_ERROR", "0").strip() == "1"
 
