@@ -55,17 +55,17 @@ except Exception:
 # =============================================================================
 PICKLES_DIR = os.getenv("DHAN_PICKLES_DIR", r"G:\My Drive\Trading\Dhan_Historical_Options_Data")
 
-ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:20")  # HH:MM
+ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:40")  # HH:MM
 # Risk is a % of the entry premium (CE+PE) in rupees.
 # Defaults chosen to roughly match old fixed values:
 #   If premium_sum_rupees ~ 50,000 => SL 10% ≈ 5,000
 #   If premium_sum_rupees ~ 55,000 => PP 18% ≈ 9,900 ~ 10,000
-LOSS_LIMIT_PCT = float(os.getenv("LOSS_LIMIT_PCT", "0.20"))                  # 20% of premium sum (rupees)
-PROFIT_PROTECT_TRIGGER_PCT = float(os.getenv("PROFIT_PROTECT_TRIGGER_PCT", "0.3"))  # 18% of premium sum (rupees)
-MAX_STOPLOSS_RUPEES = abs(float(os.getenv("MAX_STOPLOSS_RUPEES", "5000")))
+LOSS_LIMIT_PCT = float(os.getenv("LOSS_LIMIT_PCT", "0.25"))                  # 20% of premium sum (rupees)
+PROFIT_PROTECT_TRIGGER_PCT = float(os.getenv("PROFIT_PROTECT_TRIGGER_PCT", "0.33"))  # 18% of premium sum (rupees)
+MAX_STOPLOSS_RUPEES = abs(float(os.getenv("MAX_STOPLOSS_RUPEES", "3000")))
 
-MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "1"))  # "1" => allow one re-entry
-REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "1"))
+MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "3"))  # "1" => allow one re-entry
+REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "14"))
 
 # Window selection:
 # - "data": end_day = max day present in pickles (recommended; avoids empty results when data is old)

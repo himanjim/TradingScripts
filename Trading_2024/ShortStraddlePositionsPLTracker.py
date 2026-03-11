@@ -200,9 +200,9 @@ def pick_latest_open_straddle_from_orders(kite, max_leg_gap_sec=180):
 
 if __name__ == "__main__":
     # === HONOR THESE EXACTLY ===
-    MAX_PROFIT = 10000
-    MAX_LOSS = -5000
-    MAX_PROFIT_EROSION = 10000
+    MAX_PROFIT = 13000
+    MAX_LOSS = -3000
+    MAX_PROFIT_EROSION = 13723
 
     max_profit_set = None  # e.g. 14500.0 if restarting and you already saw peak profit ~14500
 
