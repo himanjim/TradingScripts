@@ -16,13 +16,13 @@ Requirements:
     pip install optuna openpyxl pandas
 
 Usage examples:
-    python optimize_straddle_params.py                          # Bayesian, 200 trials, balanced score
-    python optimize_straddle_params.py --mode grid              # Full grid search
-    python optimize_straddle_params.py --trials 300             # More Bayesian trials
-    python optimize_straddle_params.py --objective total_pnl    # Maximize raw profit
-    python optimize_straddle_params.py --objective sharpe       # Maximize risk-adjusted return
-    python optimize_straddle_params.py --lookback-months 12     # Only use last 12 months of data
-    python optimize_straddle_params.py --pickles-dir "D:\\Data" # Override pickle location
+    python optimize_straddle_params_bayesian.py                          # Bayesian, 200 trials, balanced score
+    python optimize_straddle_params_bayesian.py --mode grid              # Full grid search
+    python optimize_straddle_params_bayesian.py --trials 300             # More Bayesian trials
+    python optimize_straddle_params_bayesian.py --objective total_pnl    # Maximize raw profit
+    python optimize_straddle_params_bayesian.py --objective sharpe       # Maximize risk-adjusted return
+    python optimize_straddle_params_bayesian.py --lookback-months 12     # Only use last 12 months of data
+    python optimize_straddle_params_bayesian.py --pickles-dir "D:\\Data" # Override pickle location
 
 Output:
     ~/Downloads/optimizer_results_<mode>_<objective>.xlsx    (all trials ranked)
@@ -816,10 +816,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python optimize_straddle_params.py                          # Quick start
-  python optimize_straddle_params.py --mode grid              # Exhaustive
-  python optimize_straddle_params.py --trials 300 --objective sharpe
-  python optimize_straddle_params.py --lookback-months 12     # Recent data only
+  python optimize_straddle_params_bayesian.py                          # Quick start
+  python optimize_straddle_params_bayesian.py --mode grid              # Exhaustive
+  python optimize_straddle_params_bayesian.py --trials 300 --objective sharpe
+  python optimize_straddle_params_bayesian.py --lookback-months 12     # Recent data only
         """,
     )
     parser.add_argument(
