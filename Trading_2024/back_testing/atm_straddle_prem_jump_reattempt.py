@@ -43,10 +43,10 @@ def _get_downloads_folder() -> str:
     downloads = Path.home() / "Downloads"
     return str(downloads if downloads.exists() else Path.home())
 
-LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "5000"))
+LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "3000"))
 PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "10000"))
-MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "1"))  # 1 = only one re-entry
-REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "1"))
+MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "3"))  # 1 = only one re-entry
+REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "15"))
 
 _DEFAULT_OUT = os.path.join(
     _get_downloads_folder(),
@@ -69,6 +69,20 @@ QTY_UNITS = {"NIFTY": 325, "SENSEX": 100}
 TRADEABLE = set(QTY_UNITS.keys())
 
 STRIKE_STEP = {"NIFTY": 50, "SENSEX": 100}
+
+# =============================================================================
+# TRANSACTION CHARGES (Zerodha F&O Options — NSE)
+# =============================================================================
+# Each short-straddle attempt = 4 executed orders (sell CE, sell PE, buy CE, buy PE)
+BROKERAGE_PER_ORDER       = 20.0       # ₹20 flat per executed order
+ORDERS_PER_TRADE          = 4          # sell CE + sell PE + buy CE + buy PE
+STT_SELL_PCT              = 0.001      # 0.1% on sell-side premium
+EXCHANGE_TXN_PCT          = 0.0003553  # 0.03553% on premium (NSE options)
+SEBI_PER_CRORE            = 10.0       # ₹10 per crore of turnover
+STAMP_BUY_PCT             = 0.00003    # 0.003% on buy-side premium
+IPFT_PER_CRORE            = 0.010      # ₹0.01 per crore (on premium)
+GST_PCT                   = 0.18       # 18% on (brokerage + txn charges + SEBI)
+INCLUDE_TRANSACTION_COSTS = True       # set False to disable
 
 UNDERLYING_KITE = {
     "NIFTY": {"exchange": "NSE", "tradingsymbol": "NIFTY 50"},
@@ -144,6 +158,53 @@ def compute_window_start(end_day: date, months: int) -> date:
         return (pd.Timestamp(end_day) - relativedelta(months=months)).date()
     return (pd.Timestamp(end_day) - pd.Timedelta(days=30 * months)).date()
 
+# =============================================================================
+# TRANSACTION COST CALCULATOR
+# =============================================================================
+def compute_trade_charges(
+    entry_ce: float, entry_pe: float,
+    exit_ce: float, exit_pe: float,
+    qty: int,
+) -> float:
+    """
+    Compute total Zerodha transaction charges for one short-straddle attempt.
+
+    Entry = SELL CE + SELL PE  (2 orders, sell side)
+    Exit  = BUY  CE + BUY  PE (2 orders, buy side)
+
+    Returns total charges in rupees (always positive).
+    """
+    if not INCLUDE_TRANSACTION_COSTS:
+        return 0.0
+
+    # Turnover values (in rupees)
+    entry_turnover = (entry_ce + entry_pe) * qty   # sell side
+    exit_turnover  = (exit_ce + exit_pe) * qty     # buy side
+    total_turnover = entry_turnover + exit_turnover
+
+    # 1. Brokerage: ₹20 × 4 orders
+    brokerage = BROKERAGE_PER_ORDER * ORDERS_PER_TRADE
+
+    # 2. STT: 0.1% on sell-side premium only (entry for short straddle)
+    stt = entry_turnover * STT_SELL_PCT
+
+    # 3. Exchange transaction charges: 0.03553% on both sides
+    txn_charges = total_turnover * EXCHANGE_TXN_PCT
+
+    # 4. SEBI charges: ₹10 per crore on total turnover
+    sebi = total_turnover * SEBI_PER_CRORE / 1_00_00_000
+
+    # 5. Stamp duty: 0.003% on buy side only (exit for short straddle)
+    stamp = exit_turnover * STAMP_BUY_PCT
+
+    # 6. IPFT: ₹0.01 per crore on premium (both sides)
+    ipft = total_turnover * IPFT_PER_CRORE / 1_00_00_000
+
+    # 7. GST: 18% on (brokerage + transaction charges + SEBI charges)
+    gst = (brokerage + txn_charges + sebi) * GST_PCT
+
+    total_charges = brokerage + stt + txn_charges + sebi + stamp + ipft + gst
+    return round(total_charges, 2)
 
 # =============================================================================
 # Kite historical helpers
@@ -237,7 +298,9 @@ class TradeRow:
     entry_pe: float
     exit_ce: float
     exit_pe: float
-    exit_pnl: float
+    exit_pnl_gross: float   # P&L before charges
+    txn_charges: float      # total transaction charges for this attempt
+    exit_pnl: float         # net P&L after deducting charges
     eod_pnl: float
     max_profit: float
     max_loss: float
@@ -461,10 +524,18 @@ def simulate_day_multi_trades(
         elif protect_ts is not None:
             exit_ts, exit_reason = protect_ts, "PROFIT_PROTECT"
 
-        exit_pnl = float(pnl.loc[exit_ts])
+        exit_pnl_gross = float(pnl.loc[exit_ts])
 
         exit_ce = float(ce_close.loc[exit_ts]) if pd.notna(ce_close.loc[exit_ts]) else float("nan")
         exit_pe = float(pe_close.loc[exit_ts]) if pd.notna(pe_close.loc[exit_ts]) else float("nan")
+
+        txn_charges = compute_trade_charges(
+            entry_ce=float(ce_entry), entry_pe=float(pe_entry),
+            exit_ce=exit_ce if not pd.isna(exit_ce) else 0.0,
+            exit_pe=exit_pe if not pd.isna(exit_pe) else 0.0,
+            qty=qty,
+        )
+        exit_pnl = exit_pnl_gross - txn_charges
 
         dte = int((expiry - dy).days)
 
@@ -487,6 +558,8 @@ def simulate_day_multi_trades(
                 entry_pe=float(pe_entry),
                 exit_ce=exit_ce,
                 exit_pe=exit_pe,
+                exit_pnl_gross=exit_pnl_gross,
+                txn_charges=txn_charges,
                 exit_pnl=exit_pnl,
                 eod_pnl=eod_pnl,
                 max_profit=max_profit,
