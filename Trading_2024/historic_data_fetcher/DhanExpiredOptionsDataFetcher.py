@@ -45,7 +45,7 @@ IDX_I_URL = "https://api.dhan.co/v2/instrument/IDX_I"
 # -----------------------------------------------------------------------------
 # Credentials
 # -----------------------------------------------------------------------------
-ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzcyNDU2NDU0LCJpYXQiOjE3NzIzNzAwNTQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.HShyRcsQuuB7e1LRGDP0HqA9POB_d0-joXIZH_xWPYGut99A-bDIHas4Ce1z0L-IKkImqrl40GO-zw6DNSnMAA").strip()
+ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzczMjM0MDE0LCJpYXQiOjE3NzMxNDc2MTQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.AUszHDDGv8S-Wl4018o54GUgKj3Skoz8fiYs3ZzRmn8GSeq0_qTZoWJY7dn9DBvG4SfnNCib7hWTURN9pjb2-g").strip()
 if not ACCESS_TOKEN:
     raise SystemExit("Missing DHAN_ACCESS_TOKEN env var.")
 

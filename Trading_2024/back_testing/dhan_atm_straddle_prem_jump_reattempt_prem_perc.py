@@ -55,7 +55,7 @@ except Exception:
 # =============================================================================
 PICKLES_DIR = os.getenv("DHAN_PICKLES_DIR", r"G:\My Drive\Trading\Dhan_Historical_Options_Data")
 
-ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:40")  # HH:MM
+ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:45")  # HH:MM
 # Risk is a % of the entry premium (CE+PE) in rupees.
 # Defaults chosen to roughly match old fixed values:
 #   If premium_sum_rupees ~ 50,000 => SL 10% ≈ 5,000
@@ -64,8 +64,32 @@ LOSS_LIMIT_PCT = float(os.getenv("LOSS_LIMIT_PCT", "0.20"))                  # 2
 PROFIT_PROTECT_TRIGGER_PCT = float(os.getenv("PROFIT_PROTECT_TRIGGER_PCT", "0.3"))  # 18% of premium sum (rupees)
 MAX_STOPLOSS_RUPEES = abs(float(os.getenv("MAX_STOPLOSS_RUPEES", "3000")))
 
+# Profit-protect configuration
+# Mode:
+#   - "off"       : disable profit-protect completely
+#   - "pct_trail" : legacy mode (arm at G, trail by G)
+#   - "lock_curve": new flexible lock-in profile based on peak profit
+PROFIT_PROTECT_MODE = os.getenv("PROFIT_PROTECT_MODE", "lock_curve").strip().lower()
+
+# Cap for the profit-protect "G" computed from PROFIT_PROTECT_TRIGGER_PCT.
+# 0 => no cap.
+MAX_PROFIT_PROTECT_RUPEES = abs(float(os.getenv("MAX_PROFIT_PROTECT_RUPEES", "10000")))
+
+# Flexible profit lock curve (all values in rupees)
+PROFIT_LOCK_ENABLED = os.getenv("PROFIT_LOCK_ENABLED", "1").strip() not in ("0", "false", "False")
+
+PROFIT_LOCK_P1_PROFIT = float(os.getenv("PROFIT_LOCK_P1_PROFIT", "5000"))
+PROFIT_LOCK_P1_LOCK   = float(os.getenv("PROFIT_LOCK_P1_LOCK", "1000"))
+
+PROFIT_LOCK_P2_PROFIT = float(os.getenv("PROFIT_LOCK_P2_PROFIT", "10000"))
+PROFIT_LOCK_P2_LOCK   = float(os.getenv("PROFIT_LOCK_P2_LOCK", "3000"))
+
+PROFIT_LOCK_P3_PROFIT = float(os.getenv("PROFIT_LOCK_P3_PROFIT", "15000"))
+# After P3, maximum profit giveback allowed is this amount:
+PROFIT_LOCK_MAX_GIVEBACK_RUPEES = float(os.getenv("PROFIT_LOCK_MAX_GIVEBACK_RUPEES", "10000"))
+
 MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "3"))  # "1" => allow one re-entry
-REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "14"))
+REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "15"))
 
 # Window selection:
 # - "data": end_day = max day present in pickles (recommended; avoids empty results when data is old)
@@ -382,6 +406,42 @@ def _missing_streak_minutes(s: pd.Series) -> int:
             cur = 0
     return best
 
+def profit_lock_floor_series(peak: pd.Series) -> pd.Series:
+    """
+    Convert a peak-PnL series (rupees) into a locked-profit "floor" series (rupees).
+
+    Profile (default):
+      peak= 5k  -> floor=1k
+      peak=10k  -> floor=3k
+      peak=15k  -> floor=5k  (implied by linear interpolation)
+      peak>15k  -> floor = peak - 10k (max giveback 10k)
+
+    Below PROFIT_LOCK_P1_PROFIT => floor = 0 (no lock).
+    """
+    floor = pd.Series(0.0, index=peak.index)
+
+    p1, f1 = PROFIT_LOCK_P1_PROFIT, PROFIT_LOCK_P1_LOCK
+    p2, f2 = PROFIT_LOCK_P2_PROFIT, PROFIT_LOCK_P2_LOCK
+    p3     = PROFIT_LOCK_P3_PROFIT
+    gb_max = PROFIT_LOCK_MAX_GIVEBACK_RUPEES
+
+    # Guard against bad config
+    if p2 <= p1:
+        return floor
+    m = (f2 - f1) / (p2 - p1)  # slope
+
+    seg1 = (peak >= p1) & (peak < p2)
+    floor.loc[seg1] = f1 + m * (peak.loc[seg1] - p1)
+
+    # Continue same slope up to p3 (gives floor(p3)=f2 + m*(p3-p2))
+    seg2 = (peak >= p2) & (peak < p3)
+    floor.loc[seg2] = f2 + m * (peak.loc[seg2] - p2)
+
+    # After p3: cap giveback
+    seg3 = (peak >= p3)
+    floor.loc[seg3] = peak.loc[seg3] - gb_max
+
+    return floor
 
 # =============================================================================
 # CORE STRATEGY SIMULATION (same semantics as your Zerodha backtester)
@@ -393,9 +453,10 @@ def simulate_day_multi_trades_dhan(
     expiry: date,
     day_opt: pd.DataFrame,
     source_pickle: str,
-) -> Tuple[List[TradeRow], List[Dict[str, Any]]]:
+) -> Tuple[List[TradeRow], List[Dict[str, Any]], List[TradeRow]]:
     results: List[TradeRow] = []
     skipped: List[Dict[str, Any]] = []
+    pess_results: List[TradeRow] = []
 
     idx_all = build_minute_index(dy, SESSION_START_IST, SESSION_END_IST)
     session_end_ts = idx_all[-1]
@@ -462,8 +523,13 @@ def simulate_day_multi_trades_dhan(
         if MAX_STOPLOSS_RUPEES and MAX_STOPLOSS_RUPEES > 0:
             effective_loss_limit_rupees = min(loss_limit_rupees, MAX_STOPLOSS_RUPEES)
 
-        G = premium_sum_rupees * PROFIT_PROTECT_TRIGGER_PCT  # profit-protect "G" in rupees
-        profit_protect_enabled = G > 0
+        # Profit protect can be disabled entirely via PROFIT_PROTECT_MODE=off
+        profit_protect_enabled = (PROFIT_PROTECT_MODE not in ("off", "0", "false")) and (PROFIT_PROTECT_TRIGGER_PCT > 0)
+
+        # "G" in rupees (used by pct_trail mode and for reporting)
+        G = premium_sum_rupees * PROFIT_PROTECT_TRIGGER_PCT
+        if MAX_PROFIT_PROTECT_RUPEES and MAX_PROFIT_PROTECT_RUPEES > 0:
+            G = min(G, MAX_PROFIT_PROTECT_RUPEES)
 
         if STRICT_STRIKE_PRESENCE:
             ce_post = ce_close.loc[cur_entry_ts:]
@@ -481,6 +547,10 @@ def simulate_day_multi_trades_dhan(
         # Short straddle MTM PnL series (entry - current) * qty for each leg
         pnl_close_all = (float(ce_entry) - ce_close) * qty + (float(pe_entry) - pe_close) * qty
         pnl = pnl_close_all.loc[cur_entry_ts:].dropna()  # keep close-based pnl for profit protect
+
+        # Pessimistic PnL series: assume buyback cost is CE_high + PE_high each minute
+        pnl_pess_all = (float(ce_entry) - ce_high) * qty + (float(pe_entry) - pe_high) * qty
+        pnl_pess = pnl_pess_all.loc[cur_entry_ts:].dropna()
 
         pnl_ceHigh_peLow_all = (float(ce_entry) - ce_high) * qty + (float(pe_entry) - pe_low) * qty
         pnl_ceLow_peHigh_all = (float(ce_entry) - ce_low) * qty + (float(pe_entry) - pe_high) * qty
@@ -502,18 +572,38 @@ def simulate_day_multi_trades_dhan(
         max_profit = float(max(0.0, pnl.max()))
         max_loss = float(min(0.0, pnl.min()))
 
+        # Reporting cap: in live you enforce MAX_STOPLOSS_RUPEES; don't show max_loss worse than that
+        if MAX_STOPLOSS_RUPEES and MAX_STOPLOSS_RUPEES > 0:
+            max_loss = max(max_loss, -float(MAX_STOPLOSS_RUPEES))
+
         # STOPLOSS: first time pnl crosses <= -LOSS_LIMIT_RUPEES
         stop_hit = pnl_sl <= -effective_loss_limit_rupees
         stop_ts = pnl_sl.index[stop_hit.to_numpy().argmax()] if stop_hit.any() else None
 
         # PROFIT_PROTECT: arm once peak >= G; then exit when pnl <= peak - G
+        # PROFIT_PROTECT (two modes):
+        #  - pct_trail  : legacy (arm at G, trail by G)
+        #  - lock_curve : flexible lock-in profile based on peak profit
         protect_ts = None
         if profit_protect_enabled:
             peak = pnl.cummax()
-            armed = peak >= G
-            trail = peak - G
-            protect_hit = armed & (pnl <= trail)
-            protect_ts = pnl.index[protect_hit.to_numpy().argmax()] if protect_hit.any() else None
+
+            if PROFIT_PROTECT_MODE == "pct_trail":
+                if G > 0:
+                    armed = peak >= G
+                    trail = peak - G
+                    protect_hit = armed & (pnl <= trail)
+                    protect_ts = pnl.index[protect_hit.to_numpy().argmax()] if protect_hit.any() else None
+
+            elif PROFIT_PROTECT_MODE == "lock_curve":
+                if PROFIT_LOCK_ENABLED:
+                    floor = profit_lock_floor_series(peak)
+                    armed = peak >= PROFIT_LOCK_P1_PROFIT  # start locking only after first milestone
+                    protect_hit = armed & (pnl <= floor)
+                    protect_ts = pnl.index[protect_hit.to_numpy().argmax()] if protect_hit.any() else None
+
+            else:
+                raise ValueError(f"Unknown PROFIT_PROTECT_MODE={PROFIT_PROTECT_MODE!r}")
 
         exit_ts = eod_ts
         exit_reason = "EOD"
@@ -546,6 +636,52 @@ def simulate_day_multi_trades_dhan(
         exit_pnl = exit_pnl_gross - txn_charges
 
         dte = int((expiry - dy).days)
+
+        # --- Pessimistic trajectory exits (same rules, but on pnl_pess) ---
+        eod_ts_pess = pnl_pess.index[-1]
+        eod_pnl_pess = float(pnl_pess.iloc[-1])
+
+        stop_hit_pess = pnl_pess <= -effective_loss_limit_rupees
+        stop_ts_pess = pnl_pess.index[stop_hit_pess.to_numpy().argmax()] if stop_hit_pess.any() else None
+
+        protect_ts_pess = None
+        if profit_protect_enabled:
+            peak_pess = pnl_pess.cummax()
+
+            if PROFIT_PROTECT_MODE == "pct_trail":
+                if G > 0:
+                    armed_pess = peak_pess >= G
+                    trail_pess = peak_pess - G
+                    protect_hit_pess = armed_pess & (pnl_pess <= trail_pess)
+                    protect_ts_pess = pnl_pess.index[
+                        protect_hit_pess.to_numpy().argmax()] if protect_hit_pess.any() else None
+
+            elif PROFIT_PROTECT_MODE == "lock_curve":
+                if PROFIT_LOCK_ENABLED:
+                    floor_pess = profit_lock_floor_series(peak_pess)
+                    armed_pess = peak_pess >= PROFIT_LOCK_P1_PROFIT
+                    protect_hit_pess = armed_pess & (pnl_pess <= floor_pess)
+                    protect_ts_pess = pnl_pess.index[
+                        protect_hit_pess.to_numpy().argmax()] if protect_hit_pess.any() else None
+
+        # Choose earliest exit among triggers, else EOD
+        exit_ts_pess = eod_ts_pess
+        exit_reason_pess = "EOD"
+        if stop_ts_pess is not None and protect_ts_pess is not None:
+            if stop_ts_pess <= protect_ts_pess:
+                exit_ts_pess, exit_reason_pess = stop_ts_pess, "STOPLOSS"
+            else:
+                exit_ts_pess, exit_reason_pess = protect_ts_pess, "PROFIT_PROTECT"
+        elif stop_ts_pess is not None:
+            exit_ts_pess, exit_reason_pess = stop_ts_pess, "STOPLOSS"
+        elif protect_ts_pess is not None:
+            exit_ts_pess, exit_reason_pess = protect_ts_pess, "PROFIT_PROTECT"
+
+        exit_pnl_pess = float(pnl_pess.loc[exit_ts_pess])
+
+        # Cap pessimistic STOPLOSS report (same philosophy)
+        if exit_reason_pess == "STOPLOSS" and exit_pnl_pess < -effective_loss_limit_rupees:
+            exit_pnl_pess = -float(effective_loss_limit_rupees)
 
         # Rolling dataset has no per-strike tradingsymbol; store synthetic identifiers
         ce_sym = f"{und}_{expiry.strftime('%Y%m%d')}_{atm}_CE"
@@ -580,6 +716,54 @@ def simulate_day_multi_trades_dhan(
             )
         )
 
+        # --- build pessimistic TradeRow for this SAME attempt (does not change reattempt control-flow) ---
+
+        # Use CE/PE HIGH at pessimistic exit time so charges and exits are consistent with pessimistic assumption
+        exit_ce_pess = float(ce_high.loc[exit_ts_pess]) if pd.notna(ce_high.loc[exit_ts_pess]) else float("nan")
+        exit_pe_pess = float(pe_high.loc[exit_ts_pess]) if pd.notna(pe_high.loc[exit_ts_pess]) else float("nan")
+
+        txn_charges_pess = compute_trade_charges(
+            entry_ce=float(ce_entry), entry_pe=float(pe_entry),
+            exit_ce=exit_ce_pess if not pd.isna(exit_ce_pess) else 0.0,
+            exit_pe=exit_pe_pess if not pd.isna(exit_pe_pess) else 0.0,
+            qty=qty,
+        )
+        exit_pnl_net_pess = float(exit_pnl_pess) - txn_charges_pess
+
+        max_profit_pess = float(max(0.0, pnl_pess.max()))
+        max_loss_pess = float(min(0.0, pnl_pess.min()))
+        if MAX_STOPLOSS_RUPEES and MAX_STOPLOSS_RUPEES > 0:
+            max_loss_pess = max(max_loss_pess, -float(MAX_STOPLOSS_RUPEES))
+
+        pess_results.append(
+            TradeRow(
+                day=dy,
+                underlying=und,
+                trade_seq=trade_seq,
+                expiry=expiry,
+                days_to_expiry=dte,
+                atm_strike=int(atm),
+                qty_units=qty,
+                entry_time=pd.Timestamp(cur_entry_ts).strftime("%H:%M"),
+                exit_time=pd.Timestamp(exit_ts_pess).strftime("%H:%M"),
+                exit_reason=exit_reason_pess,
+                entry_underlying=float(u_px),
+                ce_symbol=ce_sym,
+                pe_symbol=pe_sym,
+                entry_ce=float(ce_entry),
+                entry_pe=float(pe_entry),
+                exit_ce=exit_ce_pess,
+                exit_pe=exit_pe_pess,
+                exit_pnl_gross=float(exit_pnl_pess),
+                txn_charges=txn_charges_pess,
+                exit_pnl=exit_pnl_net_pess,
+                eod_pnl=float(eod_pnl_pess),
+                max_profit=max_profit_pess,
+                max_loss=max_loss_pess,
+                source_pickle=source_pickle,
+            )
+        )
+
         # Reattempt logic
         if exit_reason in ("STOPLOSS", "PROFIT_PROTECT") and (trade_seq - 1) < MAX_REATTEMPTS:
             trade_seq += 1
@@ -590,13 +774,13 @@ def simulate_day_multi_trades_dhan(
 
         break
 
-    return results, skipped
+    return results, skipped, pess_results
 
 
 # =============================================================================
 # PER-PICKLE PROCESSOR (each pickle is an independent unit)
 # =============================================================================
-def process_one_pickle(p: str, window_start: date, window_end: date) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def process_one_pickle(p: str, window_start: date, window_end: date) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Independent processing:
     - Normalize
@@ -605,18 +789,19 @@ def process_one_pickle(p: str, window_start: date, window_end: date) -> Tuple[pd
     - Simulate trades for those (underlying, day, expiry)
     """
     src = os.path.basename(p)
+    pess_trades_out: List[Dict[str, Any]] = []
 
     raw = pd.read_pickle(p)
     if not isinstance(raw, pd.DataFrame) or raw.empty:
-        return pd.DataFrame(), pd.DataFrame([{"source_pickle": src, "reason": "Empty or non-DataFrame pickle"}])
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame([{"source_pickle": src, "reason": "Empty or non-DataFrame pickle"}])
 
     d = _normalize_dhan_df(raw, src)
     if d.empty:
-        return pd.DataFrame(), pd.DataFrame([{"source_pickle": src, "reason": "No usable rows after normalization"}])
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame([{"source_pickle": src, "reason": "No usable rows after normalization"}])
 
     d = d[(d["day"] >= window_start) & (d["day"] <= window_end)]
     if d.empty:
-        return pd.DataFrame(), pd.DataFrame([{"source_pickle": src, "reason": "No rows in requested date window"}])
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame([{"source_pickle": src, "reason": "No rows in requested date window"}])
 
     # Nearest expiry within this pickle
     min_expiry_local: Dict[Tuple[str, date], date] = (
@@ -631,7 +816,7 @@ def process_one_pickle(p: str, window_start: date, window_end: date) -> Tuple[pd
         if min_expiry_local.get((und, dy)) != ex:
             continue
 
-        trades, skips = simulate_day_multi_trades_dhan(
+        trades, skips, pess_trades = simulate_day_multi_trades_dhan(
             und=und,
             dy=dy,
             expiry=ex,
@@ -639,9 +824,10 @@ def process_one_pickle(p: str, window_start: date, window_end: date) -> Tuple[pd
             source_pickle=src,
         )
         trades_out.extend([t.__dict__ for t in trades])
+        pess_trades_out.extend([t.__dict__ for t in pess_trades])
         skipped_out.extend(skips)
 
-    return pd.DataFrame(trades_out), pd.DataFrame(skipped_out)
+    return pd.DataFrame(trades_out), pd.DataFrame(pess_trades_out), pd.DataFrame(skipped_out)
 
 
 # =============================================================================
@@ -846,6 +1032,10 @@ def build_expiry_attempt_summaries(actual_trades_df: pd.DataFrame) -> Tuple[pd.D
         t["sl_effective_rupees"] = t["sl_premium_rupees"].clip(upper=float(MAX_STOPLOSS_RUPEES))
 
     t["G_rupees"] = t["entry_premium_rupees"] * float(PROFIT_PROTECT_TRIGGER_PCT)
+    if MAX_PROFIT_PROTECT_RUPEES and MAX_PROFIT_PROTECT_RUPEES > 0:
+        t["G_rupees"] = t["G_rupees"].clip(upper=float(MAX_PROFIT_PROTECT_RUPEES))
+    if PROFIT_PROTECT_MODE in ("off", "0", "false"):
+        t["G_rupees"] = 0.0
 
     # Outcome flags (rates)
     t["is_win_exit"] = pd.to_numeric(t["exit_pnl"], errors="coerce") > 0
@@ -934,6 +1124,8 @@ def _autosize_columns_safe(ws) -> None:
 def write_excel(
     all_trades_df: pd.DataFrame,
     actual_trades_df: pd.DataFrame,
+    all_trades_pess_df: pd.DataFrame,
+    actual_trades_pess_df: pd.DataFrame,
     daily_pnl_df: pd.DataFrame,
     monthwise_df: pd.DataFrame,
     exp_month_df: pd.DataFrame,
@@ -987,6 +1179,8 @@ def write_excel(
     with pd.ExcelWriter(OUTPUT_XLSX, engine="openpyxl") as xw:
         all_trades_df.to_excel(xw, sheet_name="all_trades_backtested", index=False)
         actual_trades_df.to_excel(xw, sheet_name="actual_trades", index=False)
+        all_trades_pess_df.to_excel(xw, sheet_name="all_trades_pessimistic", index=False)
+        actual_trades_pess_df.to_excel(xw, sheet_name="actual_trades_pessimistic", index=False)
         daily_pnl_df.to_excel(xw, sheet_name="daily_pnl_actual", index=False)
         monthwise_df.to_excel(xw, sheet_name="monthwise_summary", index=False)
 
@@ -1068,15 +1262,19 @@ def main():
     print(f"[INFO] Output: {OUTPUT_XLSX}")
 
     all_trades_list: List[pd.DataFrame] = []
+    all_trades_pess_list: List[pd.DataFrame] = []
     skipped_list: List[pd.DataFrame] = []
 
     # Each pickle is processed independently
     for p in paths:
         try:
-            tdf, sdf = process_one_pickle(p, window_start, end_day)
+            tdf, pdf, sdf = process_one_pickle(p, window_start, end_day)
 
             if tdf is not None and not tdf.empty:
                 all_trades_list.append(tdf)
+
+            if pdf is not None and not pdf.empty:
+                all_trades_pess_list.append(pdf)
 
             if sdf is not None and not sdf.empty:
                 if "source_pickle" not in sdf.columns:
@@ -1093,6 +1291,7 @@ def main():
             skipped_list.append(pd.DataFrame([{"source_pickle": os.path.basename(p), "reason": str(e)}]))
 
     all_trades_df = pd.concat(all_trades_list, ignore_index=True) if all_trades_list else pd.DataFrame()
+    all_trades_pess_df = pd.concat(all_trades_pess_list, ignore_index=True) if all_trades_pess_list else pd.DataFrame()
     skipped_df = pd.concat(skipped_list, ignore_index=True) if skipped_list else pd.DataFrame()
 
     # Optional dedup across pickles (aggregation hygiene; does NOT affect per-pickle independence)
@@ -1104,8 +1303,19 @@ def main():
     if not all_trades_df.empty:
         all_trades_df = all_trades_df.sort_values(["day", "underlying", "trade_seq", "source_pickle"]).reset_index(drop=True)
 
+
+    if not all_trades_pess_df.empty and DEDUP_ACROSS_PICKLES:
+        all_trades_pess_df, dedup_report = dedup_trades_across_pickles(all_trades_pess_df)
+        if not dedup_report.empty:
+            skipped_df = pd.concat([skipped_df, dedup_report], ignore_index=True)
+
+    if not all_trades_pess_df.empty:
+        all_trades_pess_df = all_trades_pess_df.sort_values(["day", "underlying", "trade_seq", "source_pickle"]).reset_index(drop=True)
+
     # Choose one underlying per day (actual trades)
     actual_trades_df = build_actual_trades_df(all_trades_df)
+
+    actual_trades_pess_df = build_actual_trades_df(all_trades_pess_df)
 
     # Monthwise + streak summaries computed from ACTUAL daily net P/L
     daily_pnl_df, monthwise_df = build_daily_and_monthly_summary(actual_trades_df)
@@ -1113,7 +1323,7 @@ def main():
     exp_month_df, exp_year_df, exp_overall_df = build_expiry_attempt_summaries(actual_trades_df)
 
     write_excel(
-        all_trades_df, actual_trades_df,
+        all_trades_df, actual_trades_df, all_trades_pess_df, actual_trades_pess_df,
         daily_pnl_df, monthwise_df,
         exp_month_df, exp_year_df, exp_overall_df,
         skipped_df

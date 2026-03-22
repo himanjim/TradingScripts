@@ -47,10 +47,13 @@ LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "3000"))
 PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "10000"))
 MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "4"))  # 1 = only one re-entry
 REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "15"))
+OTM_DISTANCE_STEPS = int(os.getenv("OTM_DISTANCE_STEPS", "6"))
+
 
 _DEFAULT_OUT = os.path.join(
     _get_downloads_folder(),
     f"short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}"
+    f"_OTMS_{_safe_fname_part(str(OTM_DISTANCE_STEPS))}"
     f"_LL_{_safe_fname_part(str(LOSS_LIMIT_RUPEES))}"
     f"_PPT_{_safe_fname_part(str(PROFIT_PROTECT_TRIGGER_RUPEES))}"
     f"_RDM_{_safe_fname_part(str(REENTRY_DELAY_MINUTES))}.xlsx"
@@ -65,10 +68,16 @@ SESSION_END_IST = dtime(15, 30)
 
 LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "6"))
 
-QTY_UNITS = {"NIFTY": 325, "SENSEX": 100}
+QTY_UNITS = {"NIFTY": 650, "SENSEX": 200}
 TRADEABLE = set(QTY_UNITS.keys())
 
 STRIKE_STEP = {"NIFTY": 50, "SENSEX": 100}
+
+
+# 0 = current ATM behaviour
+# 1 = one strike step OTM on each side
+#     NIFTY: CE=ATM+50, PE=ATM-50
+#     SENSEX: CE=ATM+100, PE=ATM-100
 
 # =============================================================================
 # TRANSACTION CHARGES (Zerodha F&O Options — NSE)
@@ -280,6 +289,7 @@ def rows_to_df(rows: List[Dict]) -> pd.DataFrame:
 # DATA STRUCTURES
 # =============================================================================
 @dataclass
+@dataclass
 class TradeRow:
     day: date
     underlying: str
@@ -287,6 +297,8 @@ class TradeRow:
     expiry: date
     days_to_expiry: int
     atm_strike: int
+    ce_strike: int
+    pe_strike: int
     qty_units: int
     entry_time: str
     exit_time: str
@@ -445,27 +457,36 @@ def simulate_day_multi_trades(
 
         atm = round_to_step(float(u_px), step)
 
-        ce_sym = _pick_symbol(day_opt, atm, "CE")
-        pe_sym = _pick_symbol(day_opt, atm, "PE")
+        ce_strike = int(atm + OTM_DISTANCE_STEPS * step)
+        pe_strike = int(atm - OTM_DISTANCE_STEPS * step)
+
+        ce_sym = _pick_symbol(day_opt, ce_strike, "CE")
+        pe_sym = _pick_symbol(day_opt, pe_strike, "PE")
         if not ce_sym or not pe_sym:
-            skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
-                            "atm_strike": atm, "reason": "ATM CE/PE not available in pickle band"})
+            skipped.append({
+                "day": dy,
+                "underlying": und,
+                "expiry": expiry,
+                "trade_seq": trade_seq,
+                "atm_strike": atm,
+                "ce_strike": ce_strike,
+                "pe_strike": pe_strike,
+                "reason": "Requested CE/PE strikes not available in pickle band",
+            })
             break
 
         # Close series (used for entry pricing, profit-protect tracking, and reporting)
         # Raw close series for exact entry validation
-        ce_close_raw = _build_leg_series(day_opt, idx_all, atm, "CE", ce_sym, "close", do_ffill=False)
-        pe_close_raw = _build_leg_series(day_opt, idx_all, atm, "PE", pe_sym, "close", do_ffill=False)
+        ce_close_raw = _build_leg_series(day_opt, idx_all, ce_strike, "CE", ce_sym, "close", do_ffill=False)
+        pe_close_raw = _build_leg_series(day_opt, idx_all, pe_strike, "PE", pe_sym, "close", do_ffill=False)
 
-        # Forward-filled close series for post-entry tracking/reporting
         ce_close = ce_close_raw.ffill()
         pe_close = pe_close_raw.ffill()
 
-        # High/Low series (used only to detect STOPLOSS intraminute extremes)
-        ce_high = _build_leg_series(day_opt, idx_all, atm, "CE", ce_sym, "high", do_ffill=False)
-        ce_low = _build_leg_series(day_opt, idx_all, atm, "CE", ce_sym, "low", do_ffill=False)
-        pe_high = _build_leg_series(day_opt, idx_all, atm, "PE", pe_sym, "high", do_ffill=False)
-        pe_low = _build_leg_series(day_opt, idx_all, atm, "PE", pe_sym, "low", do_ffill=False)
+        ce_high = _build_leg_series(day_opt, idx_all, ce_strike, "CE", ce_sym, "high", do_ffill=False)
+        ce_low = _build_leg_series(day_opt, idx_all, ce_strike, "CE", ce_sym, "low", do_ffill=False)
+        pe_high = _build_leg_series(day_opt, idx_all, pe_strike, "PE", pe_sym, "high", do_ffill=False)
+        pe_low = _build_leg_series(day_opt, idx_all, pe_strike, "PE", pe_sym, "low", do_ffill=False)
 
         if cur_entry_ts not in idx_all:
             skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
@@ -479,8 +500,17 @@ def simulate_day_multi_trades(
             break
 
         if pd.isna(ce_entry) or pd.isna(pe_entry):
-            skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
-                            "atm_strike": atm, "reason": "No CE/PE price at entry (after ffill)"})
+            skipped.append({
+                "day": dy,
+                "underlying": und,
+                "expiry": expiry,
+                "trade_seq": trade_seq,
+                "atm_strike": atm,
+                "ce_strike": ce_strike,
+                "pe_strike": pe_strike,
+                "reason": "No CE/PE price at entry (after ffill)",
+            })
+            break
             break
 
         # Close-based PnL (same as before)
@@ -559,6 +589,8 @@ def simulate_day_multi_trades(
                 expiry=expiry,
                 days_to_expiry=dte,
                 atm_strike=int(atm),
+                ce_strike=int(ce_strike),
+                pe_strike=int(pe_strike),
                 qty_units=qty,
                 entry_time=pd.Timestamp(cur_entry_ts).strftime("%H:%M"),
                 exit_time=pd.Timestamp(exit_ts).strftime("%H:%M"),
