@@ -22,7 +22,7 @@ OUT_DIR = os.getenv(
 BATCH_EXPIRIES = int(os.getenv("DHAN_BATCH_EXPIRIES", "2"))
 
 # How far back to generate scheduled expiries
-LOOKBACK_DAYS = int(os.getenv("DHAN_LOOKBACK_DAYS", str(365 * 4)))  # default 2 years
+LOOKBACK_DAYS = int(os.getenv("DHAN_LOOKBACK_DAYS", str(365 * 4)))  # default 4 years
 
 # If the scheduled expiry is a holiday, try shifting back up to this many days
 MAX_SHIFT_BACK_DAYS = int(os.getenv("DHAN_MAX_SHIFT_BACK_DAYS", "7"))
@@ -45,7 +45,7 @@ IDX_I_URL = "https://api.dhan.co/v2/instrument/IDX_I"
 # -----------------------------------------------------------------------------
 # Credentials
 # -----------------------------------------------------------------------------
-ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzczMjM0MDE0LCJpYXQiOjE3NzMxNDc2MTQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.AUszHDDGv8S-Wl4018o54GUgKj3Skoz8fiYs3ZzRmn8GSeq0_qTZoWJY7dn9DBvG4SfnNCib7hWTURN9pjb2-g").strip()
+ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzc0NTM4Mzg3LCJpYXQiOjE3NzQ0NTE5ODcsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.Q6PMPCN2JbSGsjxLkbcp-YLwA3rE3loDKxVOKqmLKzGwum6VBTGw4Fwn5QBaTBDFCZltuNg1-bEuhbq0kmJDIg").strip()
 if not ACCESS_TOKEN:
     raise SystemExit("Missing DHAN_ACCESS_TOKEN env var.")
 
@@ -269,6 +269,9 @@ def _post_json(
             j_ok = r.json()
             if isinstance(j_ok, dict):
                 if j_ok.get("status") == "failed" or j_ok.get("errorCode"):
+                    if j_ok.get("errorCode") == "DH-904":
+                        time.sleep(base_sleep * (2 ** attempt))
+                        continue
                     raise RuntimeError(f"HTTP 200 but failed payload: {j_ok}")
             return j_ok
 
@@ -484,6 +487,7 @@ class RollingExpiryDownloader:
         payload = dict(base_payload)
         payload["drvOptionType"] = "PUT"
         j_put = _post_json(self.session, ROLLING_URL, self.headers, payload)
+        time.sleep(SLEEP_BETWEEN_CALLS)
 
         df_call = _json_to_df(j_call, "CALL", cfg.symbol, cfg.exchange_segment, expiry, strike_selector)
         df_put = _json_to_df(j_put, "PUT", cfg.symbol, cfg.exchange_segment, expiry, strike_selector)
@@ -556,27 +560,30 @@ def main():
         batch_iter = reversed(batches) if PROCESS_NEWEST_FIRST else batches
 
         for b in batch_iter:
-            out_name = _batch_filename(sym, b)
-            out_path = os.path.join(OUT_DIR, out_name)
-            tmp_path = out_path + ".tmp"
-
-            # Skip if already downloaded
-            if os.path.exists(out_path):
-                continue
-
             all_parts: List[pd.DataFrame] = []
             actual_expiries: List[date] = []
 
+            # Resolve actual expiries first so the filename reflects holiday-adjusted dates
+            resolved: List[tuple] = []
             for scheduled_expiry in b:
-                # 1) Resolve actual expiry (holiday-adjusted) once, using ATM probe
                 actual_expiry, df_atm = dl.resolve_actual_expiry_with_atm(cfg, scheduled_expiry)
                 if actual_expiry is None or df_atm.empty:
                     print(f"[WARN] {sym}: no data for scheduled expiry {scheduled_expiry} (skipped)")
                     continue
-
+                resolved.append((actual_expiry, df_atm))
                 actual_expiries.append(actual_expiry)
 
-                # 2) Keep the ATM data we already fetched
+            if not actual_expiries:
+                continue
+
+            out_name = _batch_filename(sym, actual_expiries)  # ← actual dates now
+            out_path = os.path.join(OUT_DIR, out_name)
+            tmp_path = out_path + ".tmp"
+
+            if os.path.exists(out_path):
+                continue
+
+            for actual_expiry, df_atm in resolved:
                 all_parts.append(df_atm)
 
                 # 3) Fetch all other supported strike selectors for the same actual expiry
@@ -596,7 +603,6 @@ def main():
                     if not df.empty:
                         all_parts.append(df)
 
-                    time.sleep(SLEEP_BETWEEN_CALLS)
 
             # Nothing collected for this batch => nothing to write
             if not all_parts:

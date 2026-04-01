@@ -44,15 +44,16 @@ def _get_downloads_folder() -> str:
     return str(downloads if downloads.exists() else Path.home())
 
 LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "3000"))
-PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "10000"))
-MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "4"))  # 1 = only one re-entry
-REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "15"))
+PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "20000"))
+MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "10"))  # 1 = only one re-entry
+REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "20"))
 
 _DEFAULT_OUT = os.path.join(
     _get_downloads_folder(),
     f"short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}"
     f"_LL_{_safe_fname_part(str(LOSS_LIMIT_RUPEES))}"
     f"_PPT_{_safe_fname_part(str(PROFIT_PROTECT_TRIGGER_RUPEES))}"
+    f"_MR_{_safe_fname_part(str(MAX_REATTEMPTS))}"
     f"_RDM_{_safe_fname_part(str(REENTRY_DELAY_MINUTES))}.xlsx"
 )
 
@@ -715,10 +716,16 @@ def pick_actual_underlying_by_day(min_expiry_map: Dict[Tuple[str, date], date]) 
     for (und, dy), ex in min_expiry_map.items():
         if und not in TRADEABLE:
             continue
+
+        dte = int((ex - dy).days)
+        if dte not in (0, 1):
+            continue
+
         by_day.setdefault(dy, []).append((ex, und))
 
     out: Dict[date, str] = {}
     for dy, lst in by_day.items():
+        # nearest expiry first; if tied, prefer NIFTY
         lst_sorted = sorted(lst, key=lambda t: (t[0], 0 if t[1] == "NIFTY" else 1))
         out[dy] = lst_sorted[0][1]
     return out
@@ -728,9 +735,22 @@ def build_actual_trades_df(all_trades_df: pd.DataFrame, min_expiry_map: Dict[Tup
         return pd.DataFrame()
 
     actual_underlying = pick_actual_underlying_by_day(min_expiry_map)
+
     m = all_trades_df.copy()
     m["actual_underlying_for_day"] = m["day"].map(actual_underlying)
-    m = m[m["underlying"] == m["actual_underlying_for_day"]].drop(columns=["actual_underlying_for_day"])
+
+    # keep only days for which a 0/1-DTE actual underlying exists
+    m = m[m["actual_underlying_for_day"].notna()]
+
+    # keep only the selected underlying for that day
+    m = m[m["underlying"] == m["actual_underlying_for_day"]]
+
+    # keep only 0- and 1-DTE rows
+    # keep only 0- and 1-DTE rows
+    m = m[m["days_to_expiry"].isin([0, 1])]
+
+    # keep all reattempts for the one selected underlying on that day
+    m = m.drop(columns=["actual_underlying_for_day"])
     m = m.sort_values(["day", "trade_seq"]).reset_index(drop=True)
 
     # 1 if net exit PnL is positive, else 0
