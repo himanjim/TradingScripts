@@ -36,20 +36,82 @@ def _parse_ts(s):
     return datetime.min
 
 
+OPTION_TICK = 0.05
+
+def _round_to_tick(price, tick=OPTION_TICK):
+    price = max(float(price), tick)
+    return round(round(price / tick) * tick, 2)
+
+def _opt_market_protection_pct(ltp: float) -> float:
+    # Mirrors Zerodha option market-protection bands
+    if ltp < 10:
+        return 0.05
+    if ltp < 100:
+        return 0.03
+    if ltp < 500:
+        return 0.02
+    return 0.01
+
+def _fallback_exit_limit_price(kite, exchange, tradingsymbol, transaction_type):
+    key = f"{exchange}:{tradingsymbol}"
+    q = kite.quote(key)[key]
+    ltp = float(q.get("last_price") or 0.0)
+    if ltp <= 0:
+        raise RuntimeError(f"Invalid LTP for {key}: {ltp}")
+
+    pct = _opt_market_protection_pct(ltp)
+
+    if transaction_type == kite.TRANSACTION_TYPE_BUY:
+        # Covering a short leg: place a marketable buy limit
+        return _round_to_tick(ltp * (1.0 + pct))
+    else:
+        # Exiting a long leg: place a marketable sell limit
+        return _round_to_tick(max(OPTION_TICK, ltp * (1.0 - pct)))
+
 def exit_trade(kite, position):
-    kite.place_order(
+    txn_type = (
+        kite.TRANSACTION_TYPE_BUY
+        if position["type"] == kite.TRANSACTION_TYPE_SELL
+        else kite.TRANSACTION_TYPE_SELL
+    )
+
+    base_kwargs = dict(
         tradingsymbol=position["tradingsymbol"],
         variety=kite.VARIETY_REGULAR,
         exchange=position["exchange"],
-        transaction_type=(
-            kite.TRANSACTION_TYPE_BUY
-            if position["type"] == kite.TRANSACTION_TYPE_SELL
-            else kite.TRANSACTION_TYPE_SELL
-        ),
+        transaction_type=txn_type,
         quantity=position["quantity"],
-        order_type=kite.ORDER_TYPE_MARKET,
         product=position["product"],
-        tag=oUtils.SS_ORDER_TAG,
+        # tag=oUtils.SS_ORDER_TAG,
+    )
+
+    # Preferred path: MARKET with automatic protection
+    # Works only if your installed kiteconnect version supports market_protection.
+    try:
+        return kite.place_order(
+            order_type=kite.ORDER_TYPE_MARKET,
+            market_protection=-1,
+            **base_kwargs,
+        )
+    except TypeError:
+        # Older Python SDK: no market_protection arg
+        pass
+    except Exception as e:
+        msg = str(e).lower()
+        if "market protection" not in msg and "market orders without market protection" not in msg:
+            raise
+
+    # Fallback: aggressive LIMIT order, which does not need market protection
+    limit_price = _fallback_exit_limit_price(
+        kite,
+        position["exchange"],
+        position["tradingsymbol"],
+        txn_type,
+    )
+    return kite.place_order(
+        order_type=kite.ORDER_TYPE_LIMIT,
+        price=limit_price,
+        **base_kwargs,
     )
 
 
@@ -200,9 +262,9 @@ def pick_latest_open_straddle_from_orders(kite, max_leg_gap_sec=180):
 
 if __name__ == "__main__":
     # === HONOR THESE EXACTLY ===
-    MAX_PROFIT = 13000
+    MAX_PROFIT = 30000
     MAX_LOSS = -3000
-    MAX_PROFIT_EROSION = 13723
+    MAX_PROFIT_EROSION = 10000
 
     max_profit_set = None  # e.g. 14500.0 if restarting and you already saw peak profit ~14500
 
