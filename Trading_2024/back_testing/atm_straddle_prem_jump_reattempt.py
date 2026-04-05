@@ -43,10 +43,10 @@ def _get_downloads_folder() -> str:
     downloads = Path.home() / "Downloads"
     return str(downloads if downloads.exists() else Path.home())
 
-LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "3000"))
-PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "20000"))
-MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "10"))  # 1 = only one re-entry
-REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "20"))
+LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "2000"))
+PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "5000"))
+MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "20"))  # 1 = only one re-entry
+REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "1"))
 
 _DEFAULT_OUT = os.path.join(
     _get_downloads_folder(),

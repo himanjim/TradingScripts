@@ -55,13 +55,13 @@ except Exception:
 # =============================================================================
 PICKLES_DIR = os.getenv("DHAN_PICKLES_DIR", r"G:\My Drive\Trading\Dhan_Historical_Options_Data")
 
-ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:40")  # HH:MM
-LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "3000"))
-PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "20000"))
+ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:30")  # HH:MM
+LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "2000"))
+PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "10000"))
 
-MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "10"))  # 1 = only one re-entry
+MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "30"))  # 1 = only one re-entry
 REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "30"))
-LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "12"))
+LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "36"))
 
 # Window selection:
 # - "data": end_day = max day present in pickles (recommended; avoids empty results when data is old)
