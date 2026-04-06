@@ -43,10 +43,10 @@ def _get_downloads_folder() -> str:
     downloads = Path.home() / "Downloads"
     return str(downloads if downloads.exists() else Path.home())
 
-LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "2000"))
+LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "2500"))
 PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "5000"))
 MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "20"))  # 1 = only one re-entry
-REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "1"))
+REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "10"))
 
 _DEFAULT_OUT = os.path.join(
     _get_downloads_folder(),
@@ -822,6 +822,7 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
         tmp = actual_trades_df.copy()
         tmp["month"] = pd.to_datetime(tmp["day"]).dt.to_period("M").astype(str)
 
+        # Existing trade-level monthly summary
         monthwise_summary = (
             tmp.groupby("month", as_index=False)
             .agg(
@@ -833,8 +834,34 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
         )
         monthwise_summary["losing_trades"] = monthwise_summary["trades"] - monthwise_summary["winning_trades"]
         monthwise_summary["win_rate_pct"] = (
-            100.0 * monthwise_summary["winning_trades"] / monthwise_summary["trades"]
+                100.0 * monthwise_summary["winning_trades"] / monthwise_summary["trades"]
         ).round(2)
+
+        # New: daily PnL inside each month
+        daily_tmp = (
+            tmp.groupby(["month", "day"], as_index=False)
+            .agg(daily_pnl=("exit_pnl", "sum"))
+        )
+
+        loss_day_stats = (
+            daily_tmp.groupby("month", as_index=False)
+            .agg(
+                avg_loss_on_loss_days=(
+                    "daily_pnl",
+                    lambda s: float(s[s < 0].mean()) if (s < 0).any() else 0.0
+                ),
+                max_loss_in_a_day=(
+                    "daily_pnl",
+                    lambda s: float(s.min()) if len(s) else 0.0
+                ),
+            )
+        )
+
+        monthwise_summary = monthwise_summary.merge(
+            loss_day_stats,
+            on="month",
+            how="left",
+        )
     else:
         monthwise_summary = pd.DataFrame()
 

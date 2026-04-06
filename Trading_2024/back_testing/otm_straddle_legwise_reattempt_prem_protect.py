@@ -98,6 +98,12 @@ OTM_DISTANCE_STEPS = int(os.getenv("OTM_DISTANCE_STEPS", "1"))
 # Example: 30 means exit a leg when premium >= entry_premium * 1.30
 LEG_PREMIUM_RISE_EXIT_PCT = float(os.getenv("LEG_PREMIUM_RISE_EXIT_PCT", "13"))
 
+# After one leg has exited, if the surviving leg premium falls by this %
+# from its own entry premium, close that surviving leg and do NOT allow
+# any further reattempts for the day.
+# Example: 30 means exit surviving leg at 70% of its entry premium.
+SURVIVOR_PREMIUM_DROP_EXIT_PCT = float(os.getenv("SURVIVOR_PREMIUM_DROP_EXIT_PCT", "90"))
+
 # Operational flags
 FAIL_ON_PICKLE_ERROR = os.getenv("FAIL_ON_PICKLE_ERROR", "0").strip() == "1"
 INCLUDE_TRANSACTION_COSTS = os.getenv("INCLUDE_TRANSACTION_COSTS", "1").strip() == "1"
@@ -151,6 +157,7 @@ _DEFAULT_OUT = os.path.join(
     f"_OTM_{OTM_DISTANCE_STEPS}"
     f"_SLPCT_{_safe_fname_part(str(LEG_PREMIUM_RISE_EXIT_PCT))}"
     f"_MR_{MAX_REATTEMPTS}"
+     f"_SPD_{SURVIVOR_PREMIUM_DROP_EXIT_PCT}"
     f"_RDM_{REENTRY_DELAY_MINUTES}.xlsx"
 )
 OUTPUT_XLSX = os.getenv("OUTPUT_XLSX", _DEFAULT_OUT)
@@ -261,6 +268,14 @@ def compute_otm_strikes(atm: int, step: int, distance_steps: int) -> Tuple[int, 
 def compute_leg_exit_trigger(entry_price: float) -> float:
     """Return stop trigger price for a short leg based on entry premium."""
     return float(entry_price) * (1.0 + LEG_PREMIUM_RISE_EXIT_PCT / 100.0)
+
+def compute_leg_profit_take_price(entry_price: float) -> float:
+    """
+    Return the surviving-leg profit-take price after premium has fallen
+    by SURVIVOR_PREMIUM_DROP_EXIT_PCT from entry.
+    Example: entry=100, pct=30 => target=70
+    """
+    return float(entry_price) * (1.0 - SURVIVOR_PREMIUM_DROP_EXIT_PCT / 100.0)
 
 
 def validate_user_config() -> None:
@@ -659,6 +674,9 @@ def _simulate_leg_exit(
     close_series_ffill: pd.Series,
     high_series_raw: pd.Series,
     trigger_price: float,
+    low_series_raw: Optional[pd.Series] = None,
+    profit_take_price: Optional[float] = None,
+    profit_take_reason: str = "SURVIVOR_PROFIT_TAKE",
 ) -> Tuple[pd.Timestamp, str, float]:
     """
     Simulate exit of one short option leg.
@@ -676,22 +694,41 @@ def _simulate_leg_exit(
     monitor_idx = close_series_ffill.loc[entry_ts + pd.Timedelta(minutes=1): session_end_ts].index
 
     # If there is no post-entry monitor window, force same-price same-time exit.
-    # This should be rare because entry validation already prevents ENTRY_TIME at/after session end.
     if len(monitor_idx) == 0:
         return entry_ts, "EOD", float(entry_price)
 
     high_monitor = high_series_raw.reindex(monitor_idx)
     close_monitor = close_series_ffill.reindex(monitor_idx)
 
-    # If HIGH is missing for a minute, fall back to close for that minute.
+    # STOPLOSS detection
     observed_high = high_monitor.combine_first(close_monitor)
-    hit_mask = observed_high >= trigger_price
-    hit_ts = _first_hit_ts(hit_mask)
+    stop_hit_mask = observed_high >= trigger_price
+    stop_ts = _first_hit_ts(stop_hit_mask)
 
-    if hit_ts is not None:
-        # Continuous monitoring approximation:
-        # once trigger is reached, exit at the trigger price, not at candle high.
-        return hit_ts, "LEG_SL", float(trigger_price)
+    # Optional profit-take detection (used only for surviving leg after the other leg exits)
+    profit_ts = None
+    if profit_take_price is not None and low_series_raw is not None:
+        low_monitor = low_series_raw.reindex(monitor_idx)
+        observed_low = low_monitor.combine_first(close_monitor)
+        profit_hit_mask = observed_low <= profit_take_price
+        profit_ts = _first_hit_ts(profit_hit_mask)
+
+    # If both are hit, choose whichever timestamp comes first.
+    # If both happen in the same minute, this implementation gives priority
+    # to profit-take for the surviving leg.
+    if profit_ts is not None and stop_ts is not None:
+        if profit_ts < stop_ts:
+            return profit_ts, profit_take_reason, float(profit_take_price)
+        elif stop_ts < profit_ts:
+            return stop_ts, "LEG_SL", float(trigger_price)
+        else:
+            return profit_ts, profit_take_reason, float(profit_take_price)
+
+    if profit_ts is not None:
+        return profit_ts, profit_take_reason, float(profit_take_price)
+
+    if stop_ts is not None:
+        return stop_ts, "LEG_SL", float(trigger_price)
 
     eod_ts = monitor_idx[-1]
     return eod_ts, "EOD", _series_value(close_series_ffill, eod_ts)
@@ -796,6 +833,8 @@ def simulate_day_multi_trades(
         # HIGH is used for stop detection because this is a short-premium stop.
         pe_high = _build_leg_series(day_opt, idx_all, pe_strike, "PE", pe_sym, "high", False)
         ce_high = _build_leg_series(day_opt, idx_all, ce_strike, "CE", ce_sym, "high", False)
+        pe_low  = _build_leg_series(day_opt, idx_all, pe_strike, "PE", pe_sym, "low",  False)
+        ce_low  = _build_leg_series(day_opt, idx_all, ce_strike, "CE", ce_sym, "low",  False)
 
         if cur_entry_ts not in idx_all:
             skipped.append({
@@ -870,6 +909,46 @@ def simulate_day_multi_trades(
             trigger_price=ce_trigger,
         )
 
+        # Optional: after one leg exits first, the surviving leg gets an additional
+        # profit-take rule based on premium falling by SURVIVOR_PREMIUM_DROP_EXIT_PCT
+        # from its own entry premium. If that happens, no further reattempts will be allowed.
+        survivor_profit_take_hit = False
+
+        if SURVIVOR_PREMIUM_DROP_EXIT_PCT > 0:
+            # PE exits first -> CE becomes surviving leg
+            if pe_exit_ts < ce_exit_ts:
+                ce_profit_take_price = compute_leg_profit_take_price(ce_entry_f)
+                ce_exit_ts, ce_exit_reason, ce_exit_price = _simulate_leg_exit(
+                    entry_ts=pe_exit_ts,
+                    session_end_ts=session_end_ts,
+                    entry_price=ce_entry_f,
+                    close_series_ffill=ce_close,
+                    high_series_raw=ce_high,
+                    trigger_price=ce_trigger,
+                    low_series_raw=ce_low,
+                    profit_take_price=ce_profit_take_price,
+                    profit_take_reason="SURVIVOR_PROFIT_TAKE",
+                )
+                if ce_exit_reason == "SURVIVOR_PROFIT_TAKE":
+                    survivor_profit_take_hit = True
+
+            # CE exits first -> PE becomes surviving leg
+            elif ce_exit_ts < pe_exit_ts:
+                pe_profit_take_price = compute_leg_profit_take_price(pe_entry_f)
+                pe_exit_ts, pe_exit_reason, pe_exit_price = _simulate_leg_exit(
+                    entry_ts=ce_exit_ts,
+                    session_end_ts=session_end_ts,
+                    entry_price=pe_entry_f,
+                    close_series_ffill=pe_close,
+                    high_series_raw=pe_high,
+                    trigger_price=pe_trigger,
+                    low_series_raw=pe_low,
+                    profit_take_price=pe_profit_take_price,
+                    profit_take_reason="SURVIVOR_PROFIT_TAKE",
+                )
+                if pe_exit_reason == "SURVIVOR_PROFIT_TAKE":
+                    survivor_profit_take_hit = True
+
         # Leg-wise and combined gross PnL.
         pe_pnl_gross = (pe_entry_f - pe_exit_price) * qty
         ce_pnl_gross = (ce_entry_f - ce_exit_price) * qty
@@ -936,7 +1015,12 @@ def simulate_day_multi_trades(
         )
 
         # No reattempt is possible once the whole position effectively lives until session end.
+        # No reattempt is possible once the whole position effectively lives until session end.
         if final_exit_ts >= session_end_ts:
+            break
+
+        # If surviving-leg profit-take fired, stop the strategy for the rest of the day.
+        if survivor_profit_take_hit:
             break
 
         next_entry = _next_attempt_timestamp(
@@ -988,6 +1072,7 @@ def process_pickles_generate_trades(
                 "expiry",
                 "instrument",
                 "high",
+                "low",
                 "close",
             ]
             missing = [c for c in needed_cols if c not in df.columns]
