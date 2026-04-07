@@ -1,10 +1,12 @@
 from datetime import datetime
 import pytz
 import OptionTradeUtils as oUtils
-
+import time
 
 OPTION_TICK = 0.05
-
+ORDER_STATUS_POLL_SECONDS = 0.5
+ORDER_STATUS_MAX_POLLS = 8
+MARKET_PROTECTION = -1   # automatic market protection by Zerodha
 
 def _round_to_tick(price, tick=OPTION_TICK):
     price = max(float(price), tick)
@@ -34,6 +36,128 @@ def _marketable_limit_price(kite, exchange, tradingsymbol, transaction_type):
 
     return _round_to_tick(px)
 
+def _get_order_snapshot(kite, order_id):
+    """
+    Return the latest order-book snapshot for the given order_id.
+    """
+    orders = kite.orders()
+    for o in reversed(orders):
+        if o.get("order_id") == order_id:
+            return o
+    return None
+
+
+def _is_order_complete(order_row):
+    return (
+        order_row is not None
+        and str(order_row.get("status", "")).upper() == "COMPLETE"
+        and int(order_row.get("pending_quantity") or 0) == 0
+    )
+
+
+def _is_order_dead(order_row):
+    return (
+        order_row is not None
+        and str(order_row.get("status", "")).upper() in {"REJECTED", "CANCELLED"}
+    )
+
+
+def _ensure_filled_or_convert_to_market(kite, order_id, tradingsymbol):
+    """
+    Wait briefly for LIMIT order completion.
+    If still pending/open, modify it to MARKET.
+    Then keep polling until terminal state.
+    """
+    market_modified = False
+
+    for _ in range(ORDER_STATUS_MAX_POLLS):
+        time.sleep(ORDER_STATUS_POLL_SECONDS)
+
+        order_row = _get_order_snapshot(kite, order_id)
+        if order_row is None:
+            continue
+
+        status = str(order_row.get("status", "")).upper()
+        pending_qty = int(order_row.get("pending_quantity") or 0)
+        filled_qty = int(order_row.get("filled_quantity") or 0)
+
+        if _is_order_complete(order_row):
+            print(f"✅ {tradingsymbol}: COMPLETE (filled={filled_qty})")
+            return True
+
+        if _is_order_dead(order_row):
+            print(f"❌ {tradingsymbol}: {status} (filled={filled_qty}, pending={pending_qty})")
+            return False
+
+        # Any non-terminal state with pending qty means order is not fully done yet.
+        if pending_qty > 0 and not market_modified:
+            try:
+                kite.modify_order(
+                    variety=kite.VARIETY_REGULAR,
+                    order_id=order_id,
+                    order_type=kite.ORDER_TYPE_MARKET,
+                    market_protection=MARKET_PROTECTION,
+                )
+                market_modified = True
+                print(
+                    f"⚠ {tradingsymbol}: not complete yet (status={status}, pending={pending_qty}). "
+                    f"Modified to MARKET."
+                )
+            except Exception as e:
+                print(f"WARNING: Could not modify {tradingsymbol} to MARKET yet: {e}")
+
+    # Final check after polling loop
+    order_row = _get_order_snapshot(kite, order_id)
+    if _is_order_complete(order_row):
+        print(f"✅ {tradingsymbol}: COMPLETE after follow-up polling.")
+        return True
+
+    if order_row:
+        print(
+            f"⚠ {tradingsymbol}: final state unresolved. "
+            f"status={order_row.get('status')}, "
+            f"filled={order_row.get('filled_quantity')}, "
+            f"pending={order_row.get('pending_quantity')}"
+        )
+    else:
+        print(f"⚠ {tradingsymbol}: order snapshot not found in order book.")
+
+    return False
+
+
+def _square_off_single_leg_if_naked(kite, tradingsymbol, exchange):
+    """
+    Safety fallback:
+    If only one leg exists as an open position, square it off with MARKET.
+    """
+    positions = kite.positions()["net"]
+    for p in positions:
+        if p["tradingsymbol"] == tradingsymbol and int(p["quantity"]) != 0:
+            net_qty = int(p["quantity"])
+
+            if net_qty < 0:
+                txn = kite.TRANSACTION_TYPE_BUY
+            else:
+                txn = kite.TRANSACTION_TYPE_SELL
+
+            try:
+                kite.place_order(
+                    tradingsymbol=tradingsymbol,
+                    variety=kite.VARIETY_REGULAR,
+                    exchange=exchange,
+                    transaction_type=txn,
+                    quantity=abs(net_qty),
+                    order_type=kite.ORDER_TYPE_MARKET,
+                    product=kite.PRODUCT_NRML,
+                    tag=oUtils.SS_ORDER_TAG,
+                    market_protection=MARKET_PROTECTION,
+                )
+                print(f"🚨 Squared off naked leg {tradingsymbol} with MARKET {txn}, qty={abs(net_qty)}")
+            except Exception as e:
+                print(f"WARNING: Failed to square off naked leg {tradingsymbol}: {e}")
+
+            break
+
 
 def place_order(_pe, _ce, _transaction, _lots, _exchange):
     positions = kite.positions()
@@ -49,6 +173,7 @@ def place_order(_pe, _ce, _transaction, _lots, _exchange):
     ce_price = _marketable_limit_price(kite, _exchange, _ce, _transaction)
 
     pe_order_id = None
+    ce_order_id = None
 
     try:
         pe_order_id = kite.place_order(
@@ -63,7 +188,7 @@ def place_order(_pe, _ce, _transaction, _lots, _exchange):
             tag=oUtils.SS_ORDER_TAG,
         )
 
-        kite.place_order(
+        ce_order_id = kite.place_order(
             tradingsymbol=_ce,
             variety=kite.VARIETY_REGULAR,
             exchange=_exchange,
@@ -80,6 +205,29 @@ def place_order(_pe, _ce, _transaction, _lots, _exchange):
             f"at {datetime.now(indian_timezone).time()}."
         )
 
+        # Verify both legs; if not complete, convert pending/open leg to MARKET.
+        pe_ok = _ensure_filled_or_convert_to_market(kite, pe_order_id, _pe)
+        ce_ok = _ensure_filled_or_convert_to_market(kite, ce_order_id, _ce)
+
+        # Final safety: if one leg exists naked, square it off.
+        if not (pe_ok and ce_ok):
+            latest_positions = kite.positions()["net"]
+            pe_net = next((int(p["quantity"]) for p in latest_positions if p["tradingsymbol"] == _pe), 0)
+            ce_net = next((int(p["quantity"]) for p in latest_positions if p["tradingsymbol"] == _ce), 0)
+
+            if pe_net != 0 and ce_net == 0:
+                print(f"🚨 Naked PE leg detected in {_pe}. Squaring off.")
+                _square_off_single_leg_if_naked(kite, _pe, _exchange)
+
+            elif ce_net != 0 and pe_net == 0:
+                print(f"🚨 Naked CE leg detected in {_ce}. Squaring off.")
+                _square_off_single_leg_if_naked(kite, _ce, _exchange)
+
+            elif pe_net != 0 and ce_net != 0:
+                print("ℹ Both legs exist in positions. No naked-leg square-off required.")
+            else:
+                print("ℹ No open leg found after verification.")
+
     except Exception as e:
         print(f"Order placement failed: {e}")
 
@@ -91,7 +239,6 @@ def place_order(_pe, _ce, _transaction, _lots, _exchange):
                     if _transaction == kite.TRANSACTION_TYPE_SELL
                     else kite.TRANSACTION_TYPE_SELL
                 )
-                pe_exit_price = _marketable_limit_price(kite, _exchange, _pe, hedge_txn)
 
                 kite.place_order(
                     tradingsymbol=_pe,
@@ -99,15 +246,14 @@ def place_order(_pe, _ce, _transaction, _lots, _exchange):
                     exchange=_exchange,
                     transaction_type=hedge_txn,
                     quantity=_lots,
-                    order_type=kite.ORDER_TYPE_LIMIT,
-                    price=pe_exit_price,
+                    order_type=kite.ORDER_TYPE_MARKET,
                     product=kite.PRODUCT_NRML,
                     tag=oUtils.SS_ORDER_TAG,
+                    market_protection=MARKET_PROTECTION,
                 )
-                print(f"Neutralized first leg {_pe} with {hedge_txn} LIMIT @ {pe_exit_price}")
+                print(f"Neutralized first leg {_pe} with MARKET {hedge_txn}")
             except Exception as e2:
                 print(f"WARNING: Failed to neutralize first leg {_pe}: {e2}")
-
 
 if __name__ == '__main__':
 
