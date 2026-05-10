@@ -20,7 +20,7 @@ Backtest fill assumptions
 - Initial entry uses exact close at ENTRY_TIME_IST. If exact close is missing for CE or PE, the day is skipped.
 - Stop-loss exit uses candle HIGH because the short option is harmed by premium rising.
 - Stop-loss fill is assumed at the trigger price, not at candle high.
-- Re-entry uses the candle range after the configured waiting period. In strict mode,
+- Re-entry uses the actual candle range after the configured waiting period. In strict mode,
   the earlier sold premium must lie inside that candle's [LOW, HIGH] range.
 - Re-entry fill is assumed at the earlier sold price only if the level is touched
   after the waiting period. A touch that happens during the waiting period is ignored.
@@ -93,7 +93,7 @@ def parse_bool_env(name: str, default: bool) -> bool:
 PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
 
 # Entry and backtest window.
-ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:25")          # HH:MM
+ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:30")          # HH:MM
 LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "10"))
 
 # Strike distance from ATM in strike steps.
@@ -104,15 +104,25 @@ OTM_DISTANCE_STEPS = int(os.getenv("OTM_DISTANCE_STEPS", "0"))
 
 # Independent leg stop.
 # Example: 20 means a leg sold at 100 exits when premium reaches 120.
-LEG_PREMIUM_RISE_EXIT_PCT = float(os.getenv("LEG_PREMIUM_RISE_EXIT_PCT", "8"))
+LEG_PREMIUM_RISE_EXIT_PCT = float(os.getenv("LEG_PREMIUM_RISE_EXIT_PCT", "20"))
 
 # Re-entry retry count PER LEG, not per straddle.
 # Example: 2 means each leg can be re-sold up to 2 times after stop exit.
-MAX_RETRIES_PER_LEG = int(os.getenv("MAX_RETRIES_PER_LEG", "5"))
+MAX_RETRIES_PER_LEG = int(os.getenv("MAX_RETRIES_PER_LEG", "1"))
 
 # Minimum waiting time after a leg stop before that same leg is allowed to re-enter.
 # Keep 0 if you want immediate next-candle eligibility when premium returns.
-MIN_REENTRY_GAP_MINUTES = int(os.getenv("MIN_REENTRY_GAP_MINUTES", "14"))
+MIN_REENTRY_GAP_MINUTES = int(os.getenv("MIN_REENTRY_GAP_MINUTES", "0"))
+
+# Latest time at which a fresh re-entry is allowed.
+# Default 15:29 prevents a new short entry on the 15:30 session-close candle.
+# You may make this more conservative, for example "15:15", to avoid late-day re-entries.
+LATEST_REENTRY_TIME_IST = os.getenv("LATEST_REENTRY_TIME_IST", "15:29")
+
+# Tolerance used only when high/low is unavailable and the script must fall back
+# to an exact close-based touch check. For most option data with high/low columns,
+# this will not matter. Keep small to avoid false re-entries.
+REENTRY_CLOSE_TOLERANCE = float(os.getenv("REENTRY_CLOSE_TOLERANCE", "0.05"))
 
 # Transaction cost toggle.
 INCLUDE_TRANSACTION_COSTS = parse_bool_env("INCLUDE_TRANSACTION_COSTS", True)
@@ -206,6 +216,7 @@ def parse_hhmm(s: str) -> dtime:
 
 
 ENTRY_TIME = parse_hhmm(ENTRY_TIME_IST)
+LATEST_REENTRY_TIME = parse_hhmm(LATEST_REENTRY_TIME_IST)
 
 
 def safe_fname_part(s: str) -> str:
@@ -229,6 +240,7 @@ def default_output_path() -> str:
         f"_SL{safe_fname_part(str(LEG_PREMIUM_RISE_EXIT_PCT))}"
         f"_R{MAX_RETRIES_PER_LEG}"
         f"_GAP{MIN_REENTRY_GAP_MINUTES}"
+        f"_LRE{safe_fname_part(LATEST_REENTRY_TIME_IST)}"
         f"_TOUCH{int(REENTRY_REQUIRE_RANGE_TOUCH)}.xlsx",
     )
 
@@ -254,6 +266,14 @@ def validate_config() -> None:
         raise ValueError("MAX_RETRIES_PER_LEG must be >= 0")
     if MIN_REENTRY_GAP_MINUTES < 0:
         raise ValueError("MIN_REENTRY_GAP_MINUTES must be >= 0")
+    if LATEST_REENTRY_TIME < SESSION_START_IST or LATEST_REENTRY_TIME >= SESSION_END_IST:
+        raise ValueError(
+            f"LATEST_REENTRY_TIME_IST must be within "
+            f"[{SESSION_START_IST.strftime('%H:%M')}, {SESSION_END_IST.strftime('%H:%M')}). "
+            f"Current: {LATEST_REENTRY_TIME_IST}"
+        )
+    if REENTRY_CLOSE_TOLERANCE < 0:
+        raise ValueError("REENTRY_CLOSE_TOLERANCE must be >= 0")
 
 
 def normalize_underlying(name: str) -> Optional[str]:
@@ -340,34 +360,49 @@ def reentry_level_reached(
     *,
     low_raw: pd.Series,
     high_raw: pd.Series,
-    close_ffill: pd.Series,
+    close_raw: pd.Series,
     ts: pd.Timestamp,
     target_price: float,
 ) -> bool:
     """
-    Return True if the earlier sold premium can be treated as reached for re-entry.
+    Return True only when the earlier sold premium can reasonably be treated as touched.
 
-    With minute OHLC data, a re-entry at an exact level is safest when the level lies
-    inside the candle range: LOW <= target <= HIGH. If high/low is unavailable, the
-    function falls back to close-based logic.
+    Strict mode, REENTRY_REQUIRE_RANGE_TOUCH=True:
+    - preferred rule: LOW <= target <= HIGH using the actual candle's low/high
+    - fallback rule only when low/high is unavailable: actual close must be approximately
+      equal to target, within REENTRY_CLOSE_TOLERANCE
 
-    This prevents a common optimistic backtest error:
-    - target re-entry premium = 100
-    - candle high = 90, low = 70
-    - old logic using only LOW <= 100 would sell again at 100, although the candle never traded at 100
+    This deliberately avoids using a forward-filled close or the loose condition
+    close <= target in strict mode. That older fallback was optimistic and could create
+    false entries when the premium had already fallen below the tracked level.
+
+    Example of the bug avoided here:
+    - target re-entry premium = 71.20
+    - current/ffilled close = 0 or 50
+    - high/low missing at 15:30
+    The old logic treated close <= 71.20 as a re-entry at 71.20 even though 71.20
+    was not actually observed in that candle.
     """
     low_v = series_value(low_raw, ts)
     high_v = series_value(high_raw, ts)
-    close_v = series_value(close_ffill, ts)
+    close_v = series_value(close_raw, ts)
 
     if REENTRY_REQUIRE_RANGE_TOUCH:
+        # Best case: use the actual candle range.
         if pd.notna(low_v) and pd.notna(high_v):
             return float(low_v) <= float(target_price) <= float(high_v)
+
+        # Conservative fallback: if we do not have a range, use exact actual close touch.
+        # Do NOT use close <= target here. If close is below target, we cannot assume
+        # a sell-limit order at target would have executed.
         if pd.notna(close_v):
-            return float(close_v) <= float(target_price)
+            return abs(float(close_v) - float(target_price)) <= float(REENTRY_CLOSE_TOLERANCE)
+
         return False
 
-    # Looser mode: consider the level reached once premium is at/below the target.
+    # Looser mode: user explicitly accepts the older interpretation that once premium
+    # is at/below the target, the level is considered reachable. This mode is more
+    # optimistic and should be used cautiously.
     if pd.notna(low_v):
         return float(low_v) <= float(target_price)
     if pd.notna(close_v):
@@ -375,23 +410,36 @@ def reentry_level_reached(
     return False
 
 
-
 def first_reentry_check_timestamp(stop_ts: pd.Timestamp) -> pd.Timestamp:
     """
     Return the first candle timestamp at which re-entry may be checked after a stop.
 
-    This fixes an easy off-by-one confusion:
-    - If a stop occurs at 10:00 and MIN_REENTRY_GAP_MINUTES = 0,
-      re-entry can first be checked at 10:01 because the 10:00 candle sequence is unknowable.
-    - If a stop occurs at 10:00 and MIN_REENTRY_GAP_MINUTES = 15,
-      re-entry can first be checked at 10:15, not 10:16.
+    - If stop occurs at 10:00 and MIN_REENTRY_GAP_MINUTES = 0, checking starts at
+      10:01 because we do not know the sequence inside the 10:00 candle.
+    - If stop occurs at 10:00 and MIN_REENTRY_GAP_MINUTES = 15, checking starts at
+      10:15, not 10:16.
 
-    The function only controls when checking resumes. It does not carry forward a touch
-    that occurred during the waiting period. For a same-premium re-entry, the target
-    premium must be touched again at or after this returned timestamp.
+    This function controls when checking resumes. It does not carry forward a target
+    touch that happened during the waiting period. The target premium must be touched
+    again at or after the returned timestamp.
     """
     minutes_to_wait = max(1, int(MIN_REENTRY_GAP_MINUTES))
     return stop_ts + pd.Timedelta(minutes=minutes_to_wait)
+
+
+def is_reentry_timestamp_allowed(ts: pd.Timestamp, session_end_ts: pd.Timestamp) -> bool:
+    """
+    Return True if a fresh short re-entry may be opened at timestamp ts.
+
+    Key rule:
+    - Never open a fresh re-entry on the session-end candle itself. If a leg re-enters
+      at 15:30 and then exits at 15:30, the trade is artificial and cannot be managed.
+    - Also respect LATEST_REENTRY_TIME_IST, default 15:29. Set it earlier, such as
+      15:15, if you want to block late-day re-entries.
+    """
+    if ts >= session_end_ts:
+        return False
+    return ts.time() <= LATEST_REENTRY_TIME
 
 
 def minutes_between(a: pd.Timestamp, b: pd.Timestamp) -> int:
@@ -807,9 +855,11 @@ def simulate_one_leg(
     Simulate one option leg independently.
 
     State machine:
-    - OPEN: short option is active. If high >= stop trigger, buy back at trigger.
+    - OPEN: short option is active. If actual high >= stop trigger, buy back at trigger.
+      If high is missing, actual close is used as a conservative fallback.
+      Forward-filled close is deliberately NOT used for stop detection.
     - WAIT_REENTRY: leg is flat after stop. After MIN_REENTRY_GAP_MINUTES has elapsed,
-      sell again only if the original entry price is touched again, subject to retry limit.
+      sell again only if the original entry price is touched again and the retry limit allows it.
     - DONE: retry limit exhausted after a stop. No more trades in this leg for the day.
 
     Return tuple:
@@ -841,10 +891,13 @@ def simulate_one_leg(
 
     for ts in monitor_index:
         if state == "OPEN":
-            # Stop detection: use high if available; fall back to close.
+            # Stop detection: use the actual candle high if available.
+            # If high is unavailable, fall back to actual close for that same minute.
+            # Do NOT use forward-filled close here; that can create false stop events
+            # in minutes where the option did not actually trade.
             high_v = series_value(high_raw, ts)
-            close_v = series_value(close_ffill, ts)
-            observed_high = high_v if pd.notna(high_v) else close_v
+            actual_close_v = series_value(close_raw, ts)
+            observed_high = high_v if pd.notna(high_v) else actual_close_v
 
             if pd.notna(observed_high) and observed_high >= stop_trigger:
                 exit_price = float(stop_trigger)
@@ -882,10 +935,6 @@ def simulate_one_leg(
                     state = "DONE"
                 else:
                     state = "WAIT_REENTRY"
-                    # The wait period starts from the stop candle timestamp. A target touch
-                    # before next_reentry_allowed_ts is intentionally ignored because the
-                    # strategy says to wait first, then re-enter only when the same premium
-                    # is available again.
                     next_reentry_allowed_ts = first_reentry_check_timestamp(ts)
 
                 cycle_no += 1
@@ -895,6 +944,11 @@ def simulate_one_leg(
             if next_reentry_allowed_ts is not None and ts < next_reentry_allowed_ts:
                 continue
 
+            # Do not open a fresh re-entry on or after the latest permitted time.
+            # This prevents artificial rows where entry_time == exit_time == 15:30.
+            if not is_reentry_timestamp_allowed(ts, session_end_ts):
+                continue
+
             # Re-entry detection:
             # The target is the original sold premium. In strict mode, that level must
             # lie inside the candle range; otherwise the backtest may assume a fill at
@@ -902,7 +956,7 @@ def simulate_one_leg(
             if reentry_level_reached(
                 low_raw=low_raw,
                 high_raw=high_raw,
-                close_ffill=close_ffill,
+                close_raw=close_raw,
                 ts=ts,
                 target_price=float(initial_entry_price),
             ):
@@ -1318,6 +1372,8 @@ def build_config_df() -> pd.DataFrame:
         "LEG_PREMIUM_RISE_EXIT_PCT": LEG_PREMIUM_RISE_EXIT_PCT,
         "MAX_RETRIES_PER_LEG": MAX_RETRIES_PER_LEG,
         "MIN_REENTRY_GAP_MINUTES": MIN_REENTRY_GAP_MINUTES,
+        "LATEST_REENTRY_TIME_IST": LATEST_REENTRY_TIME_IST,
+        "REENTRY_CLOSE_TOLERANCE": REENTRY_CLOSE_TOLERANCE,
         "INCLUDE_TRANSACTION_COSTS": INCLUDE_TRANSACTION_COSTS,
         "REENTRY_REQUIRE_RANGE_TOUCH": REENTRY_REQUIRE_RANGE_TOUCH,
         "QTY_UNITS": str(QTY_UNITS),
@@ -1387,7 +1443,9 @@ def main() -> None:
 
     print(f"[INFO] Pickle files found: {len(paths)}")
     print(f"[INFO] Strategy: entry={ENTRY_TIME_IST}, OTM_DISTANCE_STEPS={OTM_DISTANCE_STEPS}, "
-          f"leg_stop_pct={LEG_PREMIUM_RISE_EXIT_PCT}, retries_per_leg={MAX_RETRIES_PER_LEG}")
+          f"leg_stop_pct={LEG_PREMIUM_RISE_EXIT_PCT}, retries_per_leg={MAX_RETRIES_PER_LEG}, "
+          f"reentry_gap_min={MIN_REENTRY_GAP_MINUTES}, latest_reentry={LATEST_REENTRY_TIME_IST}, "
+          f"strict_touch={REENTRY_REQUIRE_RANGE_TOUCH}")
 
     min_day_seen, max_day_seen, min_expiry_map = scan_pickles_pass1(paths)
     window_start = compute_window_start(max_day_seen, LOOKBACK_MONTHS)
