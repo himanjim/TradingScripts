@@ -24,6 +24,9 @@ What this version changes
    This pickle stores only the stock name and date combinations already shown.
    Candle data, daily data, and Kite instrument metadata are kept in memory only
    during the current run and are not written as many separate cache files.
+6. The chart uses a sleek crosshair mouse cursor.
+7. When the mouse is inside the chart area, only a compact price label is shown
+   near the mouse pointer. No horizontal/vertical overlay lines are drawn.
 
 Core features
 -------------
@@ -40,6 +43,8 @@ Core features
    session's daily H/L/C: R2, R1, CPR_upper, P, CPR_lower, S1, S2.
 10. Resistance lines are red, support lines are green, and CPR/pivot lines are
     blue/purple.
+11. Shows only a compact live mouse-price label near the pointer and uses a
+    crosshair cursor for training-style chart reading.
 
 Prerequisites
 -------------
@@ -52,22 +57,22 @@ Also required:
 Examples
 --------
 Random stock + random date:
-    python stock_candle_reveal_trainer_single_cache_solid_pivots.py
+    python stock_candle_reveal_trainer_mouse_price_crosshair.py
 
 Specific NSE symbol + specific date:
-    python stock_candle_reveal_trainer_single_cache_solid_pivots.py --symbol RELIANCE --date 2024-04-01
+    python stock_candle_reveal_trainer_mouse_price_crosshair.py --symbol RELIANCE --date 2024-04-01
 
 Specific Zerodha instrument token + specific date:
-    python stock_candle_reveal_trainer_single_cache_solid_pivots.py --stock-id 738561 --date 2024-04-01
+    python stock_candle_reveal_trainer_mouse_price_crosshair.py --stock-id 738561 --date 2024-04-01
 
 Specific stock, random unused date:
-    python stock_candle_reveal_trainer_single_cache_solid_pivots.py --symbol RELIANCE
+    python stock_candle_reveal_trainer_mouse_price_crosshair.py --symbol RELIANCE
 
 Random stock, specific date:
-    python stock_candle_reveal_trainer_single_cache_solid_pivots.py --date 2024-04-01
+    python stock_candle_reveal_trainer_mouse_price_crosshair.py --date 2024-04-01
 
 Reset shown stock/date history:
-    python stock_candle_reveal_trainer_single_cache_solid_pivots.py --reset-shown-cache
+    python stock_candle_reveal_trainer_mouse_price_crosshair.py --reset-shown-cache
 """
 
 from __future__ import annotations
@@ -970,7 +975,9 @@ def add_pivot_lines(fig: go.Figure, pivot_levels: Optional[PivotLevels], x_start
                 y=[y_float, y_float],
                 mode="lines",
                 line=dict(width=width, dash="solid", color=color),
-                hovertemplate=f"{label}: {y_float:.2f}<extra></extra>",
+                # Suppress pivot hover tooltips; mouse movement should show only
+                # the pointer price label.
+                hoverinfo="skip",
                 showlegend=False,
                 name=label,
             )
@@ -1016,6 +1023,9 @@ def make_candle_figure(
             increasing=dict(line=dict(color="#26a69a", width=CANDLE_LINE_WIDTH), fillcolor="#26a69a"),
             decreasing=dict(line=dict(color="#ef5350", width=CANDLE_LINE_WIDTH), fillcolor="#ef5350"),
             whiskerwidth=0.45,
+            # Suppress Plotly's default OHLC hover tooltip.
+            # The custom client-side price label is the only mouse readout.
+            hoverinfo="skip",
         )
     )
 
@@ -1039,7 +1049,10 @@ def make_candle_figure(
         template="plotly_white",
         height=CHART_HEIGHT_PX,
         margin=dict(l=45, r=84, t=58, b=38),
-        hovermode="x unified",
+        # Disable Plotly's built-in hover box.
+        # We show our own compact mouse-price label instead. This prevents the
+        # large OHLC hover overlay from covering the chart while training.
+        hovermode=False,
         dragmode="pan",
         xaxis_rangeslider_visible=False,
         uirevision=f"{selection.stock.token}-{selection.session_date}",
@@ -1047,6 +1060,8 @@ def make_candle_figure(
         plot_bgcolor="white",
         paper_bgcolor="white",
         showlegend=False,
+        hoverdistance=60,
+        spikedistance=-1,
     )
 
     fig.update_xaxes(
@@ -1058,12 +1073,9 @@ def make_candle_figure(
         zeroline=False,
         tickformat="%H:%M",
         ticks="outside",
-        showspikes=True,
-        spikemode="across",
-        spikesnap="cursor",
-        spikedash="dot",
-        spikecolor="rgba(0,0,0,0.35)",
-        spikethickness=1,
+        # Built-in spike lines are disabled because the requirement is to show
+        # only the price at the mouse pointer, not extra overlay lines.
+        showspikes=False,
     )
 
     fig.update_yaxes(
@@ -1076,12 +1088,9 @@ def make_candle_figure(
         zeroline=False,
         ticks="outside",
         side="right",
-        showspikes=True,
-        spikemode="across",
-        spikesnap="cursor",
-        spikedash="dot",
-        spikecolor="rgba(0,0,0,0.35)",
-        spikethickness=1,
+        # Built-in spike lines are disabled because the requirement is to show
+        # only the price at the mouse pointer, not extra overlay lines.
+        showspikes=False,
     )
 
     # Prior-day CPR/pivot references.
@@ -1099,6 +1108,246 @@ def make_candle_figure(
     )
 
     return fig
+
+
+
+
+def install_custom_mouse_crosshair(app: Dash) -> None:
+    """Install a compact mouse-price label and a crosshair cursor.
+
+    Earlier version drew a horizontal line, a vertical line, and a right-axis
+    badge. That became visually heavy and could feel like a large overlay.
+
+    This version intentionally does only one thing while the mouse is inside the
+    actual Plotly plot area:
+    - convert the pointer's y-pixel position into the corresponding stock price,
+    - show that price in a small floating label near the mouse pointer,
+    - hide the label as soon as the pointer leaves the plot area.
+
+    It does not draw horizontal lines, vertical lines, rectangles, or any other
+    overlay. It also disables Plotly's large default hover box through the figure
+    layout (`hovermode=False`) in `make_candle_figure()`.
+
+    The code is injected through Dash's HTML template, so no extra JavaScript or
+    CSS files are created. The only disk cache used by the script remains the
+    shown stock/date pickle.
+    """
+
+    app.index_string = """
+    <!DOCTYPE html>
+    <html>
+        <head>
+            {%metas%}
+            <title>{%title%}</title>
+            {%favicon%}
+            {%css%}
+            <style>
+                /*
+                   Sleek plus/crosshair cursor on the Plotly chart surface.
+                   Plotly uses nested SVG/drag layers, so the rule is applied to
+                   the graph container and the common inner plot layers.
+                */
+                #candle-graph,
+                #candle-graph .js-plotly-plot,
+                #candle-graph .main-svg,
+                #candle-graph .draglayer,
+                #candle-graph .nsewdrag {
+                    cursor: crosshair !important;
+                }
+
+                /*
+                   Compact floating price label.
+                   This is the only mouse overlay. It follows the pointer and
+                   displays the exact price represented by the pointer's vertical
+                   position on the y-axis.
+                */
+                .trainer-mouse-price-label {
+                    position: absolute;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    background: rgba(20, 20, 20, 0.88);
+                    color: #ffffff;
+                    font-family: Arial, sans-serif;
+                    font-size: 11px;
+                    line-height: 16px;
+                    text-align: center;
+                    pointer-events: none;
+                    z-index: 1000;
+                    display: none;
+                    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+                    white-space: nowrap;
+                    user-select: none;
+                }
+            </style>
+        </head>
+        <body>
+            {%app_entry%}
+            <footer>
+                {%config%}
+                {%scripts%}
+                {%renderer%}
+                <script>
+                (function () {
+                    "use strict";
+
+                    const GRAPH_ID = "candle-graph";
+                    const ATTACH_CHECK_INTERVAL_MS = 700;
+
+                    function formatPrice(value) {
+                        if (!isFinite(value)) {
+                            return "";
+                        }
+                        // NSE cash prices are conventionally shown with two decimals.
+                        return Number(value).toFixed(2);
+                    }
+
+                    function getGraphOuter() {
+                        return document.getElementById(GRAPH_ID);
+                    }
+
+                    function getPlotlyGraphDiv() {
+                        const outer = getGraphOuter();
+                        if (!outer) {
+                            return null;
+                        }
+                        return outer.querySelector(".js-plotly-plot");
+                    }
+
+                    function ensurePriceLabel(outer) {
+                        // Insert one small label into the Dash Graph container.
+                        // It is a sibling of Plotly's SVG layers and survives
+                        // ordinary Plotly redraws.
+                        outer.style.position = "relative";
+
+                        let label = outer.querySelector(".trainer-mouse-price-label");
+                        if (!label) {
+                            label = document.createElement("div");
+                            label.className = "trainer-mouse-price-label";
+                            outer.appendChild(label);
+                        }
+                        return label;
+                    }
+
+                    function hidePriceLabel(outer) {
+                        if (!outer) {
+                            return;
+                        }
+                        const label = outer.querySelector(".trainer-mouse-price-label");
+                        if (label) {
+                            label.style.display = "none";
+                        }
+                    }
+
+                    function clamp(value, minValue, maxValue) {
+                        return Math.max(minValue, Math.min(maxValue, value));
+                    }
+
+                    function attachMousePriceLabel() {
+                        const outer = getGraphOuter();
+                        const gd = getPlotlyGraphDiv();
+
+                        if (!outer || !gd || !gd._fullLayout) {
+                            return false;
+                        }
+
+                        // Dash/Plotly may rebuild the inner graph div after a
+                        // figure update. Attach once per actual Plotly graph div.
+                        if (gd.__trainerMousePriceOnlyAttached === true) {
+                            return true;
+                        }
+                        gd.__trainerMousePriceOnlyAttached = true;
+
+                        ensurePriceLabel(outer);
+
+                        gd.addEventListener("mousemove", function (event) {
+                            const fullLayout = gd._fullLayout;
+                            if (!fullLayout || !fullLayout.yaxis || !fullLayout._size) {
+                                hidePriceLabel(outer);
+                                return;
+                            }
+
+                            const size = fullLayout._size;
+                            const graphRect = gd.getBoundingClientRect();
+                            const outerRect = outer.getBoundingClientRect();
+
+                            // Pointer coordinates inside the Plotly plotting rectangle.
+                            const xInPlot = event.clientX - graphRect.left - size.l;
+                            const yInPlot = event.clientY - graphRect.top - size.t;
+
+                            // Do not show anything over the title, axes, margins, or modebar.
+                            if (xInPlot < 0 || xInPlot > size.w || yInPlot < 0 || yInPlot > size.h) {
+                                hidePriceLabel(outer);
+                                return;
+                            }
+
+                            let price;
+                            try {
+                                // Plotly yaxis.p2d converts plot-area y-pixel into data price.
+                                price = fullLayout.yaxis.p2d(yInPlot);
+                            } catch (e) {
+                                hidePriceLabel(outer);
+                                return;
+                            }
+
+                            if (!isFinite(price)) {
+                                hidePriceLabel(outer);
+                                return;
+                            }
+
+                            const label = ensurePriceLabel(outer);
+                            label.textContent = formatPrice(price);
+
+                            // Position the label close to the pointer. It is deliberately
+                            // not attached to the right axis, because that felt like a large
+                            // overlay in the earlier version.
+                            const labelWidth = 64;
+                            const labelHeight = 20;
+                            const mouseX = event.clientX - outerRect.left;
+                            const mouseY = event.clientY - outerRect.top;
+
+                            let left = mouseX + 10;
+                            let top = mouseY - 10;
+
+                            // Keep the label inside the graph container.
+                            left = clamp(left, 2, outerRect.width - labelWidth - 2);
+                            top = clamp(top, 2, outerRect.height - labelHeight - 2);
+
+                            label.style.left = left + "px";
+                            label.style.top = top + "px";
+                            label.style.display = "block";
+                        });
+
+                        gd.addEventListener("mouseleave", function () {
+                            hidePriceLabel(outer);
+                        });
+
+                        // Hide the label during scroll/resize/relayout so it never
+                        // remains at a stale screen position.
+                        window.addEventListener("scroll", function () { hidePriceLabel(outer); }, { passive: true });
+                        window.addEventListener("resize", function () { hidePriceLabel(outer); }, { passive: true });
+
+                        if (gd.on) {
+                            gd.on("plotly_relayout", function () { hidePriceLabel(outer); });
+                            gd.on("plotly_afterplot", function () { ensurePriceLabel(outer); });
+                        }
+
+                        return true;
+                    }
+
+                    document.addEventListener("DOMContentLoaded", function () {
+                        attachMousePriceLabel();
+                    });
+
+                    // Dash updates can replace the inner Plotly graph. A light
+                    // periodic check keeps the label active after candle advances
+                    // and new random stock/day selections.
+                    setInterval(attachMousePriceLabel, ATTACH_CHECK_INTERVAL_MS);
+                })();
+                </script>
+            </footer>
+        </body>
+    </html>
+    """
 
 
 # -----------------------------------------------------------------------------
@@ -1151,6 +1400,7 @@ def make_app(
 
     app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
     app.title = "Stock Candle Reveal Trainer"
+    install_custom_mouse_crosshair(app)
 
     # Keyboard event listener.
     #
@@ -1193,7 +1443,7 @@ def make_app(
                         [
                             html.H4("NSE 1-Minute Candle Reveal Trainer", className="mb-0"),
                             html.Div(
-                                "Press → or click Next. Solid red = R1/R2, solid green = S1/S2, solid blue/purple = CPR/P.",
+                                "Press → or click Next. Move mouse over chart to see only the exact price at pointer. Solid red = R1/R2, green = S1/S2.",
                                 className="text-muted small",
                             ),
                         ],
@@ -1227,6 +1477,7 @@ def make_app(
                         "height": "calc(100vh - 132px)",
                         "minHeight": "760px",
                         "width": "100%",
+                        "cursor": "crosshair",
                     },
                 ),
                 style={
@@ -1424,7 +1675,7 @@ def main() -> None:
 
     print("\nOpen this URL in your browser:")
     print(f"http://127.0.0.1:{args.port}")
-    print("\nControls: click 'Next candle' or press the Right Arrow key.")
+    print("\nControls: click 'Next candle' or press the Right Arrow key. Move mouse over chart to show only the exact price at pointer.")
     print(f"Only one disk cache file is used: {SHOWN_CACHE_PATH}\n")
 
     app.run(debug=True, port=args.port)

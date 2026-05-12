@@ -50,10 +50,10 @@ IST = pytz.timezone("Asia/Kolkata")
 # Format:
 # "SYMBOL": [[entry_levels], "BUY/SELL", target, [software_exit_levels], hard_stoploss_trigger]
 TRADE_SETUPS: Dict[str, List[Any]] = {
-    "RELIANCE": [[1400.00], "SELL", 1398.00, [1402.00], 1402.00],
+    "RELIANCE": [[1386.00], "SELL", 1384.00, [1388.00], 1388.00],
 }
 
-MAX_STOPLOSS_RUPEES = 4.0
+MAX_STOPLOSS_RUPEES = 10.0
 MAX_QTY_CAP: Optional[int] = 500
 
 EXCHANGE = "NSE"
