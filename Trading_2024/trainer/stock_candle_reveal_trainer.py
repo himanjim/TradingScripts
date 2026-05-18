@@ -212,22 +212,26 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 # Liquid NIFTY stock universe for random training mode. Tokens are deliberately
 # not hardcoded; the script resolves current tokens from Kite at runtime.
 TOP_NIFTY_STOCKS: List[str] = [
-    "RELIANCE",
-    "HDFCBANK",
-    "ICICIBANK",
-    "INFY",
-    "TCS",
-    "ITC",
-    "LT",
-    "SBIN",
-    "BHARTIARTL",
-    "AXISBANK",
-    "KOTAKBANK",
-    "HINDUNILVR",
-    "BAJFINANCE",
-    "MARUTI",
-    "SUNPHARMA",
+    "NIFTY 50",
+    "NIFTY BANK",
 ]
+# TOP_NIFTY_STOCKS: List[str] = [
+#     "RELIANCE",
+#     "HDFCBANK",
+#     "ICICIBANK",
+#     "INFY",
+#     "TCS",
+#     "ITC",
+#     "LT",
+#     "SBIN",
+#     "BHARTIARTL",
+#     "AXISBANK",
+#     "KOTAKBANK",
+#     "HINDUNILVR",
+#     "BAJFINANCE",
+#     "MARUTI",
+#     "SUNPHARMA",
+# ]
 
 
 # -----------------------------------------------------------------------------
