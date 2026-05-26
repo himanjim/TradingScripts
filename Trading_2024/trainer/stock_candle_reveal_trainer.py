@@ -1,10 +1,10 @@
 """
-NSE Stock 1-Minute Candle Reveal Trainer
+NIFTY/SENSEX 1-Minute Candle Reveal Trainer
 ========================================
 
 Purpose
 -------
-Browser-based training tool for reading NSE stock candles one candle at a time.
+Browser-based training tool for reading NIFTY and SENSEX candles one candle at a time.
 The script uses Zerodha Kite for historical OHLCV data, Dash for the web UI,
 and Plotly for a high-quality interactive candlestick chart.
 
@@ -33,8 +33,8 @@ Core features
 1. Accepts a Zerodha NSE stock instrument token through --stock-id.
 2. Accepts an NSE tradingsymbol through --symbol, e.g. RELIANCE.
 3. Accepts a specific date through --date in YYYY-MM-DD format.
-4. If no stock/date is supplied, picks a random stock from 15 hardcoded liquid
-   NIFTY stocks and a random weekday date within the last 3 years.
+4. If no stock/date is supplied, randomly picks either NIFTY or SENSEX and a random weekday date within
+   the last 3 years.
 5. If only stock is supplied, randomizes only the date.
 6. If only date is supplied, randomizes only the stock.
 7. Avoids repeating already-shown stock/date pairs in random mode.
@@ -56,7 +56,7 @@ Also required:
 
 Examples
 --------
-Random stock + random date:
+Random NIFTY/SENSEX + random date:
     python stock_candle_reveal_trainer_mouse_price_crosshair.py
 
 Specific NSE symbol + specific date:
@@ -209,29 +209,55 @@ CACHE_DIR = os.path.join(BASE_DIR, "stock_reveal_cache")
 SHOWN_CACHE_PATH = os.path.join(CACHE_DIR, "shown_stock_dates.pkl")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-# Liquid NIFTY stock universe for random training mode. Tokens are deliberately
-# not hardcoded; the script resolves current tokens from Kite at runtime.
-TOP_NIFTY_STOCKS: List[str] = [
-    "NIFTY 50",
-    "NIFTY BANK",
+# Random training universe.
+#
+# The requirement now is to show NIFTY and SENSEX on a random basis.
+# Therefore the random universe is deliberately restricted to two index
+# instruments:
+#   1. NSE:NIFTY 50  -> displayed as NIFTY
+#   2. BSE:SENSEX    -> displayed as SENSEX
+#
+# Important implementation detail:
+# - NIFTY 50 is an NSE index.
+# - SENSEX is a BSE index.
+# So the script downloads both NSE and BSE instrument dumps from Kite during the
+# current run and resolves the correct token from the correct exchange.
+#
+# Fallback tokens are used only if the instrument dump does not resolve the
+# index. In normal usage, Kite's current instrument dump is the source of truth.
+RANDOM_INDEX_UNIVERSE: List[Dict[str, object]] = [
+    {
+        "display": "NIFTY",
+        "symbol": "NIFTY 50",
+        "exchange": "NSE",
+        "fallback_token": 256265,  # widely used Kite token for NSE NIFTY 50 index
+    },
+    {
+        "display": "SENSEX",
+        "symbol": "SENSEX",
+        "exchange": "BSE",
+        "fallback_token": 265,     # fallback only; current Kite dump is preferred
+    },
 ]
-# TOP_NIFTY_STOCKS: List[str] = [
-#     "RELIANCE",
-#     "HDFCBANK",
-#     "ICICIBANK",
-#     "INFY",
-#     "TCS",
-#     "ITC",
-#     "LT",
-#     "SBIN",
-#     "BHARTIARTL",
-#     "AXISBANK",
-#     "KOTAKBANK",
-#     "HINDUNILVR",
-#     "BAJFINANCE",
-#     "MARUTI",
-#     "SUNPHARMA",
-# ]
+
+# Helpful aliases for manual CLI use.
+# Examples:
+#   --symbol NIFTY
+#   --symbol NIFTY50
+#   --symbol SENSEX
+SYMBOL_ALIASES: Dict[str, str] = {
+    "NIFTY": "NIFTY 50",
+    "NIFTY50": "NIFTY 50",
+    "NIFTY 50": "NIFTY 50",
+    "SENSEX": "SENSEX",
+}
+
+# Default exchange for the two index symbols. This prevents accidental lookup of
+# SENSEX in NSE or NIFTY in BSE when --exchange is not supplied.
+DEFAULT_EXCHANGE_BY_SYMBOL: Dict[str, str] = {
+    "NIFTY 50": "NSE",
+    "SENSEX": "BSE",
+}
 
 
 # -----------------------------------------------------------------------------
@@ -239,16 +265,39 @@ TOP_NIFTY_STOCKS: List[str] = [
 # -----------------------------------------------------------------------------
 @dataclass(frozen=True)
 class StockIdentity:
-    """Resolved stock identity needed by Kite historical_data."""
+    """Resolved Kite instrument identity.
+
+    The earlier version assumed NSE equities only. For NIFTY/SENSEX random
+    training we need both exchange and symbol, because:
+    - NIFTY 50 belongs to NSE.
+    - SENSEX belongs to BSE.
+
+    `display_name` is a clean UI label. For example, the Kite tradingsymbol is
+    "NIFTY 50", but the chart can display "NIFTY".
+    """
 
     symbol: str
     token: int
     name: str = ""
+    exchange: str = ""
+    display_name: str = ""
+
+    @property
+    def display_label(self) -> str:
+        """Return the label shown in the chart title and status line."""
+        return (self.display_name or self.symbol).upper().strip()
 
     @property
     def cache_stock_name(self) -> str:
-        """Stock name stored in the single shown-history pickle."""
-        return self.symbol.upper().strip()
+        """Stock/index name stored in the single shown-history pickle.
+
+        Include exchange in the key so NSE:NIFTY and BSE:SENSEX remain distinct
+        and future symbols with the same name on different exchanges do not
+        collide.
+        """
+        symbol_part = self.display_label
+        exchange_part = self.exchange.upper().strip()
+        return f"{exchange_part}:{symbol_part}" if exchange_part else symbol_part
 
 
 @dataclass(frozen=True)
@@ -268,6 +317,8 @@ class SessionSelection:
             "symbol": self.stock.symbol,
             "token": int(self.stock.token),
             "name": self.stock.name,
+            "exchange": self.stock.exchange,
+            "display_name": self.stock.display_name,
             "date": self.session_date.isoformat(),
             "step": int(step),
         }
@@ -333,7 +384,7 @@ class PivotLevels:
 def parse_args() -> argparse.Namespace:
     """Parse command-line options."""
     parser = argparse.ArgumentParser(
-        description="NSE 1-minute candle reveal trainer using Zerodha Kite."
+        description="NIFTY/SENSEX 1-minute candle reveal trainer using Zerodha Kite."
     )
     parser.add_argument(
         "--stock-id",
@@ -346,6 +397,17 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="NSE tradingsymbol, e.g. RELIANCE.",
+    )
+    parser.add_argument(
+        "--exchange",
+        type=str,
+        default=None,
+        choices=["NSE", "BSE", "nse", "bse"],
+        help=(
+            "Optional exchange for --symbol. Use NSE for NIFTY 50/NSE stocks "
+            "and BSE for SENSEX. If omitted, the script auto-selects NSE for "
+            "NIFTY 50 and BSE for SENSEX."
+        ),
     )
     parser.add_argument(
         "--date",
@@ -411,91 +473,175 @@ def init_kite() -> "KiteConnect":
     return kite
 
 
-def normalize_instruments_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize Kite NSE instrument dump columns used by the script."""
+def normalize_instruments_df(df: pd.DataFrame, default_exchange: str = "") -> pd.DataFrame:
+    """Normalize Kite instrument dump columns used by the script.
+
+    The same function is used for both NSE and BSE dumps. `default_exchange`
+    is applied when the dump does not explicitly carry the exchange value.
+    """
     if df.empty:
         return df
 
     required_cols = ["tradingsymbol", "instrument_token"]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
-        raise RuntimeError(f"Kite NSE instrument dump missing columns: {missing}")
+        raise RuntimeError(f"Kite instrument dump missing columns: {missing}")
 
     df = df.copy()
     df["tradingsymbol"] = df["tradingsymbol"].astype(str).str.upper().str.strip()
     df["instrument_token"] = pd.to_numeric(df["instrument_token"], errors="coerce").astype("Int64")
 
+    # Make optional fields predictable.
     for col in ["name", "instrument_type", "exchange", "segment"]:
         if col not in df.columns:
             df[col] = ""
         df[col] = df[col].astype(str).str.upper().str.strip()
 
+    # Some Kite dumps may have blank exchange values in individual rows. Fill
+    # them with the exchange from which the dump was downloaded.
+    default_exchange = default_exchange.upper().strip()
+    if default_exchange:
+        blank_exchange = df["exchange"].isin(["", "NAN", "NONE"])
+        df.loc[blank_exchange, "exchange"] = default_exchange
+
     df = df.dropna(subset=["instrument_token"]).copy()
     return df
 
 
-def load_nse_instruments(kite: "KiteConnect") -> pd.DataFrame:
-    """Download Kite NSE instrument metadata for the current run only.
+def load_market_instruments(kite: "KiteConnect") -> pd.DataFrame:
+    """Download NSE and BSE instrument metadata for the current run only.
 
-    No instrument file is written to disk. This satisfies the single-cache-file
-    requirement and avoids creating a new instrument pickle every day.
+    The earlier code downloaded only NSE instruments. That is why random mode
+    effectively stayed around NIFTY/NSE. SENSEX is on BSE, so we must load both
+    exchanges and then resolve each index from its proper exchange.
+
+    No instrument file is written to disk. This preserves the single-cache-file
+    design: only shown_stock_dates.pkl is persisted.
     """
-    print("[FETCH] Downloading Kite NSE instrument dump for this run...")
-    raw = kite.instruments("NSE")
-    df = normalize_instruments_df(pd.DataFrame(raw))
-    if df.empty:
-        raise RuntimeError("Kite returned an empty NSE instrument dump.")
-    return df
+    frames: List[pd.DataFrame] = []
+
+    for exchange in ("NSE", "BSE"):
+        print(f"[FETCH] Downloading Kite {exchange} instrument dump for this run...")
+        raw = kite.instruments(exchange)
+        df = normalize_instruments_df(pd.DataFrame(raw), default_exchange=exchange)
+        if df.empty:
+            print(f"[WARN] Kite returned an empty {exchange} instrument dump.")
+            continue
+        frames.append(df)
+
+    if not frames:
+        raise RuntimeError("Kite returned empty instrument dumps for both NSE and BSE.")
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined = combined.drop_duplicates(subset=["exchange", "tradingsymbol", "instrument_token"])
+    return combined
 
 
-def resolve_stock_by_symbol(instruments_df: pd.DataFrame, symbol: str) -> StockIdentity:
-    """Resolve an NSE tradingsymbol to Kite instrument token."""
-    symbol = symbol.upper().strip()
+def canonical_symbol(symbol: str) -> str:
+    """Normalize user-entered symbol aliases.
 
-    rows = instruments_df[
-        (instruments_df["tradingsymbol"] == symbol)
-        & (instruments_df["instrument_type"] == "EQ")
-    ].copy()
+    Examples:
+    - NIFTY   -> NIFTY 50
+    - NIFTY50 -> NIFTY 50
+    - SENSEX  -> SENSEX
+    """
+    raw = symbol.upper().strip()
+    return SYMBOL_ALIASES.get(raw, raw)
 
-    # Fallback for rare metadata quirks.
+
+def resolve_stock_by_symbol(
+    instruments_df: pd.DataFrame,
+    symbol: str,
+    exchange: Optional[str] = None,
+    display_name: str = "",
+) -> StockIdentity:
+    """Resolve a tradingsymbol/index symbol to a Kite instrument token.
+
+    This function supports both:
+    - NSE symbols, e.g. NIFTY 50 or RELIANCE
+    - BSE symbols, e.g. SENSEX
+
+    For NIFTY/SENSEX, exchange is auto-selected if not supplied.
+    For ordinary stocks, NSE is preferred when both NSE and BSE have the symbol.
+    """
+    symbol = canonical_symbol(symbol)
+    requested_exchange = (exchange or DEFAULT_EXCHANGE_BY_SYMBOL.get(symbol, "")).upper().strip()
+
+    rows = instruments_df[instruments_df["tradingsymbol"] == symbol].copy()
+
+    if requested_exchange:
+        rows = rows[rows["exchange"] == requested_exchange].copy()
+
     if rows.empty:
-        rows = instruments_df[instruments_df["tradingsymbol"] == symbol].copy()
+        exchange_text = f" on {requested_exchange}" if requested_exchange else ""
+        raise ValueError(f"Could not resolve symbol '{symbol}'{exchange_text} from Kite instruments.")
 
-    if rows.empty:
-        raise ValueError(f"Could not resolve NSE tradingsymbol '{symbol}' from Kite instruments.")
+    # Prioritise in a way that works for both index and stock use:
+    # 1. NSE/BSE priority: if no exchange was explicitly supplied, prefer NSE
+    #    for ordinary stocks because this trainer is primarily for Indian index/
+    #    NSE-style chart reading. SENSEX is protected by DEFAULT_EXCHANGE_BY_SYMBOL.
+    # 2. Instrument type: INDEX first for NIFTY/SENSEX, then EQ for stocks.
+    exchange_priority = {"NSE": 0, "BSE": 1}
+    type_priority = {"INDEX": 0, "EQ": 1}
+
+    rows["_exchange_priority"] = rows["exchange"].map(exchange_priority).fillna(9)
+    rows["_type_priority"] = rows["instrument_type"].map(type_priority).fillna(5)
+    rows = rows.sort_values(["_exchange_priority", "_type_priority", "instrument_token"])
 
     row = rows.iloc[0]
+    resolved_exchange = str(row.get("exchange", requested_exchange) or requested_exchange).upper().strip()
+    resolved_symbol = str(row.get("tradingsymbol", symbol) or symbol).upper().strip()
+
     return StockIdentity(
-        symbol=symbol,
+        symbol=resolved_symbol,
         token=int(row["instrument_token"]),
         name=str(row.get("name", "") or ""),
+        exchange=resolved_exchange,
+        display_name=(display_name or resolved_symbol),
     )
 
 
 def resolve_stock_by_token(instruments_df: pd.DataFrame, token: int) -> StockIdentity:
-    """Resolve a Kite token to symbol/name if present in the NSE dump."""
+    """Resolve a Kite token to symbol/exchange/name if present in the dumps.
+
+    If the token is not present, historical_data can still work with the token.
+    In that case we create a TOKEN_<id> display identity.
+    """
     token = int(token)
     rows = instruments_df[instruments_df["instrument_token"].astype("Int64") == token]
 
     if rows.empty:
-        # Kite historical_data can still work with only the token. Use a stable
-        # display/cache name so the single pickle can store stock+date.
-        return StockIdentity(symbol=f"TOKEN_{token}", token=token, name="")
+        return StockIdentity(
+            symbol=f"TOKEN_{token}",
+            token=token,
+            name="",
+            exchange="",
+            display_name=f"TOKEN_{token}",
+        )
 
     row = rows.iloc[0]
+    symbol = str(row.get("tradingsymbol", f"TOKEN_{token}")).upper().strip()
+    exchange = str(row.get("exchange", "") or "").upper().strip()
     return StockIdentity(
-        symbol=str(row.get("tradingsymbol", f"TOKEN_{token}")).upper().strip(),
+        symbol=symbol,
         token=token,
         name=str(row.get("name", "") or ""),
+        exchange=exchange,
+        display_name=symbol,
     )
 
 
 def resolve_requested_stock(args: argparse.Namespace, instruments_df: pd.DataFrame) -> Optional[StockIdentity]:
-    """Resolve stock from CLI args, or return None for random mode."""
+    """Resolve instrument from CLI args, or return None for random mode."""
     if args.stock_id is not None:
         return resolve_stock_by_token(instruments_df, int(args.stock_id))
     if args.symbol:
-        return resolve_stock_by_symbol(instruments_df, str(args.symbol))
+        return resolve_stock_by_symbol(
+            instruments_df=instruments_df,
+            symbol=str(args.symbol),
+            exchange=str(args.exchange).upper().strip() if args.exchange else None,
+            display_name=str(args.symbol).upper().strip(),
+        )
     return None
 
 
@@ -820,8 +966,43 @@ def random_candidate_date() -> date:
 
 
 def random_stock_from_universe(instruments_df: pd.DataFrame) -> StockIdentity:
-    """Pick and resolve one stock from the hardcoded stock universe."""
-    return resolve_stock_by_symbol(instruments_df, random.choice(TOP_NIFTY_STOCKS))
+    """Randomly choose either NIFTY or SENSEX and resolve its Kite token.
+
+    The name is kept as `random_stock_from_universe` to minimize changes in the
+    rest of the script, but in this version the random universe is index-based,
+    not stock-based.
+    """
+    spec = random.choice(RANDOM_INDEX_UNIVERSE)
+
+    symbol = str(spec["symbol"]).upper().strip()
+    exchange = str(spec["exchange"]).upper().strip()
+    display = str(spec.get("display", symbol)).upper().strip()
+
+    try:
+        return resolve_stock_by_symbol(
+            instruments_df=instruments_df,
+            symbol=symbol,
+            exchange=exchange,
+            display_name=display,
+        )
+    except Exception as exc:
+        # Fallback is deliberately last-resort. The current Kite instrument dump
+        # should normally resolve both index tokens.
+        fallback_token = spec.get("fallback_token")
+        if fallback_token is None:
+            raise
+
+        print(
+            f"[WARN] Could not resolve {exchange}:{symbol} from Kite instruments: {exc}. "
+            f"Using fallback token {fallback_token}."
+        )
+        return StockIdentity(
+            symbol=symbol,
+            token=int(fallback_token),
+            name=display,
+            exchange=exchange,
+            display_name=display,
+        )
 
 
 def pick_session_with_constraints(
@@ -1023,7 +1204,7 @@ def make_candle_figure(
             high=high_arr,
             low=low_arr,
             close=close_arr,
-            name=f"{selection.stock.symbol} 1m",
+            name=f"{selection.stock.display_label} 1m",
             increasing=dict(line=dict(color="#26a69a", width=CANDLE_LINE_WIDTH), fillcolor="#26a69a"),
             decreasing=dict(line=dict(color="#ef5350", width=CANDLE_LINE_WIDTH), fillcolor="#ef5350"),
             whiskerwidth=0.45,
@@ -1046,7 +1227,7 @@ def make_candle_figure(
 
     fig.update_layout(
         title=(
-            f"{selection.stock.symbol} | {selection.session_date} | "
+            f"{selection.stock.display_label} | {selection.session_date} | "
             f"Candle {step}/{len(df_full)} | {last_time} | "
             f"O {last_open:.2f} H {last_high:.2f} L {last_low:.2f} C {last_close:.2f}"
         ),
@@ -1377,6 +1558,8 @@ def make_app(
             symbol=str(store["symbol"]),
             token=int(store["token"]),
             name=str(store.get("name", "") or ""),
+            exchange=str(store.get("exchange", "") or ""),
+            display_name=str(store.get("display_name", "") or ""),
         )
         return SessionSelection(stock=stock, session_date=parse_iso_date(str(store["date"])))
 
@@ -1403,7 +1586,7 @@ def make_app(
         return pivot_levels_by_key[key]
 
     app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
-    app.title = "Stock Candle Reveal Trainer"
+    app.title = "NIFTY/SENSEX Candle Reveal Trainer"
     install_custom_mouse_crosshair(app)
 
     # Keyboard event listener.
@@ -1445,7 +1628,7 @@ def make_app(
                 [
                     html.Div(
                         [
-                            html.H4("NSE 1-Minute Candle Reveal Trainer", className="mb-0"),
+                            html.H4("NIFTY/SENSEX 1-Minute Candle Reveal Trainer", className="mb-0"),
                             html.Div(
                                 "Press → or click Next. Move mouse over chart to see only the exact price at pointer. Solid red = R1/R2, green = S1/S2.",
                                 className="text-muted small",
@@ -1453,7 +1636,7 @@ def make_app(
                         ],
                         className="me-auto",
                     ),
-                    dbc.Button("New random stock/day", id="new-random-btn", color="primary", className="me-2"),
+                    dbc.Button("New random NIFTY/SENSEX day", id="new-random-btn", color="primary", className="me-2"),
                     dbc.Button("Next candle (→)", id="next-btn", color="success", className="me-2"),
                     dbc.Button("Reset to first candle", id="reset-step-btn", color="secondary", outline=True),
                 ],
@@ -1639,7 +1822,7 @@ def make_app(
         selection = selection_from_store(store)
         df = get_df_for_selection(selection)
         if df.empty:
-            return f"No candles found for {selection.stock.symbol} on {selection.session_date}.", go.Figure()
+            return f"No candles found for {selection.stock.display_label} on {selection.session_date}.", go.Figure()
 
         step = max(1, min(int(store.get("step", INITIAL_STEP)), len(df)))
         pivot_levels = get_pivots_for_selection(selection)
@@ -1648,10 +1831,11 @@ def make_app(
         first_ts = pd.Timestamp(df["date"].iloc[0]).strftime("%H:%M")
         last_ts = pd.Timestamp(df["date"].iloc[-1]).strftime("%H:%M")
         stock_name = f" - {selection.stock.name}" if selection.stock.name else ""
+        exchange_text = f" | Exchange: {selection.stock.exchange}" if selection.stock.exchange else ""
         pivot_text = pivot_levels.summary() if pivot_levels else "Pivots unavailable: previous daily candle not found"
 
         status = (
-            f"Stock: {selection.stock.symbol}{stock_name} | "
+            f"Instrument: {selection.stock.display_label}{stock_name}{exchange_text} | "
             f"Token: {selection.stock.token} | Date: {selection.session_date} | "
             f"Candles shown: {step}/{len(df)} | Session: {first_ts}-{last_ts} IST | "
             f"{pivot_text}"
@@ -1672,7 +1856,7 @@ def main() -> None:
         reset_shown_cache()
 
     kite = init_kite()
-    instruments_df = load_nse_instruments(kite)
+    instruments_df = load_market_instruments(kite)
     selection, df = select_start_session(kite, instruments_df, args)
 
     app = make_app(kite, instruments_df, selection, df)
@@ -1680,6 +1864,7 @@ def main() -> None:
     print("\nOpen this URL in your browser:")
     print(f"http://127.0.0.1:{args.port}")
     print("\nControls: click 'Next candle' or press the Right Arrow key. Move mouse over chart to show only the exact price at pointer.")
+    print("Random mode now alternates between NSE:NIFTY 50 and BSE:SENSEX.")
     print(f"Only one disk cache file is used: {SHOWN_CACHE_PATH}\n")
 
     app.run(debug=True, port=args.port)
