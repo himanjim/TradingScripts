@@ -1,92 +1,111 @@
 #!/usr/bin/env python3
 """
-NiftySensexPrevDayRatioBacktester.py
-=====================================
+NiftySensexPrevDayRatioBacktester_RECALIBRATED.py
+=================================================
 
 Purpose
 -------
-Backtest the user's original NIFTY-SENSEX intuition directly:
+Backtest the user's **previous-day SENSEX/NIFTY ratio deviation** idea with
+more realistic trading controls:
 
-    "During a normal day, the relationship between SENSEX and NIFTY remains
-     reasonably stable. If SENSEX/NIFTY ratio spikes away from yesterday's
-     average relationship, does it return toward yesterday's average?"
+    1. A trade is NOT allowed to continue to the next trading day.
+    2. A trade must settle within a configurable number of 1-minute bars.
+       Default: HARD_TIME_STOP_BARS = 100.
+    3. A trade is force-exited if interim futures-proxy loss reaches a
+       configurable maximum loss.
+       Default: MAX_LOSS_RUPEES = 5000.
+    4. After a forced exit due to loss, bar limit, or no-overnight exit,
+       the baseline ratio is recalculated from the last configurable number
+       of bars and the scanner tries again using that recalibrated baseline
+       for the rest of that trading day.
+       Default: REBASE_LOOKBACK_BARS = 375, i.e. 6.25 hours of 1-minute bars.
 
-This is deliberately different from the earlier z-score approach.
+This script is deliberately separate from the z-score scripts.
+It tests the simpler ratio idea:
 
-Earlier z-score approach:
-    spread = log(SENSEX) - beta * log(NIFTY)
-    z      = (spread - rolling_mean) / rolling_std
+    ratio = SENSEX / NIFTY
 
-This script's simpler ratio approach:
-    ratio                = SENSEX / NIFTY
-    prev_day_avg_ratio   = average(SENSEX / NIFTY) on previous trading day
-    deviation_pct        = ((ratio / prev_day_avg_ratio) - 1) * 100
+Normal baseline:
 
-Trade hypothesis:
-    If deviation_pct is positive and large:
-        SENSEX is rich versus NIFTY.
-        Virtual futures trade = short SENSEX, long NIFTY.
+    prev_day_avg_ratio = average(SENSEX / NIFTY) on previous trading day
 
-    If deviation_pct is negative and large:
-        SENSEX is cheap versus NIFTY.
-        Virtual futures trade = long SENSEX, short NIFTY.
+Live deviation at any row:
 
-For every threshold, the script creates an event-study report:
-    - when deviation crossed the threshold,
-    - whether it returned near zero,
-    - how long it took,
-    - interim adverse movement,
-    - maximum interim rupee loss,
-    - final futures-proxy PnL using fixed quantities.
+    deviation_pct = ((current_ratio / active_baseline_ratio) - 1) * 100
 
-Important design choice
------------------------
-For an event, settlement is tested against the ENTRY BASELINE ratio, not a
-newly recalculated baseline on later days. This avoids the same "rebasing"
-problem we noticed in short-window z-score tests.
+Where active_baseline_ratio is normally previous-day average, but after a
+forced exit it may be recalibrated from the most recent intraday bars.
 
-Example:
-    If the event starts today using yesterday's average ratio as baseline,
-    and it carries overnight, settlement is still measured against that same
-    frozen entry baseline.
+Trade hypothesis
+----------------
+If deviation_pct is positive and large:
+    SENSEX is rich versus NIFTY.
+    Virtual futures trade = short SENSEX, long NIFTY.
+
+If deviation_pct is negative and large:
+    SENSEX is cheap versus NIFTY.
+    Virtual futures trade = long SENSEX, short NIFTY.
+
+Exit logic
+----------
+For each event, baseline is frozen at entry. A trade exits on the first of:
+
+    1. abs(deviation from ENTRY baseline) <= SETTLE_DEVIATION_PCT
+    2. current PnL <= -MAX_LOSS_RUPEES
+    3. bars held >= HARD_TIME_STOP_BARS
+    4. current row reaches FORCE_EXIT_TIME / last same-day bar, so no overnight
+    5. global MAX_LOOKAHEAD_BARS is reached, if still applicable
+
+Important point
+---------------
+This is still a **backtest / event-study** using spot index close values as a
+proxy for futures prices. For live-grade validation, use actual NIFTY/SENSEX
+futures or option premium data with bid/ask and slippage.
 
 Data source
 -----------
-This script DOES NOT download data. It reuses existing 4-year downloaded data.
+This script DOES NOT download data. It reuses existing downloaded 1-minute data.
 It tries, in order:
+
     1. ALIGNED_PATH env var, if supplied.
     2. ./nifty_sensex_4y_deviation_output/nifty_sensex_aligned_1min.pkl
     3. ./nifty_sensex_4y_deviation_output_z225/nifty_sensex_aligned_1min.pkl
     4. ./nifty_sensex_4y_deviation_output_z375/nifty_sensex_aligned_1min.pkl
-    5. candle pickle pair under ./nifty_sensex_4y_deviation_output/candles/
+    5. ./nifty_sensex_4y_deviation_output_z50/nifty_sensex_aligned_1min.pkl
+    6. candle pickle pair under common output folders.
 
 Expected aligned columns:
     date, nifty_close, sensex_close
 
-If only candle files are available, expected columns:
-    date, close
-
 Install dependencies:
     pip install pandas numpy openpyxl
 
-Typical run:
-    python NiftySensexPrevDayRatioBacktester.py
-
-Useful Windows CMD overrides:
-    set THRESHOLDS_PCT=0.03,0.05,0.07,0.10
+Typical Windows CMD run
+-----------------------
+    set THRESHOLDS_PCT=0.03,0.05
     set SETTLE_DEVIATION_PCT=0.01
-    set MAX_WAIT_TRADING_DAYS=10
-    set NIFTY_QTY=325
-    set SENSEX_QTY=100
-    set OUTPUT_DIR=./nifty_sensex_prevday_ratio_output
-    python NiftySensexPrevDayRatioBacktester.py
+    set HARD_TIME_STOP_BARS=100
+    set MAX_LOSS_RUPEES=5000
+    set REBASE_LOOKBACK_BARS=375
+    set ENABLE_ENTRY_TIME_FILTER=1
+    set ENTRY_START_TIME=09:30
+    set LAST_ENTRY_TIME=14:30
+    python NiftySensexPrevDayRatioBacktester_RECALIBRATED.py
 
-Notes
------
-1. PnL uses spot index close as a proxy for futures prices. For live-grade
-   testing, replace with actual NIFTY and SENSEX futures/option prices.
-2. This is an event-study/backtest, not live trading code.
-3. Costs are zero by default. Add COST_PER_TRADE_RUPEES later if needed.
+Output
+------
+Default output folder:
+    ./nifty_sensex_prevday_ratio_recalibrated_output
+
+For each threshold, an Excel and CSV are created. Reports include:
+    - summary
+    - events
+    - exit_reason_summary
+    - baseline_recalibrations
+    - daily_counts
+    - by_side
+    - holding_buckets
+    - config
 """
 
 from __future__ import annotations
@@ -104,45 +123,64 @@ import pandas as pd
 # CONFIGURATION
 # =============================================================================
 
-# Indian market session used in your historical 1-minute files.
 SESSION_START = dtime(9, 15, 0)
 SESSION_END = dtime(15, 30, 0)
 
-# Output folder.
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./nifty_sensex_prevday_ratio_output")
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./nifty_sensex_prevday_ratio_recalibrated_output")
 
 # Optional explicit aligned data file.
-# If set, this path is used first.
 ALIGNED_PATH_ENV = os.environ.get("ALIGNED_PATH", "").strip()
 
 # Optional explicit candle paths.
 NIFTY_CANDLES_PATH_ENV = os.environ.get("NIFTY_CANDLES_PATH", "").strip()
 SENSEX_CANDLES_PATH_ENV = os.environ.get("SENSEX_CANDLES_PATH", "").strip()
 
-# Ratio baseline: previous day's average ratio.
-# MEAN is the default because the user explicitly asked for average.
-# MEDIAN is also supported for robustness testing.
+# Previous-day baseline mode. MEAN follows your original idea. MEDIAN is optional.
 PREV_DAY_BASELINE_MODE = os.environ.get("PREV_DAY_BASELINE_MODE", "MEAN").strip().upper()
 
-# Thresholds are percentage deviations from previous-day average ratio.
-# Example: 0.05 means 0.05%, not 5%.
+# Thresholds are percentage deviations, not fractions.
+# Example: 0.03 means 0.03%, not 3%.
 THRESHOLDS_PCT = [
     float(x.strip())
     for x in os.environ.get("THRESHOLDS_PCT", "0.03,0.05,0.07,0.10").split(",")
     if x.strip()
 ]
 
-# Settlement means deviation from the frozen entry baseline has returned close
-# to zero. Example 0.01 means +/-0.01% from previous-day average ratio.
+# Settlement near the active baseline frozen at entry.
+# Example: 0.01 means +/-0.01% from the baseline ratio.
 SETTLE_DEVIATION_PCT = float(os.environ.get("SETTLE_DEVIATION_PCT", "0.01"))
 
-# Max wait for settlement. We keep this as a large diagnostic default, not a
-# trading recommendation.
+# Large diagnostic cap. In this revised version, HARD_TIME_STOP_BARS and
+# no-overnight logic usually exit earlier.
 MAX_WAIT_TRADING_DAYS = int(os.environ.get("MAX_WAIT_TRADING_DAYS", "10"))
 INTRADAY_BARS_PER_DAY = int(os.environ.get("INTRADAY_BARS_PER_DAY", "375"))
-MAX_LOOKAHEAD_BARS = int(
-    os.environ.get("MAX_LOOKAHEAD_BARS", str(MAX_WAIT_TRADING_DAYS * INTRADAY_BARS_PER_DAY))
-)
+MAX_LOOKAHEAD_BARS = int(os.environ.get("MAX_LOOKAHEAD_BARS", str(MAX_WAIT_TRADING_DAYS * INTRADAY_BARS_PER_DAY)))
+
+# Trading-style controls requested by user.
+# 100 bars is a practical starting value based on earlier findings that long
+# unresolved trades are the weak part of this strategy.
+HARD_TIME_STOP_BARS = int(os.environ.get("HARD_TIME_STOP_BARS", "100"))
+MAX_LOSS_RUPEES = float(os.environ.get("MAX_LOSS_RUPEES", "5000"))
+
+# No overnight carry. If enabled, exit at FORCE_EXIT_TIME if reached, otherwise
+# at the last available row for the entry trading date.
+NO_OVERNIGHT = os.environ.get("NO_OVERNIGHT", "1").strip().lower() in {"1", "true", "yes", "y"}
+FORCE_EXIT_TIME = dtime.fromisoformat(os.environ.get("FORCE_EXIT_TIME", "15:20"))
+
+# After a forced exit, recalculate baseline from the last 6.25 hours by default.
+# On 1-minute bars, 6.25 hours = 375 bars.
+ENABLE_REBASE_AFTER_FORCED_EXIT = os.environ.get("ENABLE_REBASE_AFTER_FORCED_EXIT", "1").strip().lower() in {
+    "1", "true", "yes", "y"
+}
+REBASE_LOOKBACK_BARS = int(os.environ.get("REBASE_LOOKBACK_BARS", "375"))
+REBASE_MIN_BARS = int(os.environ.get("REBASE_MIN_BARS", "50"))
+
+# Which exits trigger intraday baseline recalibration.
+REBASE_AFTER_EXIT_REASONS = {
+    x.strip().upper()
+    for x in os.environ.get("REBASE_AFTER_EXIT_REASONS", "MAX_LOSS_STOP,HARD_TIME_STOP,NO_OVERNIGHT_EXIT").split(",")
+    if x.strip()
+}
 
 # Fixed futures-like quantities from your strategy discussions.
 NIFTY_QTY = int(os.environ.get("NIFTY_QTY", "325"))
@@ -153,28 +191,16 @@ COST_PER_TRADE_RUPEES = float(os.environ.get("COST_PER_TRADE_RUPEES", "0"))
 
 # Non-overlap means one unresolved deviation episode is counted once.
 SKIP_OVERLAPPING_EVENTS = os.environ.get("SKIP_OVERLAPPING_EVENTS", "1").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "y",
+    "1", "true", "yes", "y"
 }
 
-# Optional entry time filter. OFF by default because this is a diagnostic.
-ENABLE_ENTRY_TIME_FILTER = os.environ.get("ENABLE_ENTRY_TIME_FILTER", "0").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "y",
+# Optional entry time filter. ON by default now because the user is moving toward
+# a trading-style test rather than a pure diagnostic.
+ENABLE_ENTRY_TIME_FILTER = os.environ.get("ENABLE_ENTRY_TIME_FILTER", "1").strip().lower() in {
+    "1", "true", "yes", "y"
 }
 ENTRY_START_TIME = dtime.fromisoformat(os.environ.get("ENTRY_START_TIME", "09:30"))
 LAST_ENTRY_TIME = dtime.fromisoformat(os.environ.get("LAST_ENTRY_TIME", "14:30"))
-
-# Optional hard time stop for trading-style tests. If blank/0, only max lookahead
-# is used. Example: set HARD_TIME_STOP_BARS=120 to force exit at 120 bars.
-HARD_TIME_STOP_BARS = int(os.environ.get("HARD_TIME_STOP_BARS", "0"))
-
-# Optional max-loss stop for trading-style tests. If blank/0, no rupee stop.
-MAX_LOSS_RUPEES = float(os.environ.get("MAX_LOSS_RUPEES", "0"))
 
 
 # =============================================================================
@@ -190,12 +216,34 @@ class DataSourceInfo:
     path_2: str = ""
 
 
+@dataclass
+class BaselineState:
+    """
+    Holds the active baseline used for scanning.
+
+    Normally baseline_source is PREV_DAY and baseline_value is the previous
+    trading day's average ratio. After a forced exit, baseline_source becomes
+    RECALIBRATED and baseline_value is the average ratio over the last
+    REBASE_LOOKBACK_BARS bars.
+
+    The recalibrated baseline is valid only for the same trading day. It resets
+    automatically on the next trading day.
+    """
+
+    source: str = "PREV_DAY"
+    value: float = np.nan
+    set_time: Optional[pd.Timestamp] = None
+    set_index: Optional[int] = None
+    valid_trading_date: Optional[date] = None
+    lookback_bars_used: int = 0
+
+
 # =============================================================================
 # DATA LOADING
 # =============================================================================
 
 def ensure_output_dir() -> None:
-    """Create the output directory if it does not exist."""
+    """Create output directory if it does not exist."""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
@@ -233,8 +281,6 @@ def is_aligned_df(df: pd.DataFrame) -> bool:
 def standardize_aligned_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Standardize aligned DataFrame column names and required fields."""
     out = df.copy()
-
-    # Make column lookup case-insensitive but preserve values.
     lower_map = {c.lower(): c for c in out.columns}
     out = out.rename(
         columns={
@@ -249,6 +295,12 @@ def standardize_aligned_columns(df: pd.DataFrame) -> pd.DataFrame:
     out["sensex_close"] = pd.to_numeric(out["sensex_close"], errors="coerce")
     out = out.dropna(subset=["nifty_close", "sensex_close"])
     out = out[(out["nifty_close"] > 0) & (out["sensex_close"] > 0)].copy()
+
+    # Keep normal session rows only. This protects the code if input data has
+    # any pre/post-market rows from a vendor.
+    t = out["date"].dt.time
+    out = out[(t >= SESSION_START) & (t <= SESSION_END)].copy()
+
     out["trading_date"] = out["date"].dt.date
     return out.reset_index(drop=True)
 
@@ -268,20 +320,13 @@ def align_from_candles(nifty_path: str, sensex_path: str) -> pd.DataFrame:
 
 
 def find_existing_data() -> Tuple[pd.DataFrame, DataSourceInfo]:
-    """
-    Locate and load existing 4-year NIFTY/SENSEX data.
-
-    This function intentionally does not download anything. It searches common
-    output paths created by the earlier NIFTY/SENSEX scripts.
-    """
-    # 1) Explicit aligned path via env.
+    """Locate and load existing 4-year NIFTY/SENSEX data."""
     if ALIGNED_PATH_ENV:
         df = load_pickle_or_csv(ALIGNED_PATH_ENV)
         if not is_aligned_df(df):
             raise ValueError(f"ALIGNED_PATH does not contain aligned columns: {ALIGNED_PATH_ENV}")
         return standardize_aligned_columns(df), DataSourceInfo("explicit_aligned", ALIGNED_PATH_ENV)
 
-    # 2) Common aligned paths from earlier scripts.
     candidate_aligned_paths = [
         "./nifty_sensex_4y_deviation_output/nifty_sensex_aligned_1min.pkl",
         "./nifty_sensex_4y_deviation_output_z225/nifty_sensex_aligned_1min.pkl",
@@ -294,12 +339,10 @@ def find_existing_data() -> Tuple[pd.DataFrame, DataSourceInfo]:
             if is_aligned_df(df):
                 return standardize_aligned_columns(df), DataSourceInfo("auto_aligned", p)
 
-    # 3) Explicit candle paths via env.
     if NIFTY_CANDLES_PATH_ENV and SENSEX_CANDLES_PATH_ENV:
         aligned = align_from_candles(NIFTY_CANDLES_PATH_ENV, SENSEX_CANDLES_PATH_ENV)
         return aligned, DataSourceInfo("explicit_candles", NIFTY_CANDLES_PATH_ENV, SENSEX_CANDLES_PATH_ENV)
 
-    # 4) Common candle paths from earlier scripts.
     candidate_candle_pairs = [
         (
             "./nifty_sensex_4y_deviation_output/candles/nifty_1min.pkl",
@@ -335,10 +378,10 @@ def find_existing_data() -> Tuple[pd.DataFrame, DataSourceInfo]:
 
 def add_prev_day_ratio_baseline(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add ratio, previous-day average ratio, and deviation_pct.
+    Add ratio, previous-day baseline, and prev-day deviation_pct.
 
-    deviation_pct uses the previous trading day's baseline for the current row:
-        deviation_pct = ((current_ratio / prev_day_avg_ratio) - 1) * 100
+    This baseline is used initially. During event scanning, it can be replaced
+    intraday by recalibrated baselines after forced exits.
     """
     out = df.copy().sort_values("date").reset_index(drop=True)
     out["ratio"] = out["sensex_close"] / out["nifty_close"]
@@ -351,20 +394,87 @@ def add_prev_day_ratio_baseline(df: pd.DataFrame) -> pd.DataFrame:
     else:
         raise ValueError("PREV_DAY_BASELINE_MODE must be MEAN or MEDIAN")
 
-    # Map each trading date to the immediately previous trading date's average ratio.
     trading_dates = sorted(day_ratio.index)
     prev_map: Dict[date, float] = {}
     for idx, d in enumerate(trading_dates):
-        if idx == 0:
-            prev_map[d] = np.nan
-        else:
-            prev_map[d] = float(day_ratio.loc[trading_dates[idx - 1]])
+        prev_map[d] = np.nan if idx == 0 else float(day_ratio.loc[trading_dates[idx - 1]])
 
     out["prev_day_avg_ratio"] = out["trading_date"].map(prev_map)
-    out["deviation_pct"] = ((out["ratio"] / out["prev_day_avg_ratio"]) - 1.0) * 100.0
-    out["abs_deviation_pct"] = out["deviation_pct"].abs()
+    out["prev_day_deviation_pct"] = ((out["ratio"] / out["prev_day_avg_ratio"]) - 1.0) * 100.0
+    out["prev_day_abs_deviation_pct"] = out["prev_day_deviation_pct"].abs()
 
     return out
+
+
+def deviation_pct_from_baseline(ratio_value: float, baseline_value: float) -> float:
+    """Calculate percentage deviation from any supplied baseline ratio."""
+    if not np.isfinite(ratio_value) or not np.isfinite(baseline_value) or baseline_value <= 0:
+        return np.nan
+    return float(((ratio_value / baseline_value) - 1.0) * 100.0)
+
+
+def recalibrate_baseline(
+    ratio: np.ndarray,
+    dates: np.ndarray,
+    trading_dates: np.ndarray,
+    exit_i: int,
+    current_trading_date: date,
+) -> Optional[BaselineState]:
+    """
+    Recalculate baseline from the last REBASE_LOOKBACK_BARS of the same day.
+
+    The logic uses only data available up to and including the forced-exit bar.
+    It deliberately avoids using future data.
+    """
+    # Collect same-day bars up to exit_i.
+    start_i = max(0, exit_i - REBASE_LOOKBACK_BARS + 1)
+    idxs = [k for k in range(start_i, exit_i + 1) if trading_dates[k] == current_trading_date]
+
+    if len(idxs) < REBASE_MIN_BARS:
+        return None
+
+    values = ratio[idxs]
+    values = values[np.isfinite(values)]
+    if len(values) < REBASE_MIN_BARS:
+        return None
+
+    return BaselineState(
+        source="RECALIBRATED_AFTER_FORCED_EXIT",
+        value=float(np.mean(values)),
+        set_time=pd.Timestamp(dates[exit_i]),
+        set_index=exit_i,
+        valid_trading_date=current_trading_date,
+        lookback_bars_used=int(len(values)),
+    )
+
+
+def get_active_baseline_for_index(
+    i: int,
+    baseline_state: BaselineState,
+    trading_dates: np.ndarray,
+    prev_day_baseline: np.ndarray,
+) -> Tuple[float, str, Optional[pd.Timestamp], int]:
+    """
+    Return active baseline value and metadata for the current row.
+
+    Recalibrated baseline is valid only for the same trading date. Otherwise,
+    fall back to that row's previous-day baseline.
+    """
+    current_day = trading_dates[i]
+    if (
+        baseline_state.source.startswith("RECALIBRATED")
+        and baseline_state.valid_trading_date == current_day
+        and np.isfinite(baseline_state.value)
+        and baseline_state.value > 0
+    ):
+        return (
+            float(baseline_state.value),
+            baseline_state.source,
+            baseline_state.set_time,
+            int(baseline_state.lookback_bars_used),
+        )
+
+    return float(prev_day_baseline[i]), "PREV_DAY", None, 0
 
 
 # =============================================================================
@@ -385,20 +495,29 @@ def compute_pair_pnl_path(
     path_nifty: np.ndarray,
     path_sensex: np.ndarray,
 ) -> np.ndarray:
-    """
-    Compute futures-like rupee PnL path using index closes as futures proxy.
-
-    If SENSEX is rich:
-        short SENSEX, long NIFTY.
-
-    If SENSEX is cheap:
-        long SENSEX, short NIFTY.
-    """
+    """Compute futures-like rupee PnL path using spot index closes as proxy."""
     if side == "SENSEX_RICH_SHORT_SENSEX_LONG_NIFTY":
         return ((entry_sensex - path_sensex) * SENSEX_QTY) + ((path_nifty - entry_nifty) * NIFTY_QTY)
 
     if side == "SENSEX_CHEAP_LONG_SENSEX_SHORT_NIFTY":
         return ((path_sensex - entry_sensex) * SENSEX_QTY) + ((entry_nifty - path_nifty) * NIFTY_QTY)
+
+    raise ValueError(f"Unknown side: {side}")
+
+
+def current_pair_pnl(
+    side: str,
+    entry_nifty: float,
+    entry_sensex: float,
+    current_nifty: float,
+    current_sensex: float,
+) -> float:
+    """Compute current PnL for one bar without rebuilding a whole path."""
+    if side == "SENSEX_RICH_SHORT_SENSEX_LONG_NIFTY":
+        return ((entry_sensex - current_sensex) * SENSEX_QTY) + ((current_nifty - entry_nifty) * NIFTY_QTY)
+
+    if side == "SENSEX_CHEAP_LONG_SENSEX_SHORT_NIFTY":
+        return ((current_sensex - entry_sensex) * SENSEX_QTY) + ((entry_nifty - current_nifty) * NIFTY_QTY)
 
     raise ValueError(f"Unknown side: {side}")
 
@@ -415,56 +534,89 @@ def is_time_allowed(ts: pd.Timestamp) -> bool:
     return ENTRY_START_TIME <= t <= LAST_ENTRY_TIME
 
 
-def build_events_for_threshold(df: pd.DataFrame, threshold_pct: float) -> pd.DataFrame:
+def last_allowed_same_day_index(dates: np.ndarray, trading_dates: np.ndarray, entry_i: int) -> int:
+    """
+    Return the last index to which a trade may be held without overnight carry.
+
+    If FORCE_EXIT_TIME exists in the same day, use the last bar at or before that
+    time. Otherwise, use the last available same-day bar.
+    """
+    entry_day = trading_dates[entry_i]
+    j = entry_i
+    last_same_day = entry_i
+    last_before_force_time = None
+
+    while j < len(dates) and trading_dates[j] == entry_day:
+        last_same_day = j
+        if pd.Timestamp(dates[j]).time() <= FORCE_EXIT_TIME:
+            last_before_force_time = j
+        j += 1
+
+    return last_before_force_time if last_before_force_time is not None else last_same_day
+
+
+def build_events_for_threshold(df: pd.DataFrame, threshold_pct: float) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Build non-overlapping event rows for one deviation threshold.
 
     Entry condition:
-        abs(deviation_pct[i]) >= threshold_pct
-        and abs(deviation_pct[i-1]) < threshold_pct
+        abs(deviation_from_active_baseline[i]) >= threshold_pct
+        and abs(deviation_from_active_baseline[i-1]) < threshold_pct
 
-    Settlement condition:
-        abs(deviation_from_ENTRY_BASELINE_pct[j]) <= SETTLE_DEVIATION_PCT
+    The active baseline is usually previous-day average ratio. After forced
+    exits, it can be recalibrated from the last REBASE_LOOKBACK_BARS bars.
 
-    Why frozen entry baseline?
-        If the event carries into a later day, that later day has its own
-        previous-day average. Using that newer baseline would rebase the event.
-        To test the original thesis honestly, each event keeps the baseline that
-        existed at entry time.
+    Exit condition is first of:
+        - SETTLED_TO_ENTRY_BASELINE
+        - MAX_LOSS_STOP
+        - HARD_TIME_STOP
+        - NO_OVERNIGHT_EXIT
+        - FORCED_MAX_WAIT_EXIT
     """
     required_cols = [
-        "date",
-        "trading_date",
-        "nifty_close",
-        "sensex_close",
-        "ratio",
-        "prev_day_avg_ratio",
-        "deviation_pct",
-        "abs_deviation_pct",
+        "date", "trading_date", "nifty_close", "sensex_close", "ratio", "prev_day_avg_ratio"
     ]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
-    work = df.dropna(subset=["prev_day_avg_ratio", "deviation_pct", "abs_deviation_pct"]).copy()
-    work = work.reset_index(drop=True)
+    work = df.dropna(subset=["ratio", "prev_day_avg_ratio"]).copy().reset_index(drop=True)
 
     dates = work["date"].to_numpy()
     trading_dates = work["trading_date"].to_numpy()
     nifty = work["nifty_close"].to_numpy(dtype=float)
     sensex = work["sensex_close"].to_numpy(dtype=float)
     ratio = work["ratio"].to_numpy(dtype=float)
-    baseline = work["prev_day_avg_ratio"].to_numpy(dtype=float)
-    dev = work["deviation_pct"].to_numpy(dtype=float)
-    abs_dev = work["abs_deviation_pct"].to_numpy(dtype=float)
+    prev_day_baseline = work["prev_day_avg_ratio"].to_numpy(dtype=float)
 
     rows: List[Dict] = []
-    i = 1
+    rebase_rows: List[Dict] = []
+
     n = len(work)
+    i = 1
     event_id = 0
 
+    # Recalibrated baseline state. Resets implicitly when trading day changes.
+    baseline_state = BaselineState()
+
     while i < n:
-        crossed = abs_dev[i] >= threshold_pct and abs_dev[i - 1] < threshold_pct
+        current_day = trading_dates[i]
+
+        baseline_i, baseline_source_i, baseline_set_time_i, baseline_lb_i = get_active_baseline_for_index(
+            i, baseline_state, trading_dates, prev_day_baseline
+        )
+        baseline_prev, _, _, _ = get_active_baseline_for_index(
+            i - 1, baseline_state, trading_dates, prev_day_baseline
+        )
+
+        dev_i = deviation_pct_from_baseline(float(ratio[i]), baseline_i)
+        # For crossing detection, compare previous bar using the same current
+        # active baseline. This avoids false non-crossing immediately after a
+        # recalibration changes the baseline.
+        dev_prev = deviation_pct_from_baseline(float(ratio[i - 1]), baseline_i)
+
+        crossed = np.isfinite(dev_i) and np.isfinite(dev_prev) and abs(dev_i) >= threshold_pct and abs(dev_prev) < threshold_pct
+
         if not crossed:
             i += 1
             continue
@@ -476,51 +628,64 @@ def build_events_for_threshold(df: pd.DataFrame, threshold_pct: float) -> pd.Dat
 
         event_id += 1
         entry_i = i
-        entry_baseline = float(baseline[entry_i])
+        entry_baseline = float(baseline_i)
+        entry_baseline_source = baseline_source_i
+        entry_baseline_set_time = baseline_set_time_i
+        entry_baseline_lookback_bars = baseline_lb_i
         entry_ratio = float(ratio[entry_i])
-        entry_dev = float(((entry_ratio / entry_baseline) - 1.0) * 100.0)
+        entry_dev = deviation_pct_from_baseline(entry_ratio, entry_baseline)
         entry_abs_dev = abs(entry_dev)
         side = infer_side(entry_dev)
 
-        # Search forward for settlement or optional stops.
         max_j = min(n - 1, entry_i + MAX_LOOKAHEAD_BARS)
+
         if HARD_TIME_STOP_BARS > 0:
             max_j = min(max_j, entry_i + HARD_TIME_STOP_BARS)
+
+        same_day_limit_j = last_allowed_same_day_index(dates, trading_dates, entry_i) if NO_OVERNIGHT else n - 1
+        max_j = min(max_j, same_day_limit_j)
 
         exit_j: Optional[int] = None
         settle_j: Optional[int] = None
         exit_reason = "FORCED_MAX_WAIT_EXIT"
 
-        # Pre-calculate path gradually for stops.
-        for j in range(entry_i + 1, max_j + 1):
-            # IMPORTANT: deviation is measured against frozen ENTRY baseline.
-            current_dev_from_entry_baseline = float(((ratio[j] / entry_baseline) - 1.0) * 100.0)
+        entry_nifty = float(nifty[entry_i])
+        entry_sensex = float(sensex[entry_i])
 
-            # Settlement check.
-            if abs(current_dev_from_entry_baseline) <= SETTLE_DEVIATION_PCT:
+        for j in range(entry_i + 1, max_j + 1):
+            dev_j = deviation_pct_from_baseline(float(ratio[j]), entry_baseline)
+            pnl_j = current_pair_pnl(side, entry_nifty, entry_sensex, float(nifty[j]), float(sensex[j]))
+            bars_held = j - entry_i
+
+            if abs(dev_j) <= SETTLE_DEVIATION_PCT:
                 settle_j = j
                 exit_j = j
                 exit_reason = "SETTLED_TO_ENTRY_BASELINE"
                 break
 
-            # Optional max-loss stop.
-            if MAX_LOSS_RUPEES > 0:
-                path_pnl = compute_pair_pnl_path(
-                    side=side,
-                    entry_nifty=float(nifty[entry_i]),
-                    entry_sensex=float(sensex[entry_i]),
-                    path_nifty=nifty[entry_i : j + 1],
-                    path_sensex=sensex[entry_i : j + 1],
-                )
-                if float(np.nanmin(path_pnl)) <= -MAX_LOSS_RUPEES:
-                    exit_j = j
-                    exit_reason = "MAX_LOSS_STOP"
-                    break
+            if MAX_LOSS_RUPEES > 0 and pnl_j <= -abs(MAX_LOSS_RUPEES):
+                exit_j = j
+                exit_reason = "MAX_LOSS_STOP"
+                break
+
+            if HARD_TIME_STOP_BARS > 0 and bars_held >= HARD_TIME_STOP_BARS:
+                exit_j = j
+                exit_reason = "HARD_TIME_STOP"
+                break
+
+            if NO_OVERNIGHT and j >= same_day_limit_j:
+                exit_j = j
+                exit_reason = "NO_OVERNIGHT_EXIT"
+                break
 
         if exit_j is None:
             exit_j = max_j
-            if HARD_TIME_STOP_BARS > 0 and exit_j == entry_i + HARD_TIME_STOP_BARS:
+            if NO_OVERNIGHT and exit_j >= same_day_limit_j:
+                exit_reason = "NO_OVERNIGHT_EXIT"
+            elif HARD_TIME_STOP_BARS > 0 and exit_j >= entry_i + HARD_TIME_STOP_BARS:
                 exit_reason = "HARD_TIME_STOP"
+            else:
+                exit_reason = "FORCED_MAX_WAIT_EXIT"
 
         path_slice = slice(entry_i, exit_j + 1)
         path_nifty = nifty[path_slice]
@@ -528,14 +693,13 @@ def build_events_for_threshold(df: pd.DataFrame, threshold_pct: float) -> pd.Dat
         path_ratio = ratio[path_slice]
         path_dates = dates[path_slice]
 
-        # Frozen-baseline path deviation, used for true event settlement analysis.
         path_dev_from_entry_baseline = ((path_ratio / entry_baseline) - 1.0) * 100.0
         path_abs_dev_from_entry_baseline = np.abs(path_dev_from_entry_baseline)
 
         pnl_path = compute_pair_pnl_path(
             side=side,
-            entry_nifty=float(nifty[entry_i]),
-            entry_sensex=float(sensex[entry_i]),
+            entry_nifty=entry_nifty,
+            entry_sensex=entry_sensex,
             path_nifty=path_nifty,
             path_sensex=path_sensex,
         )
@@ -552,7 +716,6 @@ def build_events_for_threshold(df: pd.DataFrame, threshold_pct: float) -> pd.Dat
         max_abs_dev_idx = int(np.nanargmax(path_abs_dev_from_entry_baseline))
         max_abs_dev_value = float(path_abs_dev_from_entry_baseline[max_abs_dev_idx])
 
-        # Direction-specific adverse deviation against entry baseline.
         if entry_dev > 0:
             directional_worst_dev = float(np.nanmax(path_dev_from_entry_baseline))
             directional_worst_idx = int(np.nanargmax(path_dev_from_entry_baseline))
@@ -560,8 +723,6 @@ def build_events_for_threshold(df: pd.DataFrame, threshold_pct: float) -> pd.Dat
             directional_worst_dev = float(np.nanmin(path_dev_from_entry_baseline))
             directional_worst_idx = int(np.nanargmin(path_dev_from_entry_baseline))
 
-        # First positive PnL time is useful because ratio may not settle but the
-        # virtual trade may already become profitable.
         positive_indices = np.where(pnl_path > 0)[0]
         first_positive_idx = int(positive_indices[0]) if len(positive_indices) else None
 
@@ -577,11 +738,14 @@ def build_events_for_threshold(df: pd.DataFrame, threshold_pct: float) -> pd.Dat
                 "entry_trading_date": trading_dates[entry_i],
                 "side": side,
                 "entry_ratio": entry_ratio,
-                "entry_prev_day_avg_ratio": entry_baseline,
+                "entry_baseline_ratio": entry_baseline,
+                "entry_baseline_source": entry_baseline_source,
+                "entry_baseline_set_time": entry_baseline_set_time if entry_baseline_set_time is not None else pd.NaT,
+                "entry_baseline_lookback_bars": entry_baseline_lookback_bars,
                 "entry_deviation_pct": entry_dev,
                 "entry_abs_deviation_pct": entry_abs_dev,
-                "entry_nifty_close": float(nifty[entry_i]),
-                "entry_sensex_close": float(sensex[entry_i]),
+                "entry_nifty_close": entry_nifty,
+                "entry_sensex_close": entry_sensex,
                 "settled": bool(settle_j is not None),
                 "settle_time": pd.Timestamp(dates[settle_j]) if settle_j is not None else pd.NaT,
                 "exit_time": pd.Timestamp(dates[exit_j]),
@@ -616,12 +780,53 @@ def build_events_for_threshold(df: pd.DataFrame, threshold_pct: float) -> pd.Dat
             }
         )
 
+        # Recalibrate baseline after forced exit. Normal settled exits do not
+        # trigger recalibration because the old baseline worked.
+        if ENABLE_REBASE_AFTER_FORCED_EXIT and exit_reason.upper() in REBASE_AFTER_EXIT_REASONS:
+            new_state = recalibrate_baseline(ratio, dates, trading_dates, exit_j, trading_dates[exit_j])
+            if new_state is not None:
+                baseline_state = new_state
+                rebase_rows.append(
+                    {
+                        "threshold_pct": threshold_pct,
+                        "after_event_id": event_id,
+                        "forced_exit_reason": exit_reason,
+                        "rebase_time": new_state.set_time,
+                        "rebase_index": new_state.set_index,
+                        "rebase_trading_date": new_state.valid_trading_date,
+                        "rebase_lookback_bars_requested": REBASE_LOOKBACK_BARS,
+                        "rebase_lookback_bars_used": new_state.lookback_bars_used,
+                        "new_baseline_ratio": new_state.value,
+                        "prev_day_baseline_at_exit": float(prev_day_baseline[exit_j]),
+                        "ratio_at_exit": float(ratio[exit_j]),
+                        "deviation_from_new_baseline_at_exit_pct": deviation_pct_from_baseline(float(ratio[exit_j]), new_state.value),
+                    }
+                )
+            else:
+                rebase_rows.append(
+                    {
+                        "threshold_pct": threshold_pct,
+                        "after_event_id": event_id,
+                        "forced_exit_reason": exit_reason,
+                        "rebase_time": pd.Timestamp(dates[exit_j]),
+                        "rebase_index": exit_j,
+                        "rebase_trading_date": trading_dates[exit_j],
+                        "rebase_lookback_bars_requested": REBASE_LOOKBACK_BARS,
+                        "rebase_lookback_bars_used": 0,
+                        "new_baseline_ratio": np.nan,
+                        "prev_day_baseline_at_exit": float(prev_day_baseline[exit_j]),
+                        "ratio_at_exit": float(ratio[exit_j]),
+                        "deviation_from_new_baseline_at_exit_pct": np.nan,
+                        "message": "Not enough same-day bars to recalibrate baseline.",
+                    }
+                )
+
         if SKIP_OVERLAPPING_EVENTS:
             i = exit_j + 1
         else:
             i += 1
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), pd.DataFrame(rebase_rows)
 
 
 # =============================================================================
@@ -645,54 +850,59 @@ def profit_factor(pnl: pd.Series) -> float:
 def summarize_events(events: pd.DataFrame, threshold_pct: float, trading_days: int) -> pd.DataFrame:
     """Create one-row summary for one threshold."""
     if events.empty:
-        return pd.DataFrame(
-            [
-                {
-                    "threshold_pct": threshold_pct,
-                    "total_events": 0,
-                    "trading_days": trading_days,
-                    "events_per_trading_day": 0.0,
-                }
-            ]
-        )
+        return pd.DataFrame([
+            {
+                "threshold_pct": threshold_pct,
+                "total_events": 0,
+                "trading_days": trading_days,
+                "events_per_trading_day": 0.0,
+            }
+        ])
 
     settled = events[events["settled"] == True].copy()  # noqa: E712
     forced = events[events["settled"] == False].copy()  # noqa: E712
     pnl = events["net_exit_pnl_rupees"].astype(float)
 
-    return pd.DataFrame(
-        [
-            {
-                "threshold_pct": threshold_pct,
-                "total_events": int(len(events)),
-                "trading_days": int(trading_days),
-                "events_per_trading_day": float(len(events) / trading_days) if trading_days else np.nan,
-                "settled_count": int(len(settled)),
-                "not_settled_count": int(len(forced)),
-                "settlement_rate_pct": safe_percent(len(settled), len(events)),
-                "median_bars_to_settle": float(settled["bars_to_settle"].median()) if not settled.empty else np.nan,
-                "p75_bars_to_settle": float(settled["bars_to_settle"].quantile(0.75)) if not settled.empty else np.nan,
-                "p90_bars_to_settle": float(settled["bars_to_settle"].quantile(0.90)) if not settled.empty else np.nan,
-                "p95_bars_to_settle": float(settled["bars_to_settle"].quantile(0.95)) if not settled.empty else np.nan,
-                "max_bars_to_settle": float(settled["bars_to_settle"].max()) if not settled.empty else np.nan,
-                "avg_net_pnl_per_event": float(pnl.mean()),
-                "median_net_pnl_per_event": float(pnl.median()),
-                "net_total_pnl_rupees": float(pnl.sum()),
-                "win_count_net": int((pnl > 0).sum()),
-                "loss_count_net": int((pnl <= 0).sum()),
-                "win_rate_net_pct": safe_percent(int((pnl > 0).sum()), len(events)),
-                "profit_factor_net": profit_factor(pnl),
-                "avg_max_loss_abs_rupees": float(events["max_loss_abs_rupees"].mean()),
-                "median_max_loss_abs_rupees": float(events["max_loss_abs_rupees"].median()),
-                "p90_max_loss_abs_rupees": float(events["max_loss_abs_rupees"].quantile(0.90)),
-                "max_loss_abs_rupees_worst_case": float(events["max_loss_abs_rupees"].max()),
-                "settle_deviation_pct": SETTLE_DEVIATION_PCT,
-                "max_lookahead_bars": MAX_LOOKAHEAD_BARS,
-                "hard_time_stop_bars": HARD_TIME_STOP_BARS,
-                "max_loss_rupees_stop": MAX_LOSS_RUPEES,
-            }
-        ]
-    )
+    exit_reason_counts = events["exit_reason"].value_counts().to_dict()
+
+    return pd.DataFrame([
+        {
+            "threshold_pct": threshold_pct,
+            "total_events": int(len(events)),
+            "trading_days": int(trading_days),
+            "events_per_trading_day": float(len(events) / trading_days) if trading_days else np.nan,
+            "settled_count": int(len(settled)),
+            "not_settled_count": int(len(forced)),
+            "settlement_rate_pct": safe_percent(len(settled), len(events)),
+            "exit_settled_count": int(exit_reason_counts.get("SETTLED_TO_ENTRY_BASELINE", 0)),
+            "exit_max_loss_count": int(exit_reason_counts.get("MAX_LOSS_STOP", 0)),
+            "exit_hard_time_stop_count": int(exit_reason_counts.get("HARD_TIME_STOP", 0)),
+            "exit_no_overnight_count": int(exit_reason_counts.get("NO_OVERNIGHT_EXIT", 0)),
+            "median_bars_to_settle": float(settled["bars_to_settle"].median()) if not settled.empty else np.nan,
+            "p75_bars_to_settle": float(settled["bars_to_settle"].quantile(0.75)) if not settled.empty else np.nan,
+            "p90_bars_to_settle": float(settled["bars_to_settle"].quantile(0.90)) if not settled.empty else np.nan,
+            "p95_bars_to_settle": float(settled["bars_to_settle"].quantile(0.95)) if not settled.empty else np.nan,
+            "max_bars_to_settle": float(settled["bars_to_settle"].max()) if not settled.empty else np.nan,
+            "avg_net_pnl_per_event": float(pnl.mean()),
+            "median_net_pnl_per_event": float(pnl.median()),
+            "net_total_pnl_rupees": float(pnl.sum()),
+            "win_count_net": int((pnl > 0).sum()),
+            "loss_count_net": int((pnl <= 0).sum()),
+            "win_rate_net_pct": safe_percent(int((pnl > 0).sum()), len(events)),
+            "profit_factor_net": profit_factor(pnl),
+            "avg_max_loss_abs_rupees": float(events["max_loss_abs_rupees"].mean()),
+            "median_max_loss_abs_rupees": float(events["max_loss_abs_rupees"].median()),
+            "p90_max_loss_abs_rupees": float(events["max_loss_abs_rupees"].quantile(0.90)),
+            "max_loss_abs_rupees_worst_case": float(events["max_loss_abs_rupees"].max()),
+            "settle_deviation_pct": SETTLE_DEVIATION_PCT,
+            "hard_time_stop_bars": HARD_TIME_STOP_BARS,
+            "max_loss_rupees_stop": MAX_LOSS_RUPEES,
+            "no_overnight": NO_OVERNIGHT,
+            "force_exit_time": FORCE_EXIT_TIME.isoformat(timespec="minutes"),
+            "rebase_enabled": ENABLE_REBASE_AFTER_FORCED_EXIT,
+            "rebase_lookback_bars": REBASE_LOOKBACK_BARS,
+        }
+    ])
 
 
 def build_daily_counts(events: pd.DataFrame) -> pd.DataFrame:
@@ -733,8 +943,8 @@ def build_holding_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
     if events.empty:
         return pd.DataFrame()
 
-    bins = [-1, 5, 15, 30, 60, 120, 240, 375, 750, 1500, 999999]
-    labels = ["<=5", "6-15", "16-30", "31-60", "61-120", "121-240", "241-375", "376-750", "751-1500", ">1500"]
+    bins = [-1, 5, 15, 30, 60, 100, 120, 240, 375, 750, 999999]
+    labels = ["<=5", "6-15", "16-30", "31-60", "61-100", "101-120", "121-240", "241-375", "376-750", ">750"]
     tmp = events.copy()
     tmp["holding_bucket"] = pd.cut(tmp["bars_to_exit"], bins=bins, labels=labels)
 
@@ -757,6 +967,31 @@ def build_holding_bucket_summary(events: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def build_exit_reason_summary(events: pd.DataFrame) -> pd.DataFrame:
+    """Summarize events and PnL by exit reason."""
+    if events.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for reason, g in events.groupby("exit_reason"):
+        pnl = g["net_exit_pnl_rupees"].astype(float)
+        rows.append(
+            {
+                "exit_reason": reason,
+                "events": int(len(g)),
+                "settled_count": int(g["settled"].sum()),
+                "net_total_pnl_rupees": float(pnl.sum()),
+                "avg_net_pnl_per_event": float(pnl.mean()),
+                "median_net_pnl_per_event": float(pnl.median()),
+                "win_rate_net_pct": safe_percent(int((pnl > 0).sum()), len(g)),
+                "profit_factor_net": profit_factor(pnl),
+                "worst_exit_pnl": float(pnl.min()),
+                "worst_max_loss_abs_rupees": float(g["max_loss_abs_rupees"].max()),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("events", ascending=False).reset_index(drop=True)
+
+
 def autosize_excel_columns(writer: pd.ExcelWriter, sheet_name: str, df: pd.DataFrame, max_width: int = 45) -> None:
     """Best-effort Excel column autosizing."""
     try:
@@ -770,9 +1005,9 @@ def autosize_excel_columns(writer: pd.ExcelWriter, sheet_name: str, df: pd.DataF
 
 
 def make_config_df(data_source: DataSourceInfo, aligned: pd.DataFrame) -> pd.DataFrame:
-    """Create a key-value config table for reproducibility."""
+    """Create key-value config table for reproducibility."""
     rows = [
-        ("strategy", "prev_day_avg_ratio"),
+        ("strategy", "prev_day_avg_ratio_recalibrated_after_forced_exit"),
         ("data_source_mode", data_source.mode),
         ("data_source_path_1", data_source.path_1),
         ("data_source_path_2", data_source.path_2),
@@ -787,6 +1022,12 @@ def make_config_df(data_source: DataSourceInfo, aligned: pd.DataFrame) -> pd.Dat
         ("max_lookahead_bars", MAX_LOOKAHEAD_BARS),
         ("hard_time_stop_bars", HARD_TIME_STOP_BARS),
         ("max_loss_rupees_stop", MAX_LOSS_RUPEES),
+        ("no_overnight", NO_OVERNIGHT),
+        ("force_exit_time", FORCE_EXIT_TIME.isoformat(timespec="minutes")),
+        ("enable_rebase_after_forced_exit", ENABLE_REBASE_AFTER_FORCED_EXIT),
+        ("rebase_after_exit_reasons", ",".join(sorted(REBASE_AFTER_EXIT_REASONS))),
+        ("rebase_lookback_bars", REBASE_LOOKBACK_BARS),
+        ("rebase_min_bars", REBASE_MIN_BARS),
         ("nifty_qty", NIFTY_QTY),
         ("sensex_qty", SENSEX_QTY),
         ("cost_per_trade_rupees", COST_PER_TRADE_RUPEES),
@@ -794,7 +1035,7 @@ def make_config_df(data_source: DataSourceInfo, aligned: pd.DataFrame) -> pd.Dat
         ("enable_entry_time_filter", ENABLE_ENTRY_TIME_FILTER),
         ("entry_start_time", ENTRY_START_TIME.isoformat(timespec="minutes")),
         ("last_entry_time", LAST_ENTRY_TIME.isoformat(timespec="minutes")),
-        ("note", "Settlement uses frozen entry baseline ratio, not later-day baselines."),
+        ("note", "Normal baseline is previous-day ratio; after forced exit, baseline may be recalibrated intraday."),
         ("pnl_note", "Index close levels are used as futures proxy."),
     ]
     return pd.DataFrame(rows, columns=["parameter", "value"])
@@ -803,6 +1044,7 @@ def make_config_df(data_source: DataSourceInfo, aligned: pd.DataFrame) -> pd.Dat
 def write_threshold_report(
     threshold_pct: float,
     events: pd.DataFrame,
+    rebase_events: pd.DataFrame,
     summary: pd.DataFrame,
     config_df: pd.DataFrame,
 ) -> str:
@@ -811,46 +1053,22 @@ def write_threshold_report(
     threshold_dir = os.path.join(OUTPUT_DIR, f"ratio_dev_ge_{label}pct")
     os.makedirs(threshold_dir, exist_ok=True)
 
-    xlsx_path = os.path.join(threshold_dir, f"nifty_sensex_ratio_dev_ge_{label}pct.xlsx")
-    csv_path = os.path.join(threshold_dir, f"nifty_sensex_ratio_dev_ge_{label}pct_events.csv")
+    xlsx_path = os.path.join(threshold_dir, f"nifty_sensex_ratio_dev_ge_{label}pct_recalibrated.xlsx")
+    csv_path = os.path.join(threshold_dir, f"nifty_sensex_ratio_dev_ge_{label}pct_recalibrated_events.csv")
+    rebase_csv_path = os.path.join(threshold_dir, f"nifty_sensex_ratio_dev_ge_{label}pct_recalibrations.csv")
 
-    # Put the inspection columns first.
     preferred_cols = [
-        "event_id",
-        "threshold_pct",
-        "entry_time",
-        "side",
-        "entry_deviation_pct",
-        "entry_abs_deviation_pct",
-        "entry_ratio",
-        "entry_prev_day_avg_ratio",
-        "settled",
-        "settle_time",
-        "exit_time",
-        "exit_reason",
-        "exit_deviation_from_entry_baseline_pct",
-        "bars_to_settle",
-        "bars_to_exit",
-        "entry_nifty_close",
-        "entry_sensex_close",
-        "exit_nifty_close",
-        "exit_sensex_close",
-        "max_loss_abs_rupees",
-        "max_loss_rupees",
-        "max_loss_time",
-        "max_profit_rupees",
-        "max_profit_time",
-        "gross_exit_pnl_rupees",
-        "cost_rupees",
-        "net_exit_pnl_rupees",
-        "first_positive_pnl_time",
-        "first_positive_pnl_bars",
-        "max_abs_deviation_during_wait_pct",
-        "directional_worst_deviation_pct",
-        "nifty_points_at_exit",
-        "sensex_points_at_exit",
-        "nifty_qty",
-        "sensex_qty",
+        "event_id", "threshold_pct", "entry_time", "side",
+        "entry_deviation_pct", "entry_abs_deviation_pct", "entry_ratio", "entry_baseline_ratio",
+        "entry_baseline_source", "entry_baseline_set_time", "entry_baseline_lookback_bars",
+        "settled", "settle_time", "exit_time", "exit_reason",
+        "exit_deviation_from_entry_baseline_pct", "bars_to_settle", "bars_to_exit",
+        "entry_nifty_close", "entry_sensex_close", "exit_nifty_close", "exit_sensex_close",
+        "max_loss_abs_rupees", "max_loss_rupees", "max_loss_time", "max_profit_rupees", "max_profit_time",
+        "gross_exit_pnl_rupees", "cost_rupees", "net_exit_pnl_rupees",
+        "first_positive_pnl_time", "first_positive_pnl_bars",
+        "max_abs_deviation_during_wait_pct", "directional_worst_deviation_pct",
+        "nifty_points_at_exit", "sensex_points_at_exit", "nifty_qty", "sensex_qty",
     ]
 
     if events.empty:
@@ -860,10 +1078,12 @@ def write_threshold_report(
         events_out = events[preferred_cols + other_cols].copy()
 
     events_out.to_csv(csv_path, index=False)
+    rebase_events.to_csv(rebase_csv_path, index=False)
 
     daily_counts = build_daily_counts(events)
     by_side = build_by_side_summary(events)
     holding_buckets = build_holding_bucket_summary(events)
+    exit_reason_summary = build_exit_reason_summary(events)
 
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
         summary.to_excel(writer, sheet_name="summary", index=False)
@@ -871,6 +1091,12 @@ def write_threshold_report(
 
         events_out.to_excel(writer, sheet_name="events", index=False)
         autosize_excel_columns(writer, "events", events_out)
+
+        exit_reason_summary.to_excel(writer, sheet_name="exit_reason_summary", index=False)
+        autosize_excel_columns(writer, "exit_reason_summary", exit_reason_summary)
+
+        rebase_events.to_excel(writer, sheet_name="baseline_recalibrations", index=False)
+        autosize_excel_columns(writer, "baseline_recalibrations", rebase_events)
 
         daily_counts.to_excel(writer, sheet_name="daily_counts", index=False)
         autosize_excel_columns(writer, "daily_counts", daily_counts)
@@ -893,9 +1119,9 @@ def write_threshold_report(
 # =============================================================================
 
 def main() -> None:
-    """Run the previous-day average ratio event study."""
+    """Run the previous-day average ratio backtest with forced-exit rebasing."""
     print("============================================================")
-    print("NIFTY-SENSEX previous-day average ratio backtester")
+    print("NIFTY-SENSEX previous-day ratio backtester with recalibration")
     print("============================================================")
 
     ensure_output_dir()
@@ -912,7 +1138,7 @@ def main() -> None:
     print("[STEP] Calculating ratio and previous-day average baseline ...")
     enriched = add_prev_day_ratio_baseline(aligned)
 
-    enriched_path = os.path.join(OUTPUT_DIR, "nifty_sensex_prevday_ratio_enriched.pkl")
+    enriched_path = os.path.join(OUTPUT_DIR, "nifty_sensex_prevday_ratio_enriched_recalibrated.pkl")
     enriched.to_pickle(enriched_path)
     if os.environ.get("SAVE_ENRICHED_CSV", "0").strip().lower() in {"1", "true", "yes", "y"}:
         enriched.to_csv(enriched_path.replace(".pkl", ".csv"), index=False)
@@ -926,16 +1152,16 @@ def main() -> None:
 
     print("[STEP] Building threshold reports ...")
     for threshold in THRESHOLDS_PCT:
-        events = build_events_for_threshold(enriched, threshold_pct=threshold)
+        events, rebase_events = build_events_for_threshold(enriched, threshold_pct=threshold)
         summary = summarize_events(events, threshold_pct=threshold, trading_days=trading_days)
         all_summaries.append(summary)
-        report_path = write_threshold_report(threshold, events, summary, config_df)
-        files.append({"threshold_pct": threshold, "events": len(events), "file": report_path})
+        report_path = write_threshold_report(threshold, events, rebase_events, summary, config_df)
+        files.append({"threshold_pct": threshold, "events": len(events), "recalibrations": len(rebase_events), "file": report_path})
 
     combined_summary = pd.concat(all_summaries, ignore_index=True) if all_summaries else pd.DataFrame()
     files_df = pd.DataFrame(files)
 
-    combined_path = os.path.join(OUTPUT_DIR, "combined_prevday_ratio_summary.xlsx")
+    combined_path = os.path.join(OUTPUT_DIR, "combined_prevday_ratio_recalibrated_summary.xlsx")
     with pd.ExcelWriter(combined_path, engine="openpyxl") as writer:
         combined_summary.to_excel(writer, sheet_name="combined_summary", index=False)
         autosize_excel_columns(writer, "combined_summary", combined_summary)
@@ -949,18 +1175,12 @@ def main() -> None:
     print("\n==================== FINAL SUMMARY ====================")
     if not combined_summary.empty:
         cols = [
-            "threshold_pct",
-            "total_events",
-            "events_per_trading_day",
-            "settlement_rate_pct",
-            "median_bars_to_settle",
-            "p90_bars_to_settle",
-            "net_total_pnl_rupees",
-            "win_rate_net_pct",
-            "profit_factor_net",
-            "max_loss_abs_rupees_worst_case",
+            "threshold_pct", "total_events", "events_per_trading_day",
+            "settlement_rate_pct", "exit_max_loss_count", "exit_hard_time_stop_count", "exit_no_overnight_count",
+            "net_total_pnl_rupees", "win_rate_net_pct", "profit_factor_net", "max_loss_abs_rupees_worst_case",
         ]
-        print(combined_summary[cols].to_string(index=False))
+        existing_cols = [c for c in cols if c in combined_summary.columns]
+        print(combined_summary[existing_cols].to_string(index=False))
     print("-------------------------------------------------------")
     print(f"Combined summary: {combined_path}")
     print(f"Output directory : {OUTPUT_DIR}")
