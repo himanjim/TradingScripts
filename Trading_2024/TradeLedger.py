@@ -19,7 +19,7 @@ def resolve_path(filename: str) -> str:
     return os.path.join(downloads_path, filename)
 
 orders_csv = resolve_path("orders.csv")
-positions_csv = resolve_path("positions (1).csv")
+positions_csv = resolve_path("positions.csv")
 
 # -----------------------------
 # Load data

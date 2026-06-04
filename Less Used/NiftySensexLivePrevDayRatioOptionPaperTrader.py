@@ -127,7 +127,7 @@ LAST_ENTRY_TIME = os.environ.get("LAST_ENTRY_TIME", "14:30")
 FORCE_EXIT_TIME = os.environ.get("FORCE_EXIT_TIME", "15:20")
 EXIT_ON_FORCE_EXIT_TIME = os.environ.get("EXIT_ON_FORCE_EXIT_TIME", "1").strip().lower() in {"1", "true", "yes", "y"}
 
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./nifty_sensex_live_prevday_ratio_logs")
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "nifty_sensex_live_prevday_ratio_logs")
 POLL_INTERVAL_SEC = float(os.environ.get("POLL_INTERVAL_SEC", "1.0"))
 
 # Main strategy thresholds in percent points.

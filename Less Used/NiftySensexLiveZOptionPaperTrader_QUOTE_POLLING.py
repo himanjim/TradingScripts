@@ -146,7 +146,7 @@ LAST_ENTRY_TIME = os.environ.get("LAST_ENTRY_TIME", "15:15")
 FORCE_EXIT_TIME = os.environ.get("FORCE_EXIT_TIME", "15:25")
 EXIT_ON_FORCE_EXIT_TIME = os.environ.get("EXIT_ON_FORCE_EXIT_TIME", "1").strip().lower() in {"1", "true", "yes", "y"}
 
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./nifty_sensex_live_z_quote_logs")
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "nifty_sensex_live_z_quote_logs")
 
 # Polling interval. 1 second is the intended research mode.
 POLL_INTERVAL_SEC = float(os.environ.get("POLL_INTERVAL_SEC", "1.0"))

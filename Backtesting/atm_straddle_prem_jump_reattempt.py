@@ -43,9 +43,9 @@ def _get_downloads_folder() -> str:
     downloads = Path.home() / "Downloads"
     return str(downloads if downloads.exists() else Path.home())
 
-LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "2500"))
-PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "5000"))
-MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "20"))  # 1 = only one re-entry
+LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "10000"))
+PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "100000"))
+MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "3"))  # 1 = only one re-entry
 REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "10"))
 
 _DEFAULT_OUT = os.path.join(
@@ -64,7 +64,7 @@ FAIL_ON_PICKLE_ERROR = os.getenv("FAIL_ON_PICKLE_ERROR", "0").strip() == "1"
 SESSION_START_IST = dtime(9, 15)
 SESSION_END_IST = dtime(15, 30)
 
-LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "6"))
+LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "12"))
 
 QTY_UNITS = {"NIFTY": 325, "SENSEX": 100}
 TRADEABLE = set(QTY_UNITS.keys())

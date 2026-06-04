@@ -125,7 +125,7 @@ OUTPUT_EXCEL = os.environ.get(
     "stock_intraday_momentum_candidate_selector.xlsx",
 ).strip()
 
-DATA_CACHE_DIR = os.environ.get("DATA_CACHE_DIR", "./stock_daily_cache").strip()
+DATA_CACHE_DIR = os.environ.get("DATA_CACHE_DIR", "../../Less Used/stock_daily_cache").strip()
 FORCE_REFRESH = os.environ.get("FORCE_REFRESH", "0").strip() == "1"
 
 TOP_N_TO_PRINT = int(os.environ.get("TOP_N_TO_PRINT", "10"))

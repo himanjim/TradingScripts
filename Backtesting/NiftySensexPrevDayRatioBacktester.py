@@ -126,7 +126,7 @@ import pandas as pd
 SESSION_START = dtime(9, 15, 0)
 SESSION_END = dtime(15, 30, 0)
 
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./nifty_sensex_prevday_ratio_recalibrated_output")
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "nifty_sensex_prevday_ratio_recalibrated_output")
 
 # Optional explicit aligned data file.
 ALIGNED_PATH_ENV = os.environ.get("ALIGNED_PATH", "").strip()

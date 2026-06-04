@@ -177,9 +177,9 @@ def process_file(fp: Path, outdir: Optional[Path]) -> bool:
 
 def main():
     ap = argparse.ArgumentParser(description="Remove images from DOCX and PDF files.")
-    ap.add_argument("--input", default=r"C:\Users\himan\Documents\Audacity", help="Input file or folder path")
+    ap.add_argument("--input", default=r"C:\Users\Local User\Documents\test", help="Input file or folder path")
     ap.add_argument("--recursive", action="store_true", help="Recurse into subfolders")
-    ap.add_argument("--outdir", default=r"C:\Users\himan\Documents", help="Output directory (optional)")
+    ap.add_argument("--outdir", default=r"C:\Users\Local User\Documents", help="Output directory (optional)")
     args = ap.parse_args()
 
     in_path = Path(args.input).expanduser().resolve()

@@ -262,13 +262,13 @@ def pick_latest_open_straddle_from_orders(kite, max_leg_gap_sec=180):
 
 if __name__ == "__main__":
     # === HONOR THESE EXACTLY ===
-    MAX_PROFIT = 30000
-    MAX_LOSS = -3000
-    MAX_PROFIT_EROSION = 10000
+    MAX_PROFIT = 4000
+    MAX_LOSS = -2000
+    MAX_PROFIT_EROSION = 3000
 
-    max_profit_set = None  # e.g. 14500.0 if restarting and you already saw peak profit ~14500
+    max_profit_set = 3064  # e.g. 14500.0 if restarting and you already saw peak profit ~14500
 
-    BASE_SLEEP = 2.0
+    BASE_SLEEP = 1.0
     FAST_SLEEP = 0.75  # don't hammer API
 
     indian_timezone = pytz.timezone("Asia/Calcutta")

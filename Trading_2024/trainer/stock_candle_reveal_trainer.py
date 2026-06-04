@@ -1,50 +1,60 @@
 """
-NIFTY/SENSEX 1-Minute Candle Reveal Trainer
-========================================
+FORCEMOT / KAYNES / IDEA 1-Minute Candle Reveal Trainer
+=======================================================
 
 Purpose
 -------
-Browser-based training tool for reading NIFTY and SENSEX candles one candle at a time.
+Browser-based training tool for reading one of three NSE stock charts one
+candle at a time:
+
+    1. FORCEMOT
+    2. KAYNES
+    3. IDEA
+
 The script uses Zerodha Kite for historical OHLCV data, Dash for the web UI,
 and Plotly for a high-quality interactive candlestick chart.
 
 What this version changes
 -------------------------
-1. Pivot/CPR lines are solid, not dashed or dotted.
-2. The chart is intentionally narrower and taller, so candles are easier to read
+1. Random mode is restricted to exactly three NSE stocks: FORCEMOT, KAYNES, IDEA.
+2. The stock selection follows a persistent cycle:
+       IDEA -> FORCEMOT -> KAYNES -> IDEA -> ...
+   Therefore, if IDEA was shown last, the next random session will use FORCEMOT;
+   after FORCEMOT it will use KAYNES; after KAYNES it will return to IDEA.
+3. The date is selected randomly from the last 3 years, but dates already shown
+   are not repeated. This date non-repetition is global across the three stocks.
+4. Pivot/CPR lines are solid, not dashed or dotted.
+5. The chart is intentionally narrower and taller, so candles are easier to read
    on a desktop/laptop screen.
-3. The top button ribbon is sticky/fixed at the top while the page scrolls.
-4. The Right Arrow key is captured at the full-page level, not through an empty
-   placeholder div. This makes keyboard stepping work after clicking anywhere
-   inside the app, including the chart or the buttons.
-5. Disk caching is reduced to exactly one pickle file:
+6. The top button ribbon is sticky/fixed at the top while the page scrolls.
+7. The Right Arrow key is captured at the full-page level.
+8. Disk caching is reduced to exactly one pickle file:
 
        stock_reveal_cache/shown_stock_dates.pkl
 
-   This pickle stores only the stock name and date combinations already shown.
-   Candle data, daily data, and Kite instrument metadata are kept in memory only
-   during the current run and are not written as many separate cache files.
-6. The chart uses a sleek crosshair mouse cursor.
-7. When the mouse is inside the chart area, only a compact price label is shown
-   near the mouse pointer. No horizontal/vertical overlay lines are drawn.
+   This pickle stores shown stock/date pairs, shown dates, and the last stock in
+   the rotation. Candle data, daily data, and Kite instrument metadata are kept
+   in memory only during the current run.
+9. The chart uses a sleek crosshair mouse cursor.
+10. When the mouse is inside the chart area, only a compact price label is shown
+    near the mouse pointer. No horizontal/vertical overlay lines are drawn.
 
 Core features
 -------------
-1. Accepts a Zerodha NSE stock instrument token through --stock-id.
-2. Accepts an NSE tradingsymbol through --symbol, e.g. RELIANCE.
-3. Accepts a specific date through --date in YYYY-MM-DD format.
-4. If no stock/date is supplied, randomly picks either NIFTY or SENSEX and a random weekday date within
-   the last 3 years.
-5. If only stock is supplied, randomizes only the date.
-6. If only date is supplied, randomizes only the stock.
-7. Avoids repeating already-shown stock/date pairs in random mode.
-8. Reveals one new candle per button click or Right Arrow key press.
-9. Draws Zerodha-style CPR/pivot levels from the immediately previous trading
+1. Accepts a specific NSE tradingsymbol through --symbol. In this version, it
+   must be one of FORCEMOT, KAYNES, or IDEA.
+2. Accepts a specific date through --date in YYYY-MM-DD format.
+3. If no stock/date is supplied, the stock is selected by the persistent cycle
+   and the date is selected randomly from the last 3 years without date repeat.
+4. If only stock is supplied, only the date is randomized.
+5. If only date is supplied, only the stock is selected from the cycle.
+6. Reveals one new candle per button click or Right Arrow key press.
+7. Draws Zerodha-style CPR/pivot levels from the immediately previous trading
    session's daily H/L/C: R2, R1, CPR_upper, P, CPR_lower, S1, S2.
-10. Resistance lines are red, support lines are green, and CPR/pivot lines are
-    blue/purple.
-11. Shows only a compact live mouse-price label near the pointer and uses a
-    crosshair cursor for training-style chart reading.
+8. Resistance lines are red, support lines are green, and CPR/pivot lines are
+   blue/purple.
+9. Shows only a compact live mouse-price label near the pointer and uses a
+   crosshair cursor for training-style chart reading.
 
 Prerequisites
 -------------
@@ -56,23 +66,20 @@ Also required:
 
 Examples
 --------
-Random NIFTY/SENSEX + random date:
-    python stock_candle_reveal_trainer_mouse_price_crosshair.py
+Cycle stock + random unused date:
+    python stock_candle_reveal_trainer_three_stock_cycle.py
 
-Specific NSE symbol + specific date:
-    python stock_candle_reveal_trainer_mouse_price_crosshair.py --symbol RELIANCE --date 2024-04-01
+Specific allowed stock + random unused date:
+    python stock_candle_reveal_trainer_three_stock_cycle.py --symbol IDEA
 
-Specific Zerodha instrument token + specific date:
-    python stock_candle_reveal_trainer_mouse_price_crosshair.py --stock-id 738561 --date 2024-04-01
+Specific allowed stock + specific date:
+    python stock_candle_reveal_trainer_three_stock_cycle.py --symbol FORCEMOT --date 2024-04-01
 
-Specific stock, random unused date:
-    python stock_candle_reveal_trainer_mouse_price_crosshair.py --symbol RELIANCE
+Cycle stock + specific date:
+    python stock_candle_reveal_trainer_three_stock_cycle.py --date 2024-04-01
 
-Random stock, specific date:
-    python stock_candle_reveal_trainer_mouse_price_crosshair.py --date 2024-04-01
-
-Reset shown stock/date history:
-    python stock_candle_reveal_trainer_mouse_price_crosshair.py --reset-shown-cache
+Reset shown stock/date/date-history and cycle state:
+    python stock_candle_reveal_trainer_three_stock_cycle.py --reset-shown-cache
 """
 
 from __future__ import annotations
@@ -209,54 +216,42 @@ CACHE_DIR = os.path.join(BASE_DIR, "stock_reveal_cache")
 SHOWN_CACHE_PATH = os.path.join(CACHE_DIR, "shown_stock_dates.pkl")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-# Random training universe.
+# Three-stock training universe.
 #
-# The requirement now is to show NIFTY and SENSEX on a random basis.
-# Therefore the random universe is deliberately restricted to two index
-# instruments:
-#   1. NSE:NIFTY 50  -> displayed as NIFTY
-#   2. BSE:SENSEX    -> displayed as SENSEX
+# Requirement implemented here:
+# - Only these three NSE stocks are used in random/cycle mode:
+#     1. FORCEMOT
+#     2. KAYNES
+#     3. IDEA
+# - The stock does not get chosen independently at random every time. Instead,
+#   the script remembers the last successfully shown stock and selects the next
+#   stock in this persistent rotation:
 #
-# Important implementation detail:
-# - NIFTY 50 is an NSE index.
-# - SENSEX is a BSE index.
-# So the script downloads both NSE and BSE instrument dumps from Kite during the
-# current run and resolves the correct token from the correct exchange.
+#       IDEA -> FORCEMOT -> KAYNES -> IDEA -> ...
 #
-# Fallback tokens are used only if the instrument dump does not resolve the
-# index. In normal usage, Kite's current instrument dump is the source of truth.
-RANDOM_INDEX_UNIVERSE: List[Dict[str, object]] = [
-    {
-        "display": "NIFTY",
-        "symbol": "NIFTY 50",
-        "exchange": "NSE",
-        "fallback_token": 256265,  # widely used Kite token for NSE NIFTY 50 index
-    },
-    {
-        "display": "SENSEX",
-        "symbol": "SENSEX",
-        "exchange": "BSE",
-        "fallback_token": 265,     # fallback only; current Kite dump is preferred
-    },
-]
+# - If there is no cache history yet, the first stock is selected randomly from
+#   these three names. From then onward the fixed rotation is followed.
+# - Dates are selected randomly from the last 3 years but are not repeated.
+#   Date non-repetition is global across the three stocks.
+THREE_STOCK_CYCLE: List[str] = ["IDEA", "FORCEMOT", "KAYNES"]
+ALLOWED_STOCKS: Set[str] = set(THREE_STOCK_CYCLE)
 
 # Helpful aliases for manual CLI use.
-# Examples:
-#   --symbol NIFTY
-#   --symbol NIFTY50
-#   --symbol SENSEX
+# Add aliases here if your personal naming differs from Kite's NSE symbol.
 SYMBOL_ALIASES: Dict[str, str] = {
-    "NIFTY": "NIFTY 50",
-    "NIFTY50": "NIFTY 50",
-    "NIFTY 50": "NIFTY 50",
-    "SENSEX": "SENSEX",
+    "IDEA": "IDEA",
+    "VODAFONEIDEA": "IDEA",
+    "VODAFONE IDEA": "IDEA",
+    "FORCEMOT": "FORCEMOT",
+    "FORCE MOTORS": "FORCEMOT",
+    "KAYNES": "KAYNES",
 }
 
-# Default exchange for the two index symbols. This prevents accidental lookup of
-# SENSEX in NSE or NIFTY in BSE when --exchange is not supplied.
+# All three instruments are NSE cash-market equities.
 DEFAULT_EXCHANGE_BY_SYMBOL: Dict[str, str] = {
-    "NIFTY 50": "NSE",
-    "SENSEX": "BSE",
+    "IDEA": "NSE",
+    "FORCEMOT": "NSE",
+    "KAYNES": "NSE",
 }
 
 
@@ -267,13 +262,9 @@ DEFAULT_EXCHANGE_BY_SYMBOL: Dict[str, str] = {
 class StockIdentity:
     """Resolved Kite instrument identity.
 
-    The earlier version assumed NSE equities only. For NIFTY/SENSEX random
-    training we need both exchange and symbol, because:
-    - NIFTY 50 belongs to NSE.
-    - SENSEX belongs to BSE.
-
-    `display_name` is a clean UI label. For example, the Kite tradingsymbol is
-    "NIFTY 50", but the chart can display "NIFTY".
+    This version is designed for three NSE cash-market stocks only:
+    FORCEMOT, KAYNES, and IDEA. `display_name` is kept as a separate field so
+    the UI and cache can remain stable even if Kite metadata uses a longer name.
     """
 
     symbol: str
@@ -289,11 +280,10 @@ class StockIdentity:
 
     @property
     def cache_stock_name(self) -> str:
-        """Stock/index name stored in the single shown-history pickle.
+        """Stock name stored in the single shown-history pickle.
 
-        Include exchange in the key so NSE:NIFTY and BSE:SENSEX remain distinct
-        and future symbols with the same name on different exchanges do not
-        collide.
+        The exchange prefix keeps the key explicit and future-proof even though
+        this version currently uses only NSE symbols.
         """
         symbol_part = self.display_label
         exchange_part = self.exchange.upper().strip()
@@ -384,30 +374,26 @@ class PivotLevels:
 def parse_args() -> argparse.Namespace:
     """Parse command-line options."""
     parser = argparse.ArgumentParser(
-        description="NIFTY/SENSEX 1-minute candle reveal trainer using Zerodha Kite."
+        description="FORCEMOT/KAYNES/IDEA 1-minute candle reveal trainer using Zerodha Kite."
     )
     parser.add_argument(
         "--stock-id",
         type=int,
         default=None,
-        help="Zerodha instrument_token. If supplied with --symbol, token takes priority.",
+        help="Zerodha instrument_token. Use only if you deliberately want to override symbol resolution.",
     )
     parser.add_argument(
         "--symbol",
         type=str,
         default=None,
-        help="NSE tradingsymbol, e.g. RELIANCE.",
+        help="Allowed NSE tradingsymbol: FORCEMOT, KAYNES, or IDEA.",
     )
     parser.add_argument(
         "--exchange",
         type=str,
         default=None,
-        choices=["NSE", "BSE", "nse", "bse"],
-        help=(
-            "Optional exchange for --symbol. Use NSE for NIFTY 50/NSE stocks "
-            "and BSE for SENSEX. If omitted, the script auto-selects NSE for "
-            "NIFTY 50 and BSE for SENSEX."
-        ),
+        choices=["NSE", "nse"],
+        help="Optional exchange for --symbol. This three-stock trainer uses NSE only.",
     )
     parser.add_argument(
         "--date",
@@ -476,8 +462,8 @@ def init_kite() -> "KiteConnect":
 def normalize_instruments_df(df: pd.DataFrame, default_exchange: str = "") -> pd.DataFrame:
     """Normalize Kite instrument dump columns used by the script.
 
-    The same function is used for both NSE and BSE dumps. `default_exchange`
-    is applied when the dump does not explicitly carry the exchange value.
+    The function is currently used for the NSE dump. `default_exchange` is
+    applied when the dump does not explicitly carry the exchange value.
     """
     if df.empty:
         return df
@@ -509,41 +495,27 @@ def normalize_instruments_df(df: pd.DataFrame, default_exchange: str = "") -> pd
 
 
 def load_market_instruments(kite: "KiteConnect") -> pd.DataFrame:
-    """Download NSE and BSE instrument metadata for the current run only.
+    """Download NSE instrument metadata for the current run only.
 
-    The earlier code downloaded only NSE instruments. That is why random mode
-    effectively stayed around NIFTY/NSE. SENSEX is on BSE, so we must load both
-    exchanges and then resolve each index from its proper exchange.
-
-    No instrument file is written to disk. This preserves the single-cache-file
-    design: only shown_stock_dates.pkl is persisted.
+    FORCEMOT, KAYNES, and IDEA are NSE cash-market equities. Therefore this
+    version downloads only the NSE instrument dump. Nothing is written to disk,
+    preserving the single-cache-file design: only shown_stock_dates.pkl is
+    persisted.
     """
-    frames: List[pd.DataFrame] = []
-
-    for exchange in ("NSE", "BSE"):
-        print(f"[FETCH] Downloading Kite {exchange} instrument dump for this run...")
-        raw = kite.instruments(exchange)
-        df = normalize_instruments_df(pd.DataFrame(raw), default_exchange=exchange)
-        if df.empty:
-            print(f"[WARN] Kite returned an empty {exchange} instrument dump.")
-            continue
-        frames.append(df)
-
-    if not frames:
-        raise RuntimeError("Kite returned empty instrument dumps for both NSE and BSE.")
-
-    combined = pd.concat(frames, ignore_index=True)
-    combined = combined.drop_duplicates(subset=["exchange", "tradingsymbol", "instrument_token"])
-    return combined
-
+    print("[FETCH] Downloading Kite NSE instrument dump for this run...")
+    raw = kite.instruments("NSE")
+    df = normalize_instruments_df(pd.DataFrame(raw), default_exchange="NSE")
+    if df.empty:
+        raise RuntimeError("Kite returned an empty NSE instrument dump.")
+    return df
 
 def canonical_symbol(symbol: str) -> str:
     """Normalize user-entered symbol aliases.
 
     Examples:
-    - NIFTY   -> NIFTY 50
-    - NIFTY50 -> NIFTY 50
-    - SENSEX  -> SENSEX
+    - VODAFONEIDEA -> IDEA
+    - FORCE MOTORS -> FORCEMOT
+    - KAYNES       -> KAYNES
     """
     raw = symbol.upper().strip()
     return SYMBOL_ALIASES.get(raw, raw)
@@ -555,17 +527,22 @@ def resolve_stock_by_symbol(
     exchange: Optional[str] = None,
     display_name: str = "",
 ) -> StockIdentity:
-    """Resolve a tradingsymbol/index symbol to a Kite instrument token.
+    """Resolve an allowed NSE tradingsymbol to a Kite instrument token.
 
-    This function supports both:
-    - NSE symbols, e.g. NIFTY 50 or RELIANCE
-    - BSE symbols, e.g. SENSEX
-
-    For NIFTY/SENSEX, exchange is auto-selected if not supplied.
-    For ordinary stocks, NSE is preferred when both NSE and BSE have the symbol.
+    Random/cycle mode is restricted to FORCEMOT, KAYNES, and IDEA. Manual
+    --symbol use is also restricted to those names or their aliases, so the app
+    cannot accidentally show unrelated stocks.
     """
     symbol = canonical_symbol(symbol)
-    requested_exchange = (exchange or DEFAULT_EXCHANGE_BY_SYMBOL.get(symbol, "")).upper().strip()
+    if symbol not in ALLOWED_STOCKS:
+        raise ValueError(
+            f"This trainer is restricted to {', '.join(THREE_STOCK_CYCLE)}. "
+            f"Received symbol: {symbol}"
+        )
+
+    requested_exchange = (exchange or DEFAULT_EXCHANGE_BY_SYMBOL.get(symbol, "NSE")).upper().strip()
+    if requested_exchange != "NSE":
+        raise ValueError("This three-stock trainer supports only NSE instruments.")
 
     rows = instruments_df[instruments_df["tradingsymbol"] == symbol].copy()
 
@@ -576,13 +553,10 @@ def resolve_stock_by_symbol(
         exchange_text = f" on {requested_exchange}" if requested_exchange else ""
         raise ValueError(f"Could not resolve symbol '{symbol}'{exchange_text} from Kite instruments.")
 
-    # Prioritise in a way that works for both index and stock use:
-    # 1. NSE/BSE priority: if no exchange was explicitly supplied, prefer NSE
-    #    for ordinary stocks because this trainer is primarily for Indian index/
-    #    NSE-style chart reading. SENSEX is protected by DEFAULT_EXCHANGE_BY_SYMBOL.
-    # 2. Instrument type: INDEX first for NIFTY/SENSEX, then EQ for stocks.
-    exchange_priority = {"NSE": 0, "BSE": 1}
-    type_priority = {"INDEX": 0, "EQ": 1}
+    # All allowed instruments are NSE equities. Still sort defensively in case
+    # Kite returns multiple rows after symbol filtering.
+    exchange_priority = {"NSE": 0}
+    type_priority = {"EQ": 0, "INDEX": 1}
 
     rows["_exchange_priority"] = rows["exchange"].map(exchange_priority).fillna(9)
     rows["_type_priority"] = rows["instrument_type"].map(type_priority).fillna(5)
@@ -611,17 +585,21 @@ def resolve_stock_by_token(instruments_df: pd.DataFrame, token: int) -> StockIde
     rows = instruments_df[instruments_df["instrument_token"].astype("Int64") == token]
 
     if rows.empty:
-        return StockIdentity(
-            symbol=f"TOKEN_{token}",
-            token=token,
-            name="",
-            exchange="",
-            display_name=f"TOKEN_{token}",
+        raise ValueError(
+            "This trainer is restricted to NSE symbols FORCEMOT, KAYNES, and IDEA. "
+            "The supplied token was not found in the NSE instrument dump, so it cannot be validated."
         )
 
     row = rows.iloc[0]
     symbol = str(row.get("tradingsymbol", f"TOKEN_{token}")).upper().strip()
     exchange = str(row.get("exchange", "") or "").upper().strip()
+
+    if symbol not in ALLOWED_STOCKS or exchange != "NSE":
+        raise ValueError(
+            f"This trainer is restricted to NSE symbols {', '.join(THREE_STOCK_CYCLE)}. "
+            f"Token {token} resolved to {exchange}:{symbol}."
+        )
+
     return StockIdentity(
         symbol=symbol,
         token=token,
@@ -640,99 +618,203 @@ def resolve_requested_stock(args: argparse.Namespace, instruments_df: pd.DataFra
             instruments_df=instruments_df,
             symbol=str(args.symbol),
             exchange=str(args.exchange).upper().strip() if args.exchange else None,
-            display_name=str(args.symbol).upper().strip(),
+            display_name=canonical_symbol(str(args.symbol)),
         )
     return None
 
 
 # -----------------------------------------------------------------------------
-# Single pickle: shown stock/date persistence
+# Single pickle: shown stock/date/date-cycle persistence
 # -----------------------------------------------------------------------------
-def load_shown_combinations() -> Set[Tuple[str, str]]:
-    """Load shown stock/date pairs from the single pickle file.
+def empty_history_payload() -> Dict[str, object]:
+    """Return the normalized in-memory shape of the single cache payload."""
+    return {
+        "shown_stock_dates": set(),  # Set[Tuple[str, str]], e.g. ("NSE:IDEA", "2024-04-01")
+        "shown_dates": set(),        # Set[str], e.g. "2024-04-01"; used for global date non-repeat
+        "last_stock": None,          # Last successful cycle stock, e.g. "IDEA"
+    }
 
-    Current pickle format:
-        {"shown_stock_dates": [{"stock": "RELIANCE", "date": "2024-04-01"}, ...]}
 
-    Only stock and date are semantically used. A little backward compatibility is
-    included for older set/list tuple formats, but the file is saved back in the
-    clean current format.
+def normalize_stock_key_for_cache(stock: str) -> str:
+    """Normalize stock keys read from old/new cache formats."""
+    stock = str(stock).upper().strip()
+    if not stock:
+        return ""
+
+    # Older/newer versions may store keys as NSE:IDEA. The stock part after the
+    # colon is what matters for cycle-state logic.
+    if ":" in stock:
+        stock = stock.split(":", 1)[1].strip()
+
+    return canonical_symbol(stock)
+
+
+def load_history_payload() -> Dict[str, object]:
+    """Load and normalize the single pickle file.
+
+    Current saved format:
+        {
+            "shown_stock_dates": [{"stock": "NSE:IDEA", "date": "2024-04-01"}, ...],
+            "shown_dates": ["2024-04-01", ...],
+            "last_stock": "IDEA"
+        }
+
+    Backward compatibility is intentionally included for the older formats used
+    by previous trainer versions:
+    - set/list of (stock, date) tuples
+    - dict with only "shown_stock_dates"
+
+    Date non-repetition is global. Therefore, even if an older cache only has
+    stock/date pairs, `shown_dates` is reconstructed from the dates in those
+    pairs.
     """
+    payload = empty_history_payload()
+
     if not os.path.exists(SHOWN_CACHE_PATH):
-        return set()
+        return payload
 
     try:
         with open(SHOWN_CACHE_PATH, "rb") as f:
             data = pickle.load(f)
+    except Exception as exc:
+        print(f"[WARN] Could not read shown history pickle: {exc}")
+        return payload
 
-        pairs: Set[Tuple[str, str]] = set()
+    shown_pairs: Set[Tuple[str, str]] = set()
+    shown_dates: Set[str] = set()
+    last_stock: Optional[str] = None
 
+    def add_pair(stock_value: object, date_value: object) -> None:
+        stock_raw = str(stock_value).upper().strip()
+        day = str(date_value).strip()
+        if not stock_raw or not day:
+            return
+
+        # Preserve explicit exchange in pair keys when present; otherwise use NSE.
+        if ":" in stock_raw:
+            exchange, raw_symbol = stock_raw.split(":", 1)
+            symbol = normalize_stock_key_for_cache(raw_symbol)
+            stock_key = f"{exchange.upper().strip()}:{symbol}"
+        else:
+            symbol = normalize_stock_key_for_cache(stock_raw)
+            stock_key = f"NSE:{symbol}" if symbol in ALLOWED_STOCKS else stock_raw
+
+        shown_pairs.add((stock_key, day))
+        shown_dates.add(day)
+
+    try:
         if isinstance(data, dict):
             records = data.get("shown_stock_dates", data.get("shown", []))
             for item in records:
                 if isinstance(item, dict):
-                    stock = str(item.get("stock", item.get("symbol", ""))).upper().strip()
-                    day = str(item.get("date", "")).strip()
-                    if stock and day:
-                        pairs.add((stock, day))
-            return pairs
+                    add_pair(item.get("stock", item.get("symbol", "")), item.get("date", ""))
+                elif isinstance(item, (tuple, list)) and len(item) >= 2:
+                    add_pair(item[0], item[1])
 
-        if isinstance(data, set):
+            # Explicit shown_dates, if present, is merged with dates reconstructed
+            # from shown_stock_dates.
+            for day in data.get("shown_dates", []):
+                day = str(day).strip()
+                if day:
+                    shown_dates.add(day)
+
+            raw_last = data.get("last_stock")
+            if raw_last:
+                candidate = normalize_stock_key_for_cache(str(raw_last))
+                if candidate in ALLOWED_STOCKS:
+                    last_stock = candidate
+
+        elif isinstance(data, set):
             for item in data:
                 if isinstance(item, tuple) and len(item) >= 2:
-                    stock_raw, day_raw = item[0], item[1]
-                    stock = f"TOKEN_{stock_raw}" if isinstance(stock_raw, int) else str(stock_raw).upper().strip()
-                    day = str(day_raw).strip()
-                    if stock and day:
-                        pairs.add((stock, day))
-            return pairs
+                    add_pair(item[0], item[1])
 
-        if isinstance(data, list):
+        elif isinstance(data, list):
             for item in data:
                 if isinstance(item, dict):
-                    stock = str(item.get("stock", item.get("symbol", ""))).upper().strip()
-                    day = str(item.get("date", "")).strip()
+                    add_pair(item.get("stock", item.get("symbol", "")), item.get("date", ""))
                 elif isinstance(item, (tuple, list)) and len(item) >= 2:
-                    stock = str(item[0]).upper().strip()
-                    day = str(item[1]).strip()
-                else:
-                    continue
-                if stock and day:
-                    pairs.add((stock, day))
-            return pairs
+                    add_pair(item[0], item[1])
 
     except Exception as exc:
-        print(f"[WARN] Could not read shown stock/date pickle: {exc}")
+        print(f"[WARN] Could not normalize shown history pickle: {exc}")
 
-    return set()
+    payload["shown_stock_dates"] = shown_pairs
+    payload["shown_dates"] = shown_dates
+    payload["last_stock"] = last_stock
+    return payload
 
 
-def save_shown_combinations(shown: Set[Tuple[str, str]]) -> None:
-    """Save shown stock/date pairs to the single pickle file."""
+def save_history_payload(payload: Dict[str, object]) -> None:
+    """Save the normalized history payload to the single pickle file."""
+    shown_pairs = payload.get("shown_stock_dates", set())
+    shown_dates = payload.get("shown_dates", set())
+    last_stock = payload.get("last_stock")
+
     records = [
         {"stock": stock, "date": day}
-        for stock, day in sorted(shown, key=lambda x: (x[0], x[1]))
+        for stock, day in sorted(shown_pairs, key=lambda x: (x[0], x[1]))
     ]
-    payload = {"shown_stock_dates": records}
+
+    clean_payload = {
+        "shown_stock_dates": records,
+        "shown_dates": sorted(str(d) for d in shown_dates),
+        "last_stock": str(last_stock).upper().strip() if last_stock else None,
+    }
 
     tmp_path = SHOWN_CACHE_PATH + ".tmp"
     try:
         with open(tmp_path, "wb") as f:
-            pickle.dump(payload, f)
+            pickle.dump(clean_payload, f)
         os.replace(tmp_path, SHOWN_CACHE_PATH)
     except Exception as exc:
-        print(f"[WARN] Could not save shown stock/date pickle: {exc}")
+        print(f"[WARN] Could not save shown history pickle: {exc}")
 
 
-def mark_combination_shown(selection: SessionSelection) -> None:
-    """Mark the current stock/date as already shown."""
-    shown = load_shown_combinations()
-    shown.add(selection.key())
-    save_shown_combinations(shown)
+def load_shown_combinations() -> Set[Tuple[str, str]]:
+    """Load shown stock/date pairs from the single pickle file."""
+    return set(load_history_payload().get("shown_stock_dates", set()))
+
+
+def load_shown_dates() -> Set[str]:
+    """Load globally shown dates from the single pickle file."""
+    return set(load_history_payload().get("shown_dates", set()))
+
+
+def load_last_cycle_stock() -> Optional[str]:
+    """Load the last successfully shown stock in the IDEA/FORCEMOT/KAYNES cycle."""
+    value = load_history_payload().get("last_stock")
+    if not value:
+        return None
+    candidate = normalize_stock_key_for_cache(str(value))
+    return candidate if candidate in ALLOWED_STOCKS else None
+
+
+def mark_combination_shown(selection: SessionSelection, update_last_stock: bool = True) -> None:
+    """Mark the current stock/date and date as already shown.
+
+    `shown_dates` is global: once a date is shown for any of the three stocks,
+    random mode will not show that date again for any stock.
+    """
+    payload = load_history_payload()
+    shown_pairs: Set[Tuple[str, str]] = set(payload.get("shown_stock_dates", set()))
+    shown_dates: Set[str] = set(payload.get("shown_dates", set()))
+
+    shown_pairs.add(selection.key())
+    shown_dates.add(selection.session_date.isoformat())
+
+    if update_last_stock:
+        stock_symbol = normalize_stock_key_for_cache(selection.stock.display_label)
+        if stock_symbol in ALLOWED_STOCKS:
+            payload["last_stock"] = stock_symbol
+
+    payload["shown_stock_dates"] = shown_pairs
+    payload["shown_dates"] = shown_dates
+    save_history_payload(payload)
 
 
 def reset_shown_cache() -> None:
-    """Delete the single shown-history pickle."""
+    """Delete the single shown-history pickle, including cycle state."""
     if os.path.exists(SHOWN_CACHE_PATH):
         os.remove(SHOWN_CACHE_PATH)
     print(f"[CACHE] Reset: {SHOWN_CACHE_PATH}")
@@ -943,66 +1025,65 @@ def get_pivot_levels_for_session(
 # -----------------------------------------------------------------------------
 # Session selection
 # -----------------------------------------------------------------------------
-def random_candidate_date() -> date:
-    """Pick a random weekday date within the last 3 years, excluding today."""
+def random_candidate_date(excluded_dates: Optional[Set[str]] = None) -> date:
+    """Pick a random unused weekday date within the last 3 years.
+
+    `excluded_dates` contains ISO dates that have already been shown. This makes
+    date non-repetition global across FORCEMOT, KAYNES, and IDEA.
+    """
+    excluded_dates = excluded_dates or set()
+
     today = datetime.now(IST).date()
     latest = today - timedelta(days=1)
     earliest = today - timedelta(days=RANDOM_LOOKBACK_DAYS)
 
-    for _ in range(60):
-        offset = random.randint(0, (latest - earliest).days)
-        candidate = earliest + timedelta(days=offset)
-        if is_weekday(candidate):
-            return candidate
+    candidate_pool: List[date] = []
+    candidate = earliest
+    while candidate <= latest:
+        if is_weekday(candidate) and candidate.isoformat() not in excluded_dates:
+            candidate_pool.append(candidate)
+        candidate += timedelta(days=1)
 
-    # Deterministic fallback.
-    candidate = latest
-    while candidate >= earliest:
-        if is_weekday(candidate):
-            return candidate
-        candidate -= timedelta(days=1)
+    if not candidate_pool:
+        raise RuntimeError(
+            "No unused weekday dates remain in the last 3 years. "
+            "Run with --reset-shown-cache if you want to restart training history."
+        )
 
-    raise RuntimeError("Could not generate a valid weekday date.")
+    return random.choice(candidate_pool)
 
 
-def random_stock_from_universe(instruments_df: pd.DataFrame) -> StockIdentity:
-    """Randomly choose either NIFTY or SENSEX and resolve its Kite token.
+def next_cycle_symbol(last_stock: Optional[str]) -> str:
+    """Return the next stock in the persistent three-stock cycle.
 
-    The name is kept as `random_stock_from_universe` to minimize changes in the
-    rest of the script, but in this version the random universe is index-based,
-    not stock-based.
+    Required sequence:
+        IDEA -> FORCEMOT -> KAYNES -> IDEA -> ...
+
+    If there is no previous stock in the cache, the first stock is selected
+    randomly from the three-stock universe. After that, the deterministic cycle
+    is followed.
     """
-    spec = random.choice(RANDOM_INDEX_UNIVERSE)
+    if not last_stock:
+        return random.choice(THREE_STOCK_CYCLE)
 
-    symbol = str(spec["symbol"]).upper().strip()
-    exchange = str(spec["exchange"]).upper().strip()
-    display = str(spec.get("display", symbol)).upper().strip()
+    last_stock = normalize_stock_key_for_cache(last_stock)
+    if last_stock not in THREE_STOCK_CYCLE:
+        return random.choice(THREE_STOCK_CYCLE)
 
-    try:
-        return resolve_stock_by_symbol(
-            instruments_df=instruments_df,
-            symbol=symbol,
-            exchange=exchange,
-            display_name=display,
-        )
-    except Exception as exc:
-        # Fallback is deliberately last-resort. The current Kite instrument dump
-        # should normally resolve both index tokens.
-        fallback_token = spec.get("fallback_token")
-        if fallback_token is None:
-            raise
+    idx = THREE_STOCK_CYCLE.index(last_stock)
+    return THREE_STOCK_CYCLE[(idx + 1) % len(THREE_STOCK_CYCLE)]
 
-        print(
-            f"[WARN] Could not resolve {exchange}:{symbol} from Kite instruments: {exc}. "
-            f"Using fallback token {fallback_token}."
-        )
-        return StockIdentity(
-            symbol=symbol,
-            token=int(fallback_token),
-            name=display,
-            exchange=exchange,
-            display_name=display,
-        )
+
+def cycle_stock_from_universe(instruments_df: pd.DataFrame, last_stock: Optional[str]) -> StockIdentity:
+    """Resolve the next stock in the IDEA/FORCEMOT/KAYNES cycle."""
+    symbol = next_cycle_symbol(last_stock)
+    return resolve_stock_by_symbol(
+        instruments_df=instruments_df,
+        symbol=symbol,
+        exchange="NSE",
+        display_name=symbol,
+    )
+
 
 
 def pick_session_with_constraints(
@@ -1011,52 +1092,77 @@ def pick_session_with_constraints(
     fixed_stock: Optional[StockIdentity],
     fixed_date: Optional[date],
 ) -> Tuple[SessionSelection, pd.DataFrame]:
-    """Pick a stock/date pair while respecting provided constraints."""
+    """Pick a stock/date pair while respecting provided constraints.
+
+    Behaviour in this three-stock version:
+    - If fixed_stock is missing, select the next stock from the persistent cycle.
+    - If fixed_date is missing, select a random date from the last 3 years that
+      has not been shown before.
+    - Dates are not repeated globally in random-date mode.
+    - After a successful session, both the stock/date pair and the date are
+      stored in the single pickle. The last successful stock updates the cycle.
+    """
     if fixed_date is not None:
         validate_requested_date(fixed_date)
 
-    # Exact manual pair. Do not randomize anything.
-    if fixed_stock is not None and fixed_date is not None:
-        selection = SessionSelection(stock=fixed_stock, session_date=fixed_date)
-        df = download_one_day_candles(kite, fixed_stock, fixed_date)
+    history = load_history_payload()
+    shown_pairs: Set[Tuple[str, str]] = set(history.get("shown_stock_dates", set()))
+    shown_dates: Set[str] = set(history.get("shown_dates", set()))
+    last_stock: Optional[str] = history.get("last_stock") if history.get("last_stock") else None
+
+    # Determine the stock once per session. If the randomly chosen date later
+    # turns out to be a holiday/unavailable day, we retry with a different date
+    # for the same stock. We do not advance the stock cycle until a valid chart
+    # is successfully shown.
+    stock = fixed_stock if fixed_stock is not None else cycle_stock_from_universe(instruments_df, last_stock)
+
+    # Exact manual pair. Do not randomize anything. Manual dates are allowed even
+    # if already shown, but they are still recorded again in the cache state.
+    if fixed_date is not None:
+        selection = SessionSelection(stock=stock, session_date=fixed_date)
+        df = download_one_day_candles(kite, stock, fixed_date)
         if df.empty:
-            raise RuntimeError(f"No candles found for {fixed_stock.symbol} on {fixed_date}.")
+            raise RuntimeError(f"No candles found for {stock.display_label} on {fixed_date}.")
         mark_combination_shown(selection)
-        print(f"[SELECTED] Manual: {fixed_stock.symbol} | {fixed_date} | candles={len(df)}")
+        print(f"[SELECTED] Manual/fixed-date: {stock.display_label} | {fixed_date} | candles={len(df)}")
         return selection, df
 
-    shown = load_shown_combinations()
-
+    # Random-date mode. Date must not repeat globally. The selected stock remains
+    # fixed for this call; only the date changes across attempts.
+    attempted_dates: Set[str] = set()
     for attempt in range(1, MAX_RANDOM_ATTEMPTS + 1):
-        stock = fixed_stock if fixed_stock is not None else random_stock_from_universe(instruments_df)
-        session_day = fixed_date if fixed_date is not None else random_candidate_date()
+        try:
+            session_day = random_candidate_date(excluded_dates=shown_dates | attempted_dates)
+        except RuntimeError:
+            raise
 
+        attempted_dates.add(session_day.isoformat())
         selection = SessionSelection(stock=stock, session_date=session_day)
-        if selection.key() in shown:
+
+        # This check is secondary because shown_dates already blocks date reuse,
+        # but it protects against old cache payloads that may have stock/date
+        # pairs without a reconstructed shown_dates entry.
+        if selection.key() in shown_pairs:
             continue
 
         df = download_one_day_candles(kite, stock, session_day)
         if df.empty:
+            # Exchange holiday or unavailable data. Do not mark the date as
+            # shown; simply try another random unused date.
             continue
 
         mark_combination_shown(selection)
         print(
-            f"[SELECTED] Randomized: {stock.symbol} | {session_day} | "
+            f"[SELECTED] Cycle/random-date: {stock.display_label} | {session_day} | "
             f"candles={len(df)} | attempt={attempt}"
         )
         return selection, df
 
-    fixed_bits = []
-    if fixed_stock is not None:
-        fixed_bits.append(f"stock={fixed_stock.symbol}")
-    if fixed_date is not None:
-        fixed_bits.append(f"date={fixed_date}")
-    detail = ", ".join(fixed_bits) if fixed_bits else "no fixed stock/date"
-
     raise RuntimeError(
-        f"Could not find an unused random session with available candles ({detail}). "
-        "Run with --reset-shown-cache or provide a different stock/date."
+        f"Could not find an unused random date with available candles for {stock.display_label}. "
+        "Run with --reset-shown-cache or try a specific --date."
     )
+
 
 
 def select_start_session(
@@ -1586,7 +1692,7 @@ def make_app(
         return pivot_levels_by_key[key]
 
     app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
-    app.title = "NIFTY/SENSEX Candle Reveal Trainer"
+    app.title = "Three-Stock Candle Reveal Trainer"
     install_custom_mouse_crosshair(app)
 
     # Keyboard event listener.
@@ -1628,7 +1734,7 @@ def make_app(
                 [
                     html.Div(
                         [
-                            html.H4("NIFTY/SENSEX 1-Minute Candle Reveal Trainer", className="mb-0"),
+                            html.H4("FORCEMOT / KAYNES / IDEA Candle Reveal Trainer", className="mb-0"),
                             html.Div(
                                 "Press → or click Next. Move mouse over chart to see only the exact price at pointer. Solid red = R1/R2, green = S1/S2.",
                                 className="text-muted small",
@@ -1636,7 +1742,7 @@ def make_app(
                         ],
                         className="me-auto",
                     ),
-                    dbc.Button("New random NIFTY/SENSEX day", id="new-random-btn", color="primary", className="me-2"),
+                    dbc.Button("Next stock + random date", id="new-random-btn", color="primary", className="me-2"),
                     dbc.Button("Next candle (→)", id="next-btn", color="success", className="me-2"),
                     dbc.Button("Reset to first candle", id="reset-step-btn", color="secondary", outline=True),
                 ],
@@ -1742,7 +1848,7 @@ def make_app(
         prevent_initial_call=True,
     )
     def choose_new_random(_: Optional[int]) -> Dict[str, object]:
-        """Choose a completely new random stock/date session."""
+        """Choose the next cycle stock with a random unused date."""
         selection, df = pick_session_with_constraints(
             kite=kite,
             instruments_df=instruments_df,
@@ -1864,7 +1970,7 @@ def main() -> None:
     print("\nOpen this URL in your browser:")
     print(f"http://127.0.0.1:{args.port}")
     print("\nControls: click 'Next candle' or press the Right Arrow key. Move mouse over chart to show only the exact price at pointer.")
-    print("Random mode now alternates between NSE:NIFTY 50 and BSE:SENSEX.")
+    print("Random mode cycles IDEA -> FORCEMOT -> KAYNES -> IDEA, with globally non-repeated random dates.")
     print(f"Only one disk cache file is used: {SHOWN_CACHE_PATH}\n")
 
     app.run(debug=True, port=args.port)

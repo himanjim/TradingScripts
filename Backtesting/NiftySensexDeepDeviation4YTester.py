@@ -122,7 +122,7 @@ MAX_DAYS_PER_CHUNK = int(os.environ.get("MAX_DAYS_PER_CHUNK", "25"))
 MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "5"))
 SLEEP_BETWEEN_CALLS_SEC = float(os.environ.get("SLEEP_BETWEEN_CALLS_SEC", "0.20"))
 
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./nifty_sensex_4y_deviation_output")
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "nifty_sensex_4y_deviation_output")
 INTERVAL = "minute"  # fixed by user request
 
 LOOKBACK_YEARS = int(os.environ.get("LOOKBACK_YEARS", "4"))
