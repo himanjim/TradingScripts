@@ -90,7 +90,7 @@ import OptionTradeUtils as oUtils
 IST = pytz.timezone("Asia/Kolkata")
 
 # Stock to monitor.
-STOCK = "RELIANCE"
+STOCK = "KAYNES"
 
 # List of [trigger_price, new_stoploss_price].
 # Direction is inferred from actual open position.
@@ -101,8 +101,8 @@ STOPLOSS_MODIFICATION_RULES: List[List[float]] = [
     # [1350.00, 1355.00],
 
     # Example placeholders. Replace these with your actual levels.
-    [1360.00, 1365.00],
-    [1355.00, 1360.00],
+    [3150, 3162.7],
+    [3135.6, 3146.6],
 ]
 
 EXCHANGE = "NSE"
@@ -129,6 +129,13 @@ MARKET_PROTECTION = -1
 # Order tag used by your entry script.
 # This script does not strictly require the tag, but it prefers tagged stoploss orders if available.
 ORDER_TAG = "SIMPLE_ENTRY_SL"
+# If True, when no MIS position exists for STOCK, cancel all active open orders
+# for that stock/product.
+CANCEL_OPEN_ORDERS_WHEN_FLAT = True
+
+# True  => cancel only orders with ORDER_TAG.
+# False => cancel any active order for STOCK/product.
+CANCEL_ONLY_OWN_TAGGED_ORDERS_WHEN_FLAT = False
 
 # If True, the script allows modifying stoploss to a level that may trigger immediately.
 # Safer default is False.
@@ -499,13 +506,8 @@ def get_active_stoploss_truth(kite, symbol: str, position_side: str) -> Stoploss
         )
 
     # Prefer tagged orders if available.
-    tagged = [o for o in matches if str(o.get("tag", "")) == ORDER_TAG]
-
-    if len(tagged) == 1:
-        chosen = tagged[0]
-    elif len(matches) == 1:
-        chosen = matches[0]
-    else:
+    # Exactly one protective SL must exist. If more than one exists, stop.
+    if len(matches) > 1:
         print(f"⚠ {symbol}: multiple active protective stoploss orders found:")
         for o in matches:
             print(
@@ -527,6 +529,8 @@ def get_active_stoploss_truth(kite, symbol: str, position_side: str) -> Stoploss
             raw_order=None,
         )
 
+    chosen = matches[0]
+
     return StoplossTruth(
         found=True,
         order_id=str(chosen.get("order_id")),
@@ -534,6 +538,76 @@ def get_active_stoploss_truth(kite, symbol: str, position_side: str) -> Stoploss
         quantity=order_quantity(chosen),
         raw_order=chosen,
     )
+
+def cancel_open_orders_if_no_position(kite, symbol: str) -> None:
+    """
+    If there is no open MIS position for the stock, cancel all active open orders
+    for that stock/product.
+
+    This is useful after:
+        - stoploss hits,
+        - manual square-off,
+        - target exit from another script,
+        - accidental leftover pending order.
+
+    It cancels all non-terminal regular orders for the symbol unless
+    CANCEL_ONLY_OWN_TAGGED_ORDERS_WHEN_FLAT=True.
+    """
+    if not CANCEL_OPEN_ORDERS_WHEN_FLAT:
+        return
+
+    position = get_position_truth(kite, symbol)
+
+    if position.has_position:
+        return
+
+    _, orders = broker_snapshot(kite, force=True)
+
+    for order in orders:
+        if order.get("tradingsymbol") != symbol:
+            continue
+
+        if order.get("exchange") != EXCHANGE:
+            continue
+
+        if order.get("product") != PRODUCT:
+            continue
+
+        if is_terminal_order(order):
+            continue
+
+        if CANCEL_ONLY_OWN_TAGGED_ORDERS_WHEN_FLAT:
+            if str(order.get("tag", "")) != ORDER_TAG:
+                continue
+
+        order_id = str(order.get("order_id"))
+        order_type = order.get("order_type")
+        txn = order.get("transaction_type")
+        qty_order = order.get("quantity")
+        pending = order.get("pending_quantity")
+        trigger = order.get("trigger_price")
+        price = order.get("price")
+        tag = order.get("tag")
+
+        try:
+            kite.cancel_order(
+                variety=kite.VARIETY_REGULAR,
+                order_id=order_id,
+            )
+            invalidate_broker_cache()
+
+            print(
+                f"{symbol}: cancelled open order because position is flat. "
+                f"order_id={order_id}, type={order_type}, txn={txn}, "
+                f"qty={qty_order}, pending={pending}, price={price}, "
+                f"trigger={trigger}, tag={tag}"
+            )
+
+        except Exception as e:
+            print(
+                f"WARNING: could not cancel open order {order_id} "
+                f"for flat {symbol}: {e}"
+            )
 
 
 # =============================================================================
@@ -697,8 +771,9 @@ def monitor_and_modify_stoploss(kite) -> None:
     position = get_position_truth(kite, symbol)
 
     if not position.has_position:
+        cancel_open_orders_if_no_position(kite, symbol)
         print_status(symbol, ltp, position, StoplossTruth(False, None, None, 0, None))
-        request_stop(f"{symbol}: no open MIS position")
+        request_stop(f"{symbol}: no open MIS position; all active open orders cancelled")
         return
 
     sl = get_active_stoploss_truth(kite, symbol, position.side)

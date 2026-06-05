@@ -6,7 +6,7 @@ KITE_API_KEY = '453dipfh64qcl484'
 KITE_API_SECRET = 'cnt30fp12ftbzk7s0a84ieqv8wbquer4'
 
 
-KITE_ACCESS_CODE = 'N3zm8lWVk7EsxKrI5R7Y3serxG0Xk2bS'
+KITE_ACCESS_CODE = 'FrVX4Slx4pcotLgd8crotXCYy9XvDclq'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 30, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)

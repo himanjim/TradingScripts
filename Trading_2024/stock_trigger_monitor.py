@@ -79,10 +79,10 @@ IST = pytz.timezone("Asia/Kolkata")
 #     entry < stoploss => SELL
 # -------------------------------------------------------------------------
 TRADE_SETUPS: Dict[str, Dict[str, float]] = {
-    "RELIANCE": {
-        "entry": 1365.20,
-        "stoploss": 1370.00,
-        "loss": 3000.00,
+    "FORCEMOT": {
+        "entry": 18372,
+        "stoploss": 18412,
+        "loss": 100.00,
     },
 }
 
@@ -123,6 +123,15 @@ ORDER_STATUS_MAX_POLLS = 20
 
 # Zerodha order tag.
 ORDER_TAG = "SIMPLE_ENTRY_SL"
+# If True, when no MIS position exists for the symbol, cancel all active open orders
+# for that symbol/product. This includes SL, SL-M, LIMIT, and pending MARKET orders.
+CANCEL_OPEN_ORDERS_WHEN_FLAT = True
+
+# Safer mode:
+# True  => cancel only orders placed by this script tag.
+# False => cancel ANY active order for this symbol/product.
+# Since you asked "any open orders", keep False.
+CANCEL_ONLY_OWN_TAGGED_ORDERS_WHEN_FLAT = False
 
 # Optional cap to prevent accidental oversized orders.
 # Set to None to disable.
@@ -530,10 +539,24 @@ def active_protective_sl_quantity(kite, setup: Setup, orders: List[Dict[str, Any
     return total
 
 
-def cancel_stale_tagged_sl_if_no_position(kite, setup: Setup) -> None:
+def cancel_open_orders_if_no_position(kite, setup: Setup) -> None:
     """
-    If position is flat, cancel any active tagged SL order left behind by the script.
+    If there is no open MIS position for the symbol, cancel all active open orders
+    for that symbol/product.
+
+    This is intentionally broader than only cancelling SL orders. It cancels:
+        - SL
+        - SL-M
+        - LIMIT
+        - pending MARKET
+        - any other non-terminal regular order
+
+    If CANCEL_ONLY_OWN_TAGGED_ORDERS_WHEN_FLAT=True, it cancels only orders
+    with ORDER_TAG. If False, it cancels any active order for this symbol/product.
     """
+    if not CANCEL_OPEN_ORDERS_WHEN_FLAT:
+        return
+
     qty = get_position_quantity(kite, setup.symbol)
 
     if qty != 0:
@@ -551,25 +574,41 @@ def cancel_stale_tagged_sl_if_no_position(kite, setup: Setup) -> None:
         if order.get("product") != PRODUCT:
             continue
 
-        if str(order.get("tag", "")) != ORDER_TAG:
-            continue
-
         if is_terminal_order(order):
             continue
 
-        if order_trigger_price(order) <= 0:
-            continue
+        if CANCEL_ONLY_OWN_TAGGED_ORDERS_WHEN_FLAT:
+            if str(order.get("tag", "")) != ORDER_TAG:
+                continue
+
+        order_id = str(order.get("order_id"))
+        order_type = order.get("order_type")
+        txn = order.get("transaction_type")
+        qty_order = order.get("quantity")
+        pending = order.get("pending_quantity")
+        trigger = order.get("trigger_price")
+        price = order.get("price")
+        tag = order.get("tag")
 
         try:
             kite.cancel_order(
                 variety=kite.VARIETY_REGULAR,
-                order_id=str(order.get("order_id")),
+                order_id=order_id,
             )
             invalidate_broker_cache()
-            print(f"{setup.symbol}: cancelled stale SL order {order.get('order_id')}")
-        except Exception as e:
-            print(f"WARNING: could not cancel stale SL order {order.get('order_id')}: {e}")
 
+            print(
+                f"{setup.symbol}: cancelled open order because position is flat. "
+                f"order_id={order_id}, type={order_type}, txn={txn}, "
+                f"qty={qty_order}, pending={pending}, price={price}, "
+                f"trigger={trigger}, tag={tag}"
+            )
+
+        except Exception as e:
+            print(
+                f"WARNING: could not cancel open order {order_id} "
+                f"for flat {setup.symbol}: {e}"
+            )
 
 # =============================================================================
 # ENTRY ORDER PLACEMENT WITH MARKET PROTECTION
@@ -859,7 +898,7 @@ def handle_existing_position_on_startup(kite, setup: Setup) -> bool:
     qty = get_position_quantity(kite, setup.symbol)
 
     if qty == 0:
-        cancel_stale_tagged_sl_if_no_position(kite, setup)
+        cancel_open_orders_if_no_position(kite, setup)
         return False
 
     actual_side = position_side_from_quantity(qty)
@@ -969,7 +1008,7 @@ def monitor_open_position(kite, setup: Setup) -> None:
     qty = get_position_quantity(kite, setup.symbol)
 
     if qty == 0:
-        cancel_stale_tagged_sl_if_no_position(kite, setup)
+        cancel_open_orders_if_no_position(kite, setup)
         request_stop(f"{setup.symbol}: position is flat; stoploss/manual exit likely completed")
         return
 
