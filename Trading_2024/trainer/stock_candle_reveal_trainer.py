@@ -249,9 +249,9 @@ SYMBOL_ALIASES: Dict[str, str] = {
 
 # All three instruments are NSE cash-market equities.
 DEFAULT_EXCHANGE_BY_SYMBOL: Dict[str, str] = {
-    "IDEA": "NSE",
+    "RELIANCE": "NSE",
     "FORCEMOT": "NSE",
-    "KAYNES": "NSE",
+    "HDFCBANK": "NSE",
 }
 
 
