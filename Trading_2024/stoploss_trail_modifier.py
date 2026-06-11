@@ -90,7 +90,7 @@ import OptionTradeUtils as oUtils
 IST = pytz.timezone("Asia/Kolkata")
 
 # Stock to monitor.
-STOCK = "KAYNES"
+STOCK = "ETERNAL"
 
 # List of [trigger_price, new_stoploss_price].
 # Direction is inferred from actual open position.
@@ -101,8 +101,9 @@ STOPLOSS_MODIFICATION_RULES: List[List[float]] = [
     # [1350.00, 1355.00],
 
     # Example placeholders. Replace these with your actual levels.
-    [3150, 3162.7],
-    [3135.6, 3146.6],
+    [242.8, 242.95],
+#     [2746, 2788],
+# [2716, 2740],
 ]
 
 EXCHANGE = "NSE"

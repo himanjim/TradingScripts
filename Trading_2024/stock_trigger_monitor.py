@@ -79,10 +79,10 @@ IST = pytz.timezone("Asia/Kolkata")
 #     entry < stoploss => SELL
 # -------------------------------------------------------------------------
 TRADE_SETUPS: Dict[str, Dict[str, float]] = {
-    "FORCEMOT": {
-        "entry": 18372,
-        "stoploss": 18412,
-        "loss": 100.00,
+    "ETERNAL": {
+        "entry": 244.5,
+        "stoploss": 245.5,
+        "loss": 5000.00,
     },
 }
 
@@ -135,7 +135,7 @@ CANCEL_ONLY_OWN_TAGGED_ORDERS_WHEN_FLAT = False
 
 # Optional cap to prevent accidental oversized orders.
 # Set to None to disable.
-MAX_QTY_CAP: Optional[int] = 500
+MAX_QTY_CAP: Optional[int] = 10000
 
 # Status print frequency.
 PRINT_WAITING_STATUS_EVERY_SECONDS = 5.0
