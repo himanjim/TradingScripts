@@ -182,8 +182,8 @@ INTRADAY_BARS_PER_DAY = int(os.environ.get("INTRADAY_BARS_PER_DAY", "375"))
 MAX_LOOKAHEAD_BARS = int(os.environ.get("MAX_LOOKAHEAD_BARS", str(MAX_WAIT_TRADING_DAYS * INTRADAY_BARS_PER_DAY)))
 
 # Trading-style controls.
-HARD_TIME_STOP_BARS = int(os.environ.get("HARD_TIME_STOP_BARS", "100"))
-MAX_LOSS_RUPEES = float(os.environ.get("MAX_LOSS_RUPEES", "5000"))
+HARD_TIME_STOP_BARS = int(os.environ.get("HARD_TIME_STOP_BARS", "40"))
+MAX_LOSS_RUPEES = float(os.environ.get("MAX_LOSS_RUPEES", "2000"))
 NO_OVERNIGHT = os.environ.get("NO_OVERNIGHT", "1").strip().lower() in {"1", "true", "yes", "y"}
 FORCE_EXIT_TIME = dtime.fromisoformat(os.environ.get("FORCE_EXIT_TIME", "15:20"))
 
@@ -191,7 +191,7 @@ FORCE_EXIT_TIME = dtime.fromisoformat(os.environ.get("FORCE_EXIT_TIME", "15:20")
 ENABLE_REBASE_AFTER_FORCED_EXIT = os.environ.get("ENABLE_REBASE_AFTER_FORCED_EXIT", "1").strip().lower() in {
     "1", "true", "yes", "y"
 }
-REBASE_LOOKBACK_BARS = int(os.environ.get("REBASE_LOOKBACK_BARS", "375"))
+REBASE_LOOKBACK_BARS = int(os.environ.get("REBASE_LOOKBACK_BARS", "200"))
 REBASE_MIN_BARS = int(os.environ.get("REBASE_MIN_BARS", "50"))
 REBASE_AFTER_EXIT_REASONS = {
     x.strip().upper()

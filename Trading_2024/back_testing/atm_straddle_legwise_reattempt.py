@@ -34,7 +34,7 @@ except Exception:
 
 PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
 
-ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:30")  # HH:MM
+ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "11:30")  # HH:MM
 
 # Leg-wise premium stop.
 # Example: CE entry premium = 100, LEG_STOP_PCT = 30 => CE stop price = 130.
@@ -51,7 +51,7 @@ MAX_PE_REATTEMPTS = int(os.getenv("MAX_PE_REATTEMPTS", "4"))
 SESSION_START_IST = dtime(9, 15)
 SESSION_END_IST = dtime(15, 30)
 
-LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "6"))
+LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "8"))
 
 QTY_UNITS = {
     "NIFTY": 325,

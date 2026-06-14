@@ -1,10 +1,11 @@
+
 import os
 from pathlib import Path
 import glob
 import time
 from dataclasses import dataclass
 from datetime import datetime, date, time as dtime, timedelta
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Set
 
 import pandas as pd
 
@@ -32,8 +33,10 @@ except Exception:
 PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
 ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "09:30")  # "HH:MM"
 
+
 def _safe_fname_part(s: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in s)
+
 
 def _get_downloads_folder() -> str:
     """
@@ -43,9 +46,30 @@ def _get_downloads_folder() -> str:
     downloads = Path.home() / "Downloads"
     return str(downloads if downloads.exists() else Path.home())
 
-LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "10000"))
-PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "100000"))
-MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "3"))  # 1 = only one re-entry
+
+LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "2500"))
+
+# Existing trailing-profit-protect trigger:
+# once peak profit reaches this value, strategy exits if profit falls back by the
+# same amount. Set 0 to disable.
+PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "8000"))
+
+# --------------------------- NEW CONFIG START ---------------------------
+# Fixed profit-booking target for the whole short straddle.
+# When running PnL reaches this level, exit that straddle and optionally re-enter
+# after PROFIT_TARGET_REENTRY_DELAY_MINUTES.
+# Set to 0 to disable this feature.
+PROFIT_TARGET_EXIT_RUPEES = int(os.getenv("PROFIT_TARGET_EXIT_RUPEES", "10000"))
+
+# Re-entry delay to be used ONLY after a fixed profit-target exit.
+# This is kept separate from normal REENTRY_DELAY_MINUTES so you can use, for
+# example, 1 minute after profit booking, but 10 minutes after stoploss.
+PROFIT_TARGET_REENTRY_DELAY_MINUTES = int(
+    os.getenv("PROFIT_TARGET_REENTRY_DELAY_MINUTES", "10")
+)
+# ---------------------------- NEW CONFIG END ----------------------------
+
+MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "10"))  # 1 = only one re-entry
 REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "10"))
 
 _DEFAULT_OUT = os.path.join(
@@ -53,6 +77,8 @@ _DEFAULT_OUT = os.path.join(
     f"short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}"
     f"_LL_{_safe_fname_part(str(LOSS_LIMIT_RUPEES))}"
     f"_PPT_{_safe_fname_part(str(PROFIT_PROTECT_TRIGGER_RUPEES))}"
+    f"_PT_{_safe_fname_part(str(PROFIT_TARGET_EXIT_RUPEES))}"            # NEW
+    f"_PTRDM_{_safe_fname_part(str(PROFIT_TARGET_REENTRY_DELAY_MINUTES))}"  # NEW
     f"_MR_{_safe_fname_part(str(MAX_REATTEMPTS))}"
     f"_RDM_{_safe_fname_part(str(REENTRY_DELAY_MINUTES))}.xlsx"
 )
@@ -64,7 +90,7 @@ FAIL_ON_PICKLE_ERROR = os.getenv("FAIL_ON_PICKLE_ERROR", "0").strip() == "1"
 SESSION_START_IST = dtime(9, 15)
 SESSION_END_IST = dtime(15, 30)
 
-LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "12"))
+LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "6"))
 
 QTY_UNITS = {"NIFTY": 325, "SENSEX": 100}
 TRADEABLE = set(QTY_UNITS.keys())
@@ -75,15 +101,15 @@ STRIKE_STEP = {"NIFTY": 50, "SENSEX": 100}
 # TRANSACTION CHARGES (Zerodha F&O Options — NSE)
 # =============================================================================
 # Each short-straddle attempt = 4 executed orders (sell CE, sell PE, buy CE, buy PE)
-BROKERAGE_PER_ORDER       = 20.0       # ₹20 flat per executed order
-ORDERS_PER_TRADE          = 4          # sell CE + sell PE + buy CE + buy PE
-STT_SELL_PCT              = 0.001      # 0.1% on sell-side premium
-EXCHANGE_TXN_PCT          = 0.0003553  # 0.03553% on premium (NSE options)
-SEBI_PER_CRORE            = 10.0       # ₹10 per crore of turnover
-STAMP_BUY_PCT             = 0.00003    # 0.003% on buy-side premium
-IPFT_PER_CRORE            = 0.010      # ₹0.01 per crore (on premium)
-GST_PCT                   = 0.18       # 18% on (brokerage + txn charges + SEBI)
-INCLUDE_TRANSACTION_COSTS = True       # set False to disable
+BROKERAGE_PER_ORDER = 20.0       # ₹20 flat per executed order
+ORDERS_PER_TRADE = 4             # sell CE + sell PE + buy CE + buy PE
+STT_SELL_PCT = 0.001             # 0.1% on sell-side premium
+EXCHANGE_TXN_PCT = 0.0003553     # 0.03553% on premium (NSE options)
+SEBI_PER_CRORE = 10.0            # ₹10 per crore of turnover
+STAMP_BUY_PCT = 0.00003          # 0.003% on buy-side premium
+IPFT_PER_CRORE = 0.010           # ₹0.01 per crore (on premium)
+GST_PCT = 0.18                   # 18% on (brokerage + txn charges + SEBI)
+INCLUDE_TRANSACTION_COSTS = True  # set False to disable
 
 UNDERLYING_KITE = {
     "NIFTY": {"exchange": "NSE", "tradingsymbol": "NIFTY 50"},
@@ -102,7 +128,9 @@ def parse_hhmm(s: str) -> dtime:
     hh, mm = s.strip().split(":")
     return dtime(int(hh), int(mm))
 
+
 ENTRY_TIME = parse_hhmm(ENTRY_TIME_IST)
+
 
 def ist_tz():
     if ZoneInfo is not None:
@@ -110,6 +138,7 @@ def ist_tz():
     if pytz is not None:
         return pytz.timezone("Asia/Kolkata")
     return "Asia/Kolkata"
+
 
 def ensure_ist(series_or_scalar) -> Any:
     tz = ist_tz()
@@ -121,6 +150,7 @@ def ensure_ist(series_or_scalar) -> Any:
     if getattr(dt, "tzinfo", None) is None:
         return dt.tz_localize(tz)
     return dt.tz_convert(tz)
+
 
 def normalize_underlying(name: str) -> Optional[str]:
     if not isinstance(name, str):
@@ -134,14 +164,17 @@ def normalize_underlying(name: str) -> Optional[str]:
         return "NIFTY"
     return None
 
+
 def round_to_step(x: float, step: int) -> int:
     return int(round(x / step) * step)
+
 
 def build_minute_index(day_d: date, start_t: dtime, end_t: dtime) -> pd.DatetimeIndex:
     tz = ist_tz()
     start = pd.Timestamp(datetime.combine(day_d, start_t), tz=tz)
     end = pd.Timestamp(datetime.combine(day_d, end_t), tz=tz)
     return pd.date_range(start=start, end=end, freq="1min")
+
 
 def asof_close(df: pd.DataFrame, ts: pd.Timestamp) -> float:
     if df.empty:
@@ -154,10 +187,12 @@ def asof_close(df: pd.DataFrame, ts: pd.Timestamp) -> float:
         return float("nan")
     return float(d.iloc[loc[0]]["close"])
 
+
 def compute_window_start(end_day: date, months: int) -> date:
     if relativedelta is not None:
         return (pd.Timestamp(end_day) - relativedelta(months=months)).date()
     return (pd.Timestamp(end_day) - pd.Timedelta(days=30 * months)).date()
+
 
 # =============================================================================
 # TRANSACTION COST CALCULATOR
@@ -180,7 +215,7 @@ def compute_trade_charges(
 
     # Turnover values (in rupees)
     entry_turnover = (entry_ce + entry_pe) * qty   # sell side
-    exit_turnover  = (exit_ce + exit_pe) * qty     # buy side
+    exit_turnover = (exit_ce + exit_pe) * qty      # buy side
     total_turnover = entry_turnover + exit_turnover
 
     # 1. Brokerage: ₹20 × 4 orders
@@ -207,10 +242,13 @@ def compute_trade_charges(
     total_charges = brokerage + stt + txn_charges + sebi + stamp + ipft + gst
     return round(total_charges, 2)
 
+
 # =============================================================================
 # Kite historical helpers
 # =============================================================================
-def _iter_chunks_by_date(from_dt: datetime, to_dt: datetime, days_per_chunk: int) -> List[Tuple[datetime, datetime]]:
+def _iter_chunks_by_date(
+    from_dt: datetime, to_dt: datetime, days_per_chunk: int
+) -> List[Tuple[datetime, datetime]]:
     if from_dt > to_dt:
         raise ValueError("from_dt must be <= to_dt")
     chunks: List[Tuple[datetime, datetime]] = []
@@ -224,6 +262,7 @@ def _iter_chunks_by_date(from_dt: datetime, to_dt: datetime, days_per_chunk: int
         cur = chunk_end + timedelta(days=1)
     return chunks
 
+
 def _kite_instruments_cached(kite, exchange: str, cache: Dict[str, List[Dict]]) -> List[Dict]:
     ex = exchange.upper().strip()
     if ex not in cache:
@@ -232,6 +271,7 @@ def _kite_instruments_cached(kite, exchange: str, cache: Dict[str, List[Dict]]) 
         print(f"[INFO] {ex} instruments: {len(cache[ex])}")
     return cache[ex]
 
+
 def get_instrument_token(kite, exchange: str, tradingsymbol: str, cache: Dict[str, List[Dict]]) -> int:
     ex = exchange.upper().strip()
     wanted = tradingsymbol.strip().upper()
@@ -239,6 +279,7 @@ def get_instrument_token(kite, exchange: str, tradingsymbol: str, cache: Dict[st
         if str(r.get("tradingsymbol", "")).upper() == wanted:
             return int(r["instrument_token"])
     raise ValueError(f"Instrument not found on {ex}: '{tradingsymbol}'")
+
 
 def fetch_history_minute(kite, instrument_token: int, from_dt: datetime, to_dt: datetime, label: str) -> List[Dict]:
     interval = "minute"
@@ -267,6 +308,7 @@ def fetch_history_minute(kite, instrument_token: int, from_dt: datetime, to_dt: 
             print(f"[ERROR] {label} chunk {i}/{len(chunks)} failed: {c_from}->{c_to}: {last_err}")
         time.sleep(SLEEP_BETWEEN_CALLS_SEC)
     return rows_all
+
 
 def rows_to_df(rows: List[Dict]) -> pd.DataFrame:
     if not rows:
@@ -395,9 +437,16 @@ def _pick_symbol(day_opt: pd.DataFrame, strike: int, opt_type: str) -> Optional[
     syms = sorted(sub["instrument"].astype(str).unique().tolist())
     return syms[0] if syms else None
 
-def _build_leg_series(day_opt: pd.DataFrame, idx_all: pd.DatetimeIndex,
-                      strike: int, opt_type: str, symbol: str,
-                      price_col: str = "close", do_ffill: bool = True) -> pd.Series:
+
+def _build_leg_series(
+    day_opt: pd.DataFrame,
+    idx_all: pd.DatetimeIndex,
+    strike: int,
+    opt_type: str,
+    symbol: str,
+    price_col: str = "close",
+    do_ffill: bool = True,
+) -> pd.Series:
     sub = day_opt[
         (day_opt["strike_int"] == strike) &
         (day_opt["option_type"] == opt_type) &
@@ -412,6 +461,7 @@ def _build_leg_series(day_opt: pd.DataFrame, idx_all: pd.DatetimeIndex,
     sub = sub.sort_values("date").drop_duplicates(subset=["date"], keep="last").set_index("date")
     s = sub[price_col].astype(float).reindex(idx_all)
     return s.ffill() if do_ffill else s
+
 
 def simulate_day_multi_trades(
     *,
@@ -431,8 +481,15 @@ def simulate_day_multi_trades(
     qty = int(QTY_UNITS[und])
     step = int(STRIKE_STEP[und])
 
+    # Existing trailing profit-protect configuration
     G = float(PROFIT_PROTECT_TRIGGER_RUPEES)
     profit_protect_enabled = G > 0
+
+    # --------------------------- NEW LOGIC START ---------------------------
+    # Fixed profit target configuration
+    fixed_profit_target = float(PROFIT_TARGET_EXIT_RUPEES)
+    profit_target_enabled = fixed_profit_target > 0
+    # ---------------------------- NEW LOGIC END ----------------------------
 
     cur_entry_ts = pd.Timestamp(datetime.combine(dy, ENTRY_TIME), tz=ist_tz())
     trade_seq = 1
@@ -440,8 +497,13 @@ def simulate_day_multi_trades(
     while cur_entry_ts <= session_end_ts:
         u_px = asof_close(underlying_day, cur_entry_ts)
         if pd.isna(u_px):
-            skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
-                            "reason": f"No underlying price at entry {cur_entry_ts.strftime('%H:%M')}"})
+            skipped.append({
+                "day": dy,
+                "underlying": und,
+                "expiry": expiry,
+                "trade_seq": trade_seq,
+                "reason": f"No underlying price at entry {cur_entry_ts.strftime('%H:%M')}",
+            })
             break
 
         atm = round_to_step(float(u_px), step)
@@ -449,12 +511,18 @@ def simulate_day_multi_trades(
         ce_sym = _pick_symbol(day_opt, atm, "CE")
         pe_sym = _pick_symbol(day_opt, atm, "PE")
         if not ce_sym or not pe_sym:
-            skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
-                            "atm_strike": atm, "reason": "ATM CE/PE not available in pickle band"})
+            skipped.append({
+                "day": dy,
+                "underlying": und,
+                "expiry": expiry,
+                "trade_seq": trade_seq,
+                "atm_strike": atm,
+                "reason": "ATM CE/PE not available in pickle band",
+            })
             break
 
-        # Close series (used for entry pricing, profit-protect tracking, and reporting)
-        # Raw close series for exact entry validation
+        # Close series (used for entry pricing, fixed profit target,
+        # profit-protect tracking, and reporting)
         ce_close_raw = _build_leg_series(day_opt, idx_all, atm, "CE", ce_sym, "close", do_ffill=False)
         pe_close_raw = _build_leg_series(day_opt, idx_all, atm, "PE", pe_sym, "close", do_ffill=False)
 
@@ -469,8 +537,13 @@ def simulate_day_multi_trades(
         pe_low = _build_leg_series(day_opt, idx_all, atm, "PE", pe_sym, "low", do_ffill=False)
 
         if cur_entry_ts not in idx_all:
-            skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
-                            "reason": "Entry timestamp not in session index"})
+            skipped.append({
+                "day": dy,
+                "underlying": und,
+                "expiry": expiry,
+                "trade_seq": trade_seq,
+                "reason": "Entry timestamp not in session index",
+            })
             break
 
         ce_entry = ce_close_raw.loc[cur_entry_ts]
@@ -480,13 +553,19 @@ def simulate_day_multi_trades(
             break
 
         if pd.isna(ce_entry) or pd.isna(pe_entry):
-            skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
-                            "atm_strike": atm, "reason": "No CE/PE price at entry (after ffill)"})
+            skipped.append({
+                "day": dy,
+                "underlying": und,
+                "expiry": expiry,
+                "trade_seq": trade_seq,
+                "atm_strike": atm,
+                "reason": "No CE/PE price at entry (after ffill)",
+            })
             break
 
-        # Close-based PnL (same as before)
+        # Close-based PnL (used for fixed profit target and profit-protect)
         pnl_close_all = (float(ce_entry) - ce_close) * qty + (float(pe_entry) - pe_close) * qty
-        pnl = pnl_close_all.loc[monitor_start_ts:].dropna()  # keep 'pnl' as close-based for profit-protect
+        pnl = pnl_close_all.loc[monitor_start_ts:].dropna()
 
         # STOPLOSS worst-case PnL candidates within each minute:
         #  A) CE high, PE low
@@ -499,8 +578,14 @@ def simulate_day_multi_trades(
         pnl_sl = pnl_sl_all.loc[monitor_start_ts:].dropna()
 
         if pnl.empty:
-            skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
-                            "atm_strike": atm, "reason": "PnL series empty after entry"})
+            skipped.append({
+                "day": dy,
+                "underlying": und,
+                "expiry": expiry,
+                "trade_seq": trade_seq,
+                "atm_strike": atm,
+                "reason": "PnL series empty after entry",
+            })
             break
 
         eod_ts = pnl.index[-1]
@@ -509,9 +594,24 @@ def simulate_day_multi_trades(
         max_profit = float(max(0.0, pnl.max()))
         max_loss = float(min(0.0, pnl.min()))
 
+        # Existing stoploss trigger
         stop_hit = pnl_sl <= -LOSS_LIMIT_RUPEES
         stop_ts = pnl_sl.index[stop_hit.to_numpy().argmax()] if stop_hit.any() else None
 
+        # --------------------------- NEW LOGIC START ---------------------------
+        # Fixed profit target trigger:
+        # first minute where close-based PnL reaches or exceeds the configured target
+        profit_target_ts = None
+        if profit_target_enabled:
+            profit_target_hit = pnl >= fixed_profit_target
+            profit_target_ts = (
+                pnl.index[profit_target_hit.to_numpy().argmax()]
+                if profit_target_hit.any()
+                else None
+            )
+        # ---------------------------- NEW LOGIC END ----------------------------
+
+        # Existing trailing profit-protect trigger
         protect_ts = None
         if profit_protect_enabled:
             peak = pnl.cummax()
@@ -520,22 +620,32 @@ def simulate_day_multi_trades(
             protect_hit = armed & (pnl <= trail)
             protect_ts = pnl.index[protect_hit.to_numpy().argmax()] if protect_hit.any() else None
 
-        exit_ts = eod_ts
-        exit_reason = "EOD"
-        if stop_ts is not None and protect_ts is not None:
-            if stop_ts < protect_ts:
-                exit_ts, exit_reason = stop_ts, "STOPLOSS"
-            elif protect_ts < stop_ts:
-                exit_ts, exit_reason = protect_ts, "PROFIT_PROTECT"
-            else:
-                exit_ts, exit_reason = stop_ts, "STOPLOSS"
-        elif stop_ts is not None:
-            exit_ts, exit_reason = stop_ts, "STOPLOSS"
-        elif protect_ts is not None:
-            exit_ts, exit_reason = protect_ts, "PROFIT_PROTECT"
+        # Collect all triggered exits and pick the earliest one.
+        # Tie-break priority:
+        # 1) STOPLOSS       (safest / conservative because it uses worst-case intrabar PnL)
+        # 2) PROFIT_TARGET  (hard profit booking)
+        # 3) PROFIT_PROTECT (trailing giveback exit)
+        exit_candidates: List[Tuple[pd.Timestamp, int, str]] = []
+        if stop_ts is not None:
+            exit_candidates.append((stop_ts, 0, "STOPLOSS"))
+        if profit_target_ts is not None:
+            exit_candidates.append((profit_target_ts, 1, "PROFIT_TARGET"))
+        if protect_ts is not None:
+            exit_candidates.append((protect_ts, 2, "PROFIT_PROTECT"))
 
+        if exit_candidates:
+            exit_ts, _, exit_reason = sorted(exit_candidates, key=lambda x: (x[0], x[1]))[0]
+        else:
+            exit_ts, exit_reason = eod_ts, "EOD"
+
+        # Conservative fill assumption:
+        # - STOPLOSS exits exactly at configured loss limit
+        # - PROFIT_TARGET exits exactly at configured profit target
+        # - PROFIT_PROTECT/EOD exit at close-based PnL of that minute
         if exit_reason == "STOPLOSS":
             exit_pnl_gross = -float(LOSS_LIMIT_RUPEES)
+        elif exit_reason == "PROFIT_TARGET":
+            exit_pnl_gross = float(fixed_profit_target)
         else:
             exit_pnl_gross = float(pnl.loc[exit_ts])
 
@@ -543,7 +653,8 @@ def simulate_day_multi_trades(
         exit_pe = float(pe_close.loc[exit_ts]) if pd.notna(pe_close.loc[exit_ts]) else float("nan")
 
         txn_charges = compute_trade_charges(
-            entry_ce=float(ce_entry), entry_pe=float(pe_entry),
+            entry_ce=float(ce_entry),
+            entry_pe=float(pe_entry),
             exit_ce=exit_ce if not pd.isna(exit_ce) else 0.0,
             exit_pe=exit_pe if not pd.isna(exit_pe) else 0.0,
             qty=qty,
@@ -580,9 +691,19 @@ def simulate_day_multi_trades(
             )
         )
 
-        if exit_reason in ("STOPLOSS", "PROFIT_PROTECT") and (trade_seq - 1) < MAX_REATTEMPTS:
+        # Re-entry rules:
+        # - STOPLOSS / PROFIT_PROTECT use the original REENTRY_DELAY_MINUTES
+        # - PROFIT_TARGET uses PROFIT_TARGET_REENTRY_DELAY_MINUTES
+        # - all of them are still capped by MAX_REATTEMPTS
+        if exit_reason in ("STOPLOSS", "PROFIT_PROTECT", "PROFIT_TARGET") and (trade_seq - 1) < MAX_REATTEMPTS:
             trade_seq += 1
-            cur_entry_ts = pd.Timestamp(exit_ts) + pd.Timedelta(minutes=REENTRY_DELAY_MINUTES)
+
+            if exit_reason == "PROFIT_TARGET":
+                delay_minutes = PROFIT_TARGET_REENTRY_DELAY_MINUTES
+            else:
+                delay_minutes = REENTRY_DELAY_MINUTES
+
+            cur_entry_ts = pd.Timestamp(exit_ts) + pd.Timedelta(minutes=delay_minutes)
             if cur_entry_ts > session_end_ts:
                 break
             continue
@@ -607,7 +728,7 @@ def process_pickles_generate_trades(
     skipped_rows: List[Dict[str, Any]] = []
 
     # IMPORTANT: prevent double-count if same (und,day,expiry) appears in multiple files
-    processed_day_keys: set[Tuple[str, date, date]] = set()
+    processed_day_keys: Set[Tuple[str, date, date]] = set()
 
     for p in pickle_paths:
         try:
@@ -660,19 +781,31 @@ def process_pickles_generate_trades(
                 day_key = (und, dy, ex)
                 if day_key in processed_day_keys:
                     skipped_rows.append({
-                        "day": dy, "underlying": und, "expiry": ex,
-                        "reason": "Duplicate (underlying,day,expiry) encountered in multiple pickles; skipped to avoid double-count"
+                        "day": dy,
+                        "underlying": und,
+                        "expiry": ex,
+                        "reason": "Duplicate (underlying,day,expiry) encountered in multiple pickles; skipped to avoid double-count",
                     })
                     continue
                 processed_day_keys.add(day_key)
 
                 uday = underlying_data.get(und)
                 if uday is None:
-                    skipped_rows.append({"day": dy, "underlying": und, "expiry": ex, "reason": "No underlying series downloaded"})
+                    skipped_rows.append({
+                        "day": dy,
+                        "underlying": und,
+                        "expiry": ex,
+                        "reason": "No underlying series downloaded",
+                    })
                     continue
                 uday = uday[uday["day"] == dy]
                 if uday.empty:
-                    skipped_rows.append({"day": dy, "underlying": und, "expiry": ex, "reason": "Underlying missing for day"})
+                    skipped_rows.append({
+                        "day": dy,
+                        "underlying": und,
+                        "expiry": ex,
+                        "reason": "Underlying missing for day",
+                    })
                     continue
 
                 trades, skips = simulate_day_multi_trades(
@@ -730,6 +863,7 @@ def pick_actual_underlying_by_day(min_expiry_map: Dict[Tuple[str, date], date]) 
         out[dy] = lst_sorted[0][1]
     return out
 
+
 def build_actual_trades_df(all_trades_df: pd.DataFrame, min_expiry_map: Dict[Tuple[str, date], date]) -> pd.DataFrame:
     if all_trades_df.empty:
         return pd.DataFrame()
@@ -745,7 +879,6 @@ def build_actual_trades_df(all_trades_df: pd.DataFrame, min_expiry_map: Dict[Tup
     # keep only the selected underlying for that day
     m = m[m["underlying"] == m["actual_underlying_for_day"]]
 
-    # keep only 0- and 1-DTE rows
     # keep only 0- and 1-DTE rows
     m = m[m["days_to_expiry"].isin([0, 1])]
 
@@ -781,6 +914,7 @@ def _autosize_columns_safe(ws) -> None:
         # Never fail the whole run just because autosize misbehaved
         return
 
+
 def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, skipped_df: pd.DataFrame) -> None:
     out_dir = os.path.dirname(os.path.abspath(OUTPUT_XLSX))
     if out_dir and not os.path.exists(out_dir):
@@ -799,6 +933,8 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
         inst["is_win_exit"] = inst["exit_pnl"] > 0
         inst["is_stoploss"] = inst["exit_reason"].astype(str).str.upper().eq("STOPLOSS")
         inst["is_profit_protect"] = inst["exit_reason"].astype(str).str.upper().eq("PROFIT_PROTECT")
+        inst["is_profit_target"] = inst["exit_reason"].astype(str).str.upper().eq("PROFIT_TARGET")  # NEW
+
         instrument_summary = (
             inst.groupby("underlying", as_index=False)
             .agg(
@@ -808,6 +944,7 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
                 win_rate_exit_pct=("is_win_exit", lambda s: 100.0 * s.mean()),
                 stoploss_rate_pct=("is_stoploss", lambda s: 100.0 * s.mean()),
                 profit_protect_rate_pct=("is_profit_protect", lambda s: 100.0 * s.mean()),
+                profit_target_rate_pct=("is_profit_target", lambda s: 100.0 * s.mean()),  # NEW
                 avg_max_profit=("max_profit", "mean"),
                 avg_max_loss=("max_loss", "mean"),
                 worst_max_loss=("max_loss", "min"),
@@ -822,7 +959,6 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
         tmp = actual_trades_df.copy()
         tmp["month"] = pd.to_datetime(tmp["day"]).dt.to_period("M").astype(str)
 
-        # Existing trade-level monthly summary
         monthwise_summary = (
             tmp.groupby("month", as_index=False)
             .agg(
@@ -834,10 +970,9 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
         )
         monthwise_summary["losing_trades"] = monthwise_summary["trades"] - monthwise_summary["winning_trades"]
         monthwise_summary["win_rate_pct"] = (
-                100.0 * monthwise_summary["winning_trades"] / monthwise_summary["trades"]
+            100.0 * monthwise_summary["winning_trades"] / monthwise_summary["trades"]
         ).round(2)
 
-        # New: daily PnL inside each month
         daily_tmp = (
             tmp.groupby(["month", "day"], as_index=False)
             .agg(daily_pnl=("exit_pnl", "sum"))
@@ -846,14 +981,8 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
         loss_day_stats = (
             daily_tmp.groupby("month", as_index=False)
             .agg(
-                avg_loss_on_loss_days=(
-                    "daily_pnl",
-                    lambda s: float(s[s < 0].mean()) if (s < 0).any() else 0.0
-                ),
-                max_loss_in_a_day=(
-                    "daily_pnl",
-                    lambda s: float(s.min()) if len(s) else 0.0
-                ),
+                avg_loss_on_loss_days=("daily_pnl", lambda s: float(s[s < 0].mean()) if (s < 0).any() else 0.0),
+                max_loss_in_a_day=("daily_pnl", lambda s: float(s.min()) if len(s) else 0.0),
             )
         )
 
@@ -886,7 +1015,10 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
 # MAIN
 # =============================================================================
 def main():
-    paths = sorted(glob.glob(os.path.join(PICKLES_DIR, "*.pkl")) + glob.glob(os.path.join(PICKLES_DIR, "*.pickle")))
+    paths = sorted(
+        glob.glob(os.path.join(PICKLES_DIR, "*.pkl")) +
+        glob.glob(os.path.join(PICKLES_DIR, "*.pickle"))
+    )
     if not paths:
         raise FileNotFoundError(f"No .pkl/.pickle files found in: {PICKLES_DIR}")
 
@@ -897,7 +1029,12 @@ def main():
 
     print(f"[INFO] Data day-range seen: {min_day_seen} -> {end_day}")
     print(f"[INFO] Window: {window_start} -> {end_day}")
-    print(f"[INFO] Stoploss: -{LOSS_LIMIT_RUPEES} | ProfitProtect giveback: {PROFIT_PROTECT_TRIGGER_RUPEES} | Re-entry delay min: {REENTRY_DELAY_MINUTES}")
+    print(f"[INFO] Stoploss: -{LOSS_LIMIT_RUPEES}")
+    print(f"[INFO] ProfitProtect giveback trigger: {PROFIT_PROTECT_TRIGGER_RUPEES}")
+    print(f"[INFO] Fixed profit target exit: {PROFIT_TARGET_EXIT_RUPEES}")  # NEW
+    print(f"[INFO] Profit-target re-entry delay min: {PROFIT_TARGET_REENTRY_DELAY_MINUTES}")  # NEW
+    print(f"[INFO] Normal re-entry delay min: {REENTRY_DELAY_MINUTES}")
+    print(f"[INFO] Max reattempts: {MAX_REATTEMPTS}")
     print(f"[INFO] Tradeables: {sorted(TRADEABLE)}")
     print(f"[INFO] Output: {OUTPUT_XLSX}")
 
