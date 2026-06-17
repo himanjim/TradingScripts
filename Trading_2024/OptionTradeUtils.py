@@ -6,7 +6,7 @@ KITE_API_KEY = '453dipfh64qcl484'
 KITE_API_SECRET = 'cnt30fp12ftbzk7s0a84ieqv8wbquer4'
 
 
-KITE_ACCESS_CODE = 'x377h6u8pzDsf4IvRIv06BvifY6fgsjP'
+KITE_ACCESS_CODE = 'gdPbjtybYVbdeATEIuRYkg5BhWJgDSp1'
 MARKET_START_TIME = dt.time (9, 15, 0, 100)
 MARKET_END_TIME = dt.time (15, 30, 0)
 TRADE_START_TIME = dt.time (9, 15, 30)
@@ -15,7 +15,7 @@ LS_ORDER_TAG = "LSOTMSTRADDLE"
 STOCK_INTRADAY_TAG = "STOCK_INTRADAY"
 
 def get_instruments(kite_):
-    choice = 1
+    choice = 2
 
     if choice == 1:
         UNDER_LYING_EXCHANGE = kite_.EXCHANGE_NSE
@@ -45,7 +45,7 @@ def get_instruments(kite_):
         # PART_SYMBOL = ':SENSEX26APR'
         # PART_SYMBOL = ':SENSEX26514'
         # PART_SYMBOL = ':SENSEX26MAY'
-        PART_SYMBOL = ':SENSEX26604'
+        PART_SYMBOL = ':SENSEX26618'
         NO_OF_LOTS = 100
         STRIKE_MULTIPLE = 100
         STOPLOSS_POINTS = 30
