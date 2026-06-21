@@ -29,8 +29,9 @@ except Exception:
 # =============================================================================
 # USER CONFIG
 # =============================================================================
-PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
-ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "10:30")  # "HH:MM"
+# PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
+PICKLES_DIR = r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New"
+ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "10:00")  # "HH:MM"
 
 def _safe_fname_part(s: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in s)
@@ -43,18 +44,65 @@ def _get_downloads_folder() -> str:
     downloads = Path.home() / "Downloads"
     return str(downloads if downloads.exists() else Path.home())
 
-LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "5000"))
+# --- Per-attempt STOP-LOSS in rupees (index 0 = first entry, 1 = first re-entry, ...) ---
+# Attempts beyond the list reuse the LAST value. Override via env comma list, e.g.
+# LOSS_LIMIT_RUPEES_BY_ATTEMPT="5000,7000,9000".
+def _parse_int_list(env_val, default_list):
+    if env_val:
+        try:
+            vals = [int(round(float(x))) for x in env_val.replace(" ", "").split(",") if x != ""]
+            if vals:
+                return vals
+        except Exception:
+            pass
+    return list(default_list)
+
+LOSS_LIMIT_RUPEES_BY_ATTEMPT = _parse_int_list(
+    os.getenv("LOSS_LIMIT_RUPEES_BY_ATTEMPT"),
+    [3000, 3000, 3000, 3000, 3000,3000, 3000, 3000, 3000, 3000],
+)
+
+def loss_limit_for_attempt(attempt_idx: int) -> float:
+    s = LOSS_LIMIT_RUPEES_BY_ATTEMPT
+    if not s:
+        return 0.0
+    return float(s[attempt_idx]) if attempt_idx < len(s) else float(s[-1])
+
+def _fmt_int_list(lst) -> str:
+    return "-".join(str(int(v)) for v in lst) if lst else "off"
+
+# --- Allowed days-to-expiry to trade: [0,1]=expiry day + day before; [0]=expiry only ---
+ALLOWED_DTE = _parse_int_list(os.getenv("ALLOWED_DTE"), [0])
 PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "10000"))
-MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "5"))  # 1 = only one re-entry
-REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "10"))
+MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "10"))  # 1 = only one re-entry
+
+# --- Per-DAY profit target as a fraction of premium collected on the CURRENT attempt ---
+# When an attempt's profit reaches PROFIT_TARGET_PCT * (CE+PE)*qty, it exits at the
+# target and NO further trades are taken that day. 0 disables. e.g. 0.70 = 70%.
+PROFIT_TARGET_PCT = float(os.getenv("PROFIT_TARGET_PCT", "0.70"))
+# --- Per-attempt RE-ENTRY GAP in minutes (index 0 = gap before 1st re-entry, 1 = before 2nd, ...) ---
+# Attempts beyond the list reuse the LAST value. Override via env comma list, e.g.
+# REENTRY_DELAY_BY_ATTEMPT="10,15,20".
+REENTRY_DELAY_BY_ATTEMPT = _parse_int_list(
+    os.getenv("REENTRY_DELAY_BY_ATTEMPT"),
+    [1, 1, 1, 1, 5,5, 10, 10, 10, 10],
+)
+
+def reentry_delay_for_attempt(attempt_idx: int) -> int:
+    s = REENTRY_DELAY_BY_ATTEMPT
+    if not s:
+        return 0
+    return int(s[attempt_idx]) if attempt_idx < len(s) else int(s[-1])
 
 _DEFAULT_OUT = os.path.join(
     _get_downloads_folder(),
     f"short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}"
-    f"_LL_{_safe_fname_part(str(LOSS_LIMIT_RUPEES))}"
+    f"_LL_{_safe_fname_part(_fmt_int_list(LOSS_LIMIT_RUPEES_BY_ATTEMPT))}"
+    f"_DTE_{_safe_fname_part('-'.join(str(d) for d in ALLOWED_DTE))}"
     f"_PPT_{_safe_fname_part(str(PROFIT_PROTECT_TRIGGER_RUPEES))}"
     f"_MR_{_safe_fname_part(str(MAX_REATTEMPTS))}"
-    f"_RDM_{_safe_fname_part(str(REENTRY_DELAY_MINUTES))}.xlsx"
+    f"_PT_{_safe_fname_part(str(int(round(PROFIT_TARGET_PCT * 100))))}"
+    f"_RDM_{_safe_fname_part(_fmt_int_list(REENTRY_DELAY_BY_ATTEMPT))}.xlsx"
 )
 
 OUTPUT_XLSX = os.getenv("OUTPUT_XLSX", _DEFAULT_OUT)
@@ -305,6 +353,8 @@ class TradeRow:
     eod_pnl: float
     max_profit: float
     max_loss: float
+    max_profit_before_exit: float   # peak profit reached before this trade exited
+    stop_rupees: float   # per-attempt rupee stop applied to this attempt
 
 
 # =============================================================================
@@ -509,7 +559,8 @@ def simulate_day_multi_trades(
         max_profit = float(max(0.0, pnl.max()))
         max_loss = float(min(0.0, pnl.min()))
 
-        stop_hit = pnl_sl <= -LOSS_LIMIT_RUPEES
+        loss_limit_rupees = loss_limit_for_attempt(trade_seq - 1)
+        stop_hit = pnl_sl <= -loss_limit_rupees
         stop_ts = pnl_sl.index[stop_hit.to_numpy().argmax()] if stop_hit.any() else None
 
         protect_ts = None
@@ -520,24 +571,46 @@ def simulate_day_multi_trades(
             protect_hit = armed & (pnl <= trail)
             protect_ts = pnl.index[protect_hit.to_numpy().argmax()] if protect_hit.any() else None
 
+        # --- Per-day PROFIT TARGET: % of premium collected on this attempt ---
+        # When reached, this trade exits at the target AND no further trades are
+        # taken for the day (PROFIT_TARGET is excluded from the re-entry rule below).
+        target_ts = None
+        target_rupees = None
+        if PROFIT_TARGET_PCT > 0.0:
+            entry_premium_sum = (float(ce_entry) + float(pe_entry)) * qty
+            target_rupees = PROFIT_TARGET_PCT * entry_premium_sum
+            # best-case (favourable) intrabar profit: both legs bought back at their lows
+            pnl_best_all = (float(ce_entry) - ce_low) * qty + (float(pe_entry) - pe_low) * qty
+            pnl_tp = pd.concat([pnl_close_all, pnl_best_all], axis=1).max(axis=1)
+            pnl_tp = pnl_tp.loc[monitor_start_ts:].dropna()
+            tp_hit = pnl_tp >= float(target_rupees)
+            target_ts = pnl_tp.index[tp_hit.to_numpy().argmax()] if tp_hit.any() else None
+
+        # Earliest triggered exit wins; on identical timestamps prefer the more
+        # conservative outcome: STOPLOSS, then PROFIT_TARGET, then PROFIT_PROTECT.
         exit_ts = eod_ts
         exit_reason = "EOD"
-        if stop_ts is not None and protect_ts is not None:
-            if stop_ts < protect_ts:
-                exit_ts, exit_reason = stop_ts, "STOPLOSS"
-            elif protect_ts < stop_ts:
-                exit_ts, exit_reason = protect_ts, "PROFIT_PROTECT"
-            else:
-                exit_ts, exit_reason = stop_ts, "STOPLOSS"
-        elif stop_ts is not None:
-            exit_ts, exit_reason = stop_ts, "STOPLOSS"
-        elif protect_ts is not None:
-            exit_ts, exit_reason = protect_ts, "PROFIT_PROTECT"
+        _candidates = []
+        if stop_ts is not None:
+            _candidates.append((stop_ts, 0, "STOPLOSS"))
+        if target_ts is not None:
+            _candidates.append((target_ts, 1, "PROFIT_TARGET"))
+        if protect_ts is not None:
+            _candidates.append((protect_ts, 2, "PROFIT_PROTECT"))
+        if _candidates:
+            _candidates.sort(key=lambda c: (c[0], c[1]))
+            exit_ts, _, exit_reason = _candidates[0]
 
         if exit_reason == "STOPLOSS":
-            exit_pnl_gross = -float(LOSS_LIMIT_RUPEES)
+            exit_pnl_gross = -float(loss_limit_rupees)
+        elif exit_reason == "PROFIT_TARGET":
+            exit_pnl_gross = float(target_rupees)
         else:
             exit_pnl_gross = float(pnl.loc[exit_ts])
+
+        # Peak (close-based) profit reached during this trade's life, up to its exit
+        pnl_pre_exit = pnl.loc[:exit_ts]
+        max_profit_before_exit = float(max(0.0, pnl_pre_exit.max())) if len(pnl_pre_exit) else 0.0
 
         exit_ce = float(ce_close.loc[exit_ts]) if pd.notna(ce_close.loc[exit_ts]) else float("nan")
         exit_pe = float(pe_close.loc[exit_ts]) if pd.notna(pe_close.loc[exit_ts]) else float("nan")
@@ -577,12 +650,15 @@ def simulate_day_multi_trades(
                 eod_pnl=eod_pnl,
                 max_profit=max_profit,
                 max_loss=max_loss,
+                max_profit_before_exit=max_profit_before_exit,
+                stop_rupees=float(loss_limit_rupees),
             )
         )
 
         if exit_reason in ("STOPLOSS", "PROFIT_PROTECT") and (trade_seq - 1) < MAX_REATTEMPTS:
+            delay_min = reentry_delay_for_attempt(trade_seq - 1)  # gap before this re-entry
             trade_seq += 1
-            cur_entry_ts = pd.Timestamp(exit_ts) + pd.Timedelta(minutes=REENTRY_DELAY_MINUTES)
+            cur_entry_ts = pd.Timestamp(exit_ts) + pd.Timedelta(minutes=delay_min)
             if cur_entry_ts > session_end_ts:
                 break
             continue
@@ -718,7 +794,7 @@ def pick_actual_underlying_by_day(min_expiry_map: Dict[Tuple[str, date], date]) 
             continue
 
         dte = int((ex - dy).days)
-        if dte not in (0, 1):
+        if dte not in ALLOWED_DTE:
             continue
 
         by_day.setdefault(dy, []).append((ex, und))
@@ -747,7 +823,7 @@ def build_actual_trades_df(all_trades_df: pd.DataFrame, min_expiry_map: Dict[Tup
 
     # keep only 0- and 1-DTE rows
     # keep only 0- and 1-DTE rows
-    m = m[m["days_to_expiry"].isin([0, 1])]
+    m = m[m["days_to_expiry"].isin(ALLOWED_DTE)]
 
     # keep all reattempts for the one selected underlying on that day
     m = m.drop(columns=["actual_underlying_for_day"])
@@ -780,6 +856,39 @@ def _autosize_columns_safe(ws) -> None:
     except Exception:
         # Never fail the whole run just because autosize misbehaved
         return
+
+def _color_actual_trades_by_date(wb, actual_trades_df) -> None:
+    """Shade rows so all attempts on the same calendar date share one colour,
+    alternating between two soft fills as the date changes (visual grouping)."""
+    if actual_trades_df is None or actual_trades_df.empty:
+        return
+    if "actual_trades" not in wb.sheetnames:
+        return
+    cols = list(actual_trades_df.columns)
+    if "day" not in cols:
+        return
+    from openpyxl.styles import PatternFill
+    ws = wb["actual_trades"]
+    ncols = len(cols)
+    fills = [
+        PatternFill(fill_type="solid", fgColor="E8F0FE"),  # light blue
+        PatternFill(fill_type="solid", fgColor="FFF3E0"),  # light amber
+    ]
+    days = actual_trades_df["day"].tolist()
+    color_idx = 0
+    prev_day = None
+    first = True
+    for i, d in enumerate(days):
+        if first:
+            first = False
+        elif d != prev_day:
+            color_idx ^= 1
+        prev_day = d
+        fill = fills[color_idx]
+        excel_row = i + 2  # header occupies row 1
+        for c in range(1, ncols + 1):
+            ws.cell(row=excel_row, column=c).fill = fill
+
 
 def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, skipped_df: pd.DataFrame) -> None:
     out_dir = os.path.dirname(os.path.abspath(OUTPUT_XLSX))
@@ -857,11 +966,19 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
             )
         )
 
-        monthwise_summary = monthwise_summary.merge(
-            loss_day_stats,
-            on="month",
-            how="left",
-        )
+        # Date on which the worst (maximum-loss) day occurred, per month
+        worst_rows = daily_tmp.loc[daily_tmp.groupby("month")["daily_pnl"].idxmin()]
+        worst_day = worst_rows[["month", "day"]].rename(columns={"day": "max_loss_day_date"})
+
+        monthwise_summary = monthwise_summary.merge(loss_day_stats, on="month", how="left")
+        monthwise_summary = monthwise_summary.merge(worst_day, on="month", how="left")
+
+        # Place the date column right after the max-loss value column
+        _cols = list(monthwise_summary.columns)
+        if "max_loss_day_date" in _cols and "max_loss_in_a_day" in _cols:
+            _cols.remove("max_loss_day_date")
+            _cols.insert(_cols.index("max_loss_in_a_day") + 1, "max_loss_day_date")
+            monthwise_summary = monthwise_summary[_cols]
     else:
         monthwise_summary = pd.DataFrame()
 
@@ -878,6 +995,8 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
         for ws in wb.worksheets:
             ws.freeze_panes = "A2"
             _autosize_columns_safe(ws)
+
+        _color_actual_trades_by_date(wb, actual_trades_df)
 
     print(f"[DONE] Excel written: {OUTPUT_XLSX}")
 
@@ -897,7 +1016,10 @@ def main():
 
     print(f"[INFO] Data day-range seen: {min_day_seen} -> {end_day}")
     print(f"[INFO] Window: {window_start} -> {end_day}")
-    print(f"[INFO] Stoploss: -{LOSS_LIMIT_RUPEES} | ProfitProtect giveback: {PROFIT_PROTECT_TRIGGER_RUPEES} | Re-entry delay min: {REENTRY_DELAY_MINUTES}")
+    print(f"[INFO] Stoploss Rs/attempt: {LOSS_LIMIT_RUPEES_BY_ATTEMPT} | "
+          f"ProfitProtect giveback: {PROFIT_PROTECT_TRIGGER_RUPEES} | "
+          f"Re-entry delay min/attempt: {REENTRY_DELAY_BY_ATTEMPT} | Allowed DTE: {ALLOWED_DTE}")
+    print(f"[INFO] Day profit target: {PROFIT_TARGET_PCT:.0%} of premium (0 = disabled)")
     print(f"[INFO] Tradeables: {sorted(TRADEABLE)}")
     print(f"[INFO] Output: {OUTPUT_XLSX}")
 

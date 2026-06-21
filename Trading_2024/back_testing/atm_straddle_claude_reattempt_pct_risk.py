@@ -30,7 +30,8 @@ except Exception:
 # USER CONFIG
 # =============================================================================
 PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
-ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "10:30")  # "HH:MM"
+# PICKLES_DIR = r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New"
+ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "11:50")  # "HH:MM"
 
 def _safe_fname_part(s: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in s)
@@ -43,18 +44,223 @@ def _get_downloads_folder() -> str:
     downloads = Path.home() / "Downloads"
     return str(downloads if downloads.exists() else Path.home())
 
-LOSS_LIMIT_RUPEES = int(os.getenv("LOSS_LIMIT_RUPEES", "5000"))
-PROFIT_PROTECT_TRIGGER_RUPEES = int(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "10000"))
-MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "5"))  # 1 = only one re-entry
-REENTRY_DELAY_MINUTES = int(os.getenv("REENTRY_DELAY_MINUTES", "10"))
+# --- Generic integer-list parser used for DTE and re-entry delay settings ---
+def _parse_int_list(env_val, default_list):
+    """
+    Parse a comma-separated integer list from an environment variable.
+
+    Examples:
+        ALLOWED_DTE="0,1"              -> [0, 1]
+        REENTRY_DELAY_BY_ATTEMPT="1,5" -> [1, 5]
+
+    If parsing fails or the env var is blank, the supplied default is used.
+    """
+    if env_val:
+        try:
+            vals = [int(round(float(x))) for x in env_val.replace(" ", "").split(",") if x != ""]
+            if vals:
+                return vals
+        except Exception:
+            pass
+    return list(default_list)
+
+
+def _parse_pct_value(x) -> float:
+    """
+    Parse a percentage value into decimal form.
+
+    Accepted user formats:
+        10      -> 0.10  (10%)
+        "10%"   -> 0.10  (10%)
+        0.10    -> 0.10  (10%)
+        "0.10"  -> 0.10  (10%)
+
+    This lets you configure percentages naturally from environment variables
+    while keeping calculations internally consistent.
+    """
+    s = str(x).strip().replace("%", "")
+    if s == "":
+        raise ValueError("blank percentage value")
+
+    v = float(s)
+
+    # If user entered 10, treat it as 10%; if user entered 0.10, keep it as 10%.
+    if abs(v) > 1.0:
+        v = v / 100.0
+
+    if v < 0:
+        raise ValueError("percentage cannot be negative")
+
+    return float(v)
+
+
+def _parse_pct_list(env_val, default_list):
+    """
+    Parse comma-separated percentages into decimal form.
+
+    Examples:
+        LOSS_LIMIT_RUPEES_BY_ATTEMPT="10,12,15" -> [0.10, 0.12, 0.15]
+        LOSS_LIMIT_RUPEES_BY_ATTEMPT="0.10"     -> [0.10]
+    """
+    if env_val:
+        try:
+            vals = [_parse_pct_value(x) for x in env_val.replace(" ", "").split(",") if x != ""]
+            if vals:
+                return vals
+        except Exception:
+            pass
+
+    return [_parse_pct_value(x) for x in default_list]
+
+
+def _fmt_int_list(lst) -> str:
+    """Format integer-list settings for the output filename."""
+    return "-".join(str(int(v)) for v in lst) if lst else "off"
+
+
+def _fmt_pct_value(v: float) -> str:
+    """Format a decimal percentage such as 0.10 as '10pct' for filenames/logs."""
+    return f"{v * 100:.2f}".rstrip("0").rstrip(".") + "pct"
+
+
+def _fmt_pct_list(lst) -> str:
+    """Format a list of decimal percentages for the output filename."""
+    return "-".join(_fmt_pct_value(float(v)) for v in lst) if lst else "off"
+
+
+def _parse_float_env(env_name: str, default_value: float) -> float:
+    """
+    Parse a positive/zero floating-point rupee setting from an environment variable.
+
+    If parsing fails, the supplied default is used. A value <= 0 is treated by
+    the relevant logic as disabled where applicable.
+    """
+    raw = os.getenv(env_name)
+    if raw is None or str(raw).strip() == "":
+        return float(default_value)
+    try:
+        return float(str(raw).replace(",", "").strip())
+    except Exception:
+        return float(default_value)
+
+
+def _fmt_rupee_value(v: float) -> str:
+    """Format rupee values compactly for output filenames/logs."""
+    return str(int(round(float(v))))
+
+
+# =============================================================================
+# RISK CONFIGURATION AS % OF ENTRY PREMIUM
+# =============================================================================
+# IMPORTANT:
+# The original version used absolute rupee values in these two variables.
+# This version intentionally keeps the same variable names for compatibility
+# with your existing env-var workflow, but the meaning is now PERCENTAGE.
+#
+# Base for percentage calculation:
+#     entry_premium_sum_rupees = (entry_ce + entry_pe) * qty
+#
+# Stop-loss threshold:
+#     loss_limit_rupees = LOSS_LIMIT_% * entry_premium_sum_rupees
+#
+# Profit-protect threshold/giveback:
+#     G = PROFIT_PROTECT_% * entry_premium_sum_rupees
+#
+# Example:
+#     If CE+PE premium collected = 120 and qty = 325,
+#     entry_premium_sum_rupees = 39,000.
+#     10% stop-loss = 3,900.
+#     30% profit-protect trigger/giveback = 11,700.
+# =============================================================================
+
+# --- Per-attempt STOP-LOSS as % of premium collected on that attempt ---
+# Index 0 = first entry, 1 = first re-entry, etc.
+# Attempts beyond the list reuse the LAST value.
+#
+# Default: 10% for every attempt.
+#
+# Env examples:
+#     LOSS_LIMIT_RUPEES_BY_ATTEMPT="10"
+#     LOSS_LIMIT_RUPEES_BY_ATTEMPT="10,12,15"
+#     LOSS_LIMIT_RUPEES_BY_ATTEMPT="0.10,0.12,0.15"
+LOSS_LIMIT_RUPEES_BY_ATTEMPT = _parse_pct_list(
+    os.getenv("LOSS_LIMIT_RUPEES_BY_ATTEMPT"),
+    [0.2978, 0.2999, 0.3019, 0.304, 0.3061, 0.3081, 0.3102, 0.3122, 0.3143, 0.3164, 0.3184],
+)
+
+
+def loss_limit_pct_for_attempt(attempt_idx: int) -> float:
+    """Return the stop-loss percentage, in decimal form, for the given attempt."""
+    s = LOSS_LIMIT_RUPEES_BY_ATTEMPT
+    if not s:
+        return 0.0
+    return float(s[attempt_idx]) if attempt_idx < len(s) else float(s[-1])
+
+
+# --- Allowed days-to-expiry to trade: [0,1]=expiry day + day before; [0]=expiry only ---
+ALLOWED_DTE = _parse_int_list(os.getenv("ALLOWED_DTE"), [0])
+
+# --- Profit-protect threshold/giveback as % of premium collected on that attempt ---
+# Default: 30%.
+#
+# Env examples:
+#     PROFIT_PROTECT_TRIGGER_RUPEES="30"
+#     PROFIT_PROTECT_TRIGGER_RUPEES="0.30"
+#
+# Current logic uses the same rupee amount for:
+#     1. arming profit-protect once peak P&L reaches G
+#     2. exiting when current P&L falls to peak - G
+PROFIT_PROTECT_TRIGGER_RUPEES = _parse_pct_value(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", 0.6660))
+
+# --- Absolute daily circuit breaker -------------------------------------------------
+# Once cumulative realized NET P&L for the current underlying/day reaches this
+# loss, no further re-entry is allowed for that day.
+#
+# Default: Rs. 30,000 loss. Set MAX_DAILY_LOSS_RUPEES=0 to disable.
+MAX_DAILY_LOSS_RUPEES = _parse_float_env("MAX_DAILY_LOSS_RUPEES", 30000.0)
+
+# --- Absolute cap on the percentage-based per-attempt stop-loss ----------------------
+# The stop-loss is still calculated as:
+#     LOSS_LIMIT_% * entry_premium_sum
+# But it is capped at this absolute rupee value.
+#
+# Effective stop-loss per attempt:
+#     min(LOSS_LIMIT_% * entry_premium_sum, MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT)
+#
+# Default: Rs. 3,000 loss per attempt. Set to 0 to disable the cap.
+MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT = _parse_float_env("MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT", 3000.0)
+
+MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "10"))  # 1 = only one re-entry
+
+# --- Per-DAY profit target as a fraction of premium collected on the CURRENT attempt ---
+# When an attempt's profit reaches PROFIT_TARGET_PCT * (CE+PE)*qty, it exits at the
+# target and NO further trades are taken that day. 0 disables. e.g. 0.70 = 70%.
+PROFIT_TARGET_PCT = float(os.getenv("PROFIT_TARGET_PCT", "0.3593"))
+# --- Per-attempt RE-ENTRY GAP in minutes (index 0 = gap before 1st re-entry, 1 = before 2nd, ...) ---
+# Attempts beyond the list reuse the LAST value. Override via env comma list, e.g.
+# REENTRY_DELAY_BY_ATTEMPT="10,15,20".
+REENTRY_DELAY_BY_ATTEMPT = _parse_int_list(
+    os.getenv("REENTRY_DELAY_BY_ATTEMPT"),
+    [4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24],
+)
+
+def reentry_delay_for_attempt(attempt_idx: int) -> int:
+    s = REENTRY_DELAY_BY_ATTEMPT
+    if not s:
+        return 0
+    return int(s[attempt_idx]) if attempt_idx < len(s) else int(s[-1])
 
 _DEFAULT_OUT = os.path.join(
     _get_downloads_folder(),
     f"short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}"
-    f"_LL_{_safe_fname_part(str(LOSS_LIMIT_RUPEES))}"
-    f"_PPT_{_safe_fname_part(str(PROFIT_PROTECT_TRIGGER_RUPEES))}"
+    # f"_SLpct_{_safe_fname_part(_fmt_pct_list(LOSS_LIMIT_RUPEES_BY_ATTEMPT))}"
+    # f"_DTE_{_safe_fname_part('-'.join(str(d) for d in ALLOWED_DTE))}"
+    f"_PPTpct_{_safe_fname_part(_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES))}"
+    f"_DailyMaxLoss_{_safe_fname_part(_fmt_rupee_value(MAX_DAILY_LOSS_RUPEES))}"
+    f"_StopCap_{_safe_fname_part(_fmt_rupee_value(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT))}"
     f"_MR_{_safe_fname_part(str(MAX_REATTEMPTS))}"
-    f"_RDM_{_safe_fname_part(str(REENTRY_DELAY_MINUTES))}.xlsx"
+    # f"_PT_{_safe_fname_part(str(int(round(PROFIT_TARGET_PCT * 100))))}pct"
+    f"_RDM_{_safe_fname_part(_fmt_int_list(REENTRY_DELAY_BY_ATTEMPT))}.xlsx"
 )
 
 OUTPUT_XLSX = os.getenv("OUTPUT_XLSX", _DEFAULT_OUT)
@@ -64,7 +270,15 @@ FAIL_ON_PICKLE_ERROR = os.getenv("FAIL_ON_PICKLE_ERROR", "0").strip() == "1"
 SESSION_START_IST = dtime(9, 15)
 SESSION_END_IST = dtime(15, 30)
 
-LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "12"))
+# LOOKBACK_MONTHS is AUTO by default: the script backtests the full date range
+# present in the option pickles. If you explicitly set LOOKBACK_MONTHS to a
+# number, that number acts as an optional manual cap.
+LOOKBACK_MONTHS_RAW = os.getenv("LOOKBACK_MONTHS", "AUTO").strip()
+LOOKBACK_MONTHS: Optional[int]
+if LOOKBACK_MONTHS_RAW.upper() in ("", "AUTO", "ALL", "MAX", "FULL"):
+    LOOKBACK_MONTHS = None
+else:
+    LOOKBACK_MONTHS = int(float(LOOKBACK_MONTHS_RAW))
 
 QTY_UNITS = {"NIFTY": 325, "SENSEX": 100}
 TRADEABLE = set(QTY_UNITS.keys())
@@ -158,6 +372,26 @@ def compute_window_start(end_day: date, months: int) -> date:
     if relativedelta is not None:
         return (pd.Timestamp(end_day) - relativedelta(months=months)).date()
     return (pd.Timestamp(end_day) - pd.Timedelta(days=30 * months)).date()
+
+
+def determine_backtest_window_start(min_day_seen: date, end_day: date) -> date:
+    """
+    Determine the backtest start date.
+
+    Default behaviour: use the earliest usable option-data date found in the
+    pickles, i.e. the maximum available backtest period.
+
+    Optional override: if LOOKBACK_MONTHS is set to a numeric value through the
+    environment, use the later of:
+        1. earliest option-data date; and
+        2. end_day - LOOKBACK_MONTHS
+    so the script never requests data before the pickles actually start.
+    """
+    if LOOKBACK_MONTHS is None:
+        return min_day_seen
+
+    capped_start = compute_window_start(end_day, LOOKBACK_MONTHS)
+    return max(min_day_seen, capped_start)
 
 # =============================================================================
 # TRANSACTION COST CALCULATOR
@@ -305,6 +539,19 @@ class TradeRow:
     eod_pnl: float
     max_profit: float
     max_loss: float
+    max_profit_before_exit: float   # peak profit reached before this trade exited
+
+    # Premium/risk diagnostics for percentage-based risk rules
+    entry_premium_sum: float                 # (entry_ce + entry_pe) * qty
+    stop_pct: float                          # stop-loss % of entry premium, decimal form; 0.10 = 10%
+    uncapped_stop_rupees: float              # percentage-based stop before absolute cap
+    stop_cap_rupees: float                   # configured absolute cap; <=0 means cap disabled
+    stop_rupees: float                       # effective rupee stop after cap
+    profit_protect_trigger_pct: float         # profit-protect % of entry premium, decimal form; 0.30 = 30%
+    profit_protect_trigger_rupees: float      # computed rupee profit-protect trigger/giveback
+    daily_realized_pnl_after_trade: float     # cumulative net P&L after this attempt
+    daily_loss_limit_rupees: float            # configured daily loss circuit breaker
+    daily_loss_limit_hit: bool                # True means no further trades for that day
 
 
 # =============================================================================
@@ -431,13 +678,34 @@ def simulate_day_multi_trades(
     qty = int(QTY_UNITS[und])
     step = int(STRIKE_STEP[und])
 
-    G = float(PROFIT_PROTECT_TRIGGER_RUPEES)
-    profit_protect_enabled = G > 0
+    # Profit-protect is now percentage-based, so the actual rupee value is not
+    # known until CE/PE entry prices are available for the current attempt.
+    profit_protect_pct = float(PROFIT_PROTECT_TRIGGER_RUPEES)
+    profit_protect_enabled = profit_protect_pct > 0.0
 
     cur_entry_ts = pd.Timestamp(datetime.combine(dy, ENTRY_TIME), tz=ist_tz())
     trade_seq = 1
 
+    # Cumulative realized NET P&L for this underlying/day. Used for the daily
+    # loss circuit breaker. Charges are included through exit_pnl.
+    daily_realized_pnl = 0.0
+    daily_loss_limit_enabled = MAX_DAILY_LOSS_RUPEES > 0
+
     while cur_entry_ts <= session_end_ts:
+        if daily_loss_limit_enabled and daily_realized_pnl <= -float(MAX_DAILY_LOSS_RUPEES):
+            skipped.append({
+                "day": dy,
+                "underlying": und,
+                "expiry": expiry,
+                "trade_seq": trade_seq,
+                "reason": (
+                    f"Daily loss limit hit before next entry: "
+                    f"realized_pnl={daily_realized_pnl:.2f}, "
+                    f"limit={MAX_DAILY_LOSS_RUPEES:.2f}"
+                ),
+            })
+            break
+
         u_px = asof_close(underlying_day, cur_entry_ts)
         if pd.isna(u_px):
             skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
@@ -484,6 +752,37 @@ def simulate_day_multi_trades(
                             "atm_strike": atm, "reason": "No CE/PE price at entry (after ffill)"})
             break
 
+        # ---------------------------------------------------------------------
+        # Percentage-based risk basis for THIS attempt
+        # ---------------------------------------------------------------------
+        # For every entry/re-entry, compute the premium collected in rupees.
+        # Stop-loss and profit-protect thresholds are derived from this value.
+        #
+        # Example:
+        #   entry_ce=70, entry_pe=50, qty=325
+        #   entry_premium_sum = (70 + 50) * 325 = 39,000
+        #   10% stop-loss = 3,900
+        #   30% profit-protect threshold/giveback = 11,700
+        # ---------------------------------------------------------------------
+        entry_premium_sum = (float(ce_entry) + float(pe_entry)) * qty
+
+        loss_limit_pct = loss_limit_pct_for_attempt(trade_seq - 1)
+        uncapped_loss_limit_rupees = float(loss_limit_pct * entry_premium_sum)
+
+        # Absolute cap on the percentage-based stop-loss.
+        # Example: 10% of premium may be Rs. 4,500, but with a Rs. 3,000 cap
+        # the effective stop used by the simulator is Rs. 3,000.
+        stop_cap_rupees = float(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT)
+        if stop_cap_rupees > 0:
+            loss_limit_rupees = float(min(uncapped_loss_limit_rupees, stop_cap_rupees))
+        else:
+            loss_limit_rupees = float(uncapped_loss_limit_rupees)
+
+        # G is the same variable used by the existing profit-protect logic:
+        #   - profit-protect arms when peak P&L >= G
+        #   - profit-protect exits when current P&L <= peak - G
+        G = float(profit_protect_pct * entry_premium_sum)
+
         # Close-based PnL (same as before)
         pnl_close_all = (float(ce_entry) - ce_close) * qty + (float(pe_entry) - pe_close) * qty
         pnl = pnl_close_all.loc[monitor_start_ts:].dropna()  # keep 'pnl' as close-based for profit-protect
@@ -509,7 +808,9 @@ def simulate_day_multi_trades(
         max_profit = float(max(0.0, pnl.max()))
         max_loss = float(min(0.0, pnl.min()))
 
-        stop_hit = pnl_sl <= -LOSS_LIMIT_RUPEES
+        # STOPLOSS uses the attempt-specific rupee value after applying the
+        # absolute per-attempt cap.
+        stop_hit = pnl_sl <= -loss_limit_rupees
         stop_ts = pnl_sl.index[stop_hit.to_numpy().argmax()] if stop_hit.any() else None
 
         protect_ts = None
@@ -520,24 +821,45 @@ def simulate_day_multi_trades(
             protect_hit = armed & (pnl <= trail)
             protect_ts = pnl.index[protect_hit.to_numpy().argmax()] if protect_hit.any() else None
 
+        # --- Per-day PROFIT TARGET: % of premium collected on this attempt ---
+        # When reached, this trade exits at the target AND no further trades are
+        # taken for the day (PROFIT_TARGET is excluded from the re-entry rule below).
+        target_ts = None
+        target_rupees = None
+        if PROFIT_TARGET_PCT > 0.0:
+            target_rupees = PROFIT_TARGET_PCT * entry_premium_sum
+            # best-case (favourable) intrabar profit: both legs bought back at their lows
+            pnl_best_all = (float(ce_entry) - ce_low) * qty + (float(pe_entry) - pe_low) * qty
+            pnl_tp = pd.concat([pnl_close_all, pnl_best_all], axis=1).max(axis=1)
+            pnl_tp = pnl_tp.loc[monitor_start_ts:].dropna()
+            tp_hit = pnl_tp >= float(target_rupees)
+            target_ts = pnl_tp.index[tp_hit.to_numpy().argmax()] if tp_hit.any() else None
+
+        # Earliest triggered exit wins; on identical timestamps prefer the more
+        # conservative outcome: STOPLOSS, then PROFIT_TARGET, then PROFIT_PROTECT.
         exit_ts = eod_ts
         exit_reason = "EOD"
-        if stop_ts is not None and protect_ts is not None:
-            if stop_ts < protect_ts:
-                exit_ts, exit_reason = stop_ts, "STOPLOSS"
-            elif protect_ts < stop_ts:
-                exit_ts, exit_reason = protect_ts, "PROFIT_PROTECT"
-            else:
-                exit_ts, exit_reason = stop_ts, "STOPLOSS"
-        elif stop_ts is not None:
-            exit_ts, exit_reason = stop_ts, "STOPLOSS"
-        elif protect_ts is not None:
-            exit_ts, exit_reason = protect_ts, "PROFIT_PROTECT"
+        _candidates = []
+        if stop_ts is not None:
+            _candidates.append((stop_ts, 0, "STOPLOSS"))
+        if target_ts is not None:
+            _candidates.append((target_ts, 1, "PROFIT_TARGET"))
+        if protect_ts is not None:
+            _candidates.append((protect_ts, 2, "PROFIT_PROTECT"))
+        if _candidates:
+            _candidates.sort(key=lambda c: (c[0], c[1]))
+            exit_ts, _, exit_reason = _candidates[0]
 
         if exit_reason == "STOPLOSS":
-            exit_pnl_gross = -float(LOSS_LIMIT_RUPEES)
+            exit_pnl_gross = -float(loss_limit_rupees)
+        elif exit_reason == "PROFIT_TARGET":
+            exit_pnl_gross = float(target_rupees)
         else:
             exit_pnl_gross = float(pnl.loc[exit_ts])
+
+        # Peak (close-based) profit reached during this trade's life, up to its exit
+        pnl_pre_exit = pnl.loc[:exit_ts]
+        max_profit_before_exit = float(max(0.0, pnl_pre_exit.max())) if len(pnl_pre_exit) else 0.0
 
         exit_ce = float(ce_close.loc[exit_ts]) if pd.notna(ce_close.loc[exit_ts]) else float("nan")
         exit_pe = float(pe_close.loc[exit_ts]) if pd.notna(pe_close.loc[exit_ts]) else float("nan")
@@ -549,6 +871,13 @@ def simulate_day_multi_trades(
             qty=qty,
         )
         exit_pnl = exit_pnl_gross - txn_charges
+
+        # Update cumulative realized NET P&L for the day. This is checked
+        # before allowing any further re-entry.
+        daily_realized_pnl += float(exit_pnl)
+        daily_loss_limit_hit = bool(
+            daily_loss_limit_enabled and daily_realized_pnl <= -float(MAX_DAILY_LOSS_RUPEES)
+        )
 
         dte = int((expiry - dy).days)
 
@@ -577,12 +906,38 @@ def simulate_day_multi_trades(
                 eod_pnl=eod_pnl,
                 max_profit=max_profit,
                 max_loss=max_loss,
+                max_profit_before_exit=max_profit_before_exit,
+                entry_premium_sum=float(entry_premium_sum),
+                stop_pct=float(loss_limit_pct),
+                uncapped_stop_rupees=float(uncapped_loss_limit_rupees),
+                stop_cap_rupees=float(stop_cap_rupees),
+                stop_rupees=float(loss_limit_rupees),
+                profit_protect_trigger_pct=float(profit_protect_pct),
+                profit_protect_trigger_rupees=float(G),
+                daily_realized_pnl_after_trade=float(daily_realized_pnl),
+                daily_loss_limit_rupees=float(MAX_DAILY_LOSS_RUPEES),
+                daily_loss_limit_hit=bool(daily_loss_limit_hit),
             )
         )
 
+        if daily_loss_limit_hit:
+            skipped.append({
+                "day": dy,
+                "underlying": und,
+                "expiry": expiry,
+                "trade_seq": trade_seq + 1,
+                "reason": (
+                    f"No re-entry: daily loss limit hit after trade_seq={trade_seq}; "
+                    f"realized_pnl={daily_realized_pnl:.2f}, "
+                    f"limit={MAX_DAILY_LOSS_RUPEES:.2f}"
+                ),
+            })
+            break
+
         if exit_reason in ("STOPLOSS", "PROFIT_PROTECT") and (trade_seq - 1) < MAX_REATTEMPTS:
+            delay_min = reentry_delay_for_attempt(trade_seq - 1)  # gap before this re-entry
             trade_seq += 1
-            cur_entry_ts = pd.Timestamp(exit_ts) + pd.Timedelta(minutes=REENTRY_DELAY_MINUTES)
+            cur_entry_ts = pd.Timestamp(exit_ts) + pd.Timedelta(minutes=delay_min)
             if cur_entry_ts > session_end_ts:
                 break
             continue
@@ -718,7 +1073,7 @@ def pick_actual_underlying_by_day(min_expiry_map: Dict[Tuple[str, date], date]) 
             continue
 
         dte = int((ex - dy).days)
-        if dte not in (0, 1):
+        if dte not in ALLOWED_DTE:
             continue
 
         by_day.setdefault(dy, []).append((ex, und))
@@ -747,7 +1102,7 @@ def build_actual_trades_df(all_trades_df: pd.DataFrame, min_expiry_map: Dict[Tup
 
     # keep only 0- and 1-DTE rows
     # keep only 0- and 1-DTE rows
-    m = m[m["days_to_expiry"].isin([0, 1])]
+    m = m[m["days_to_expiry"].isin(ALLOWED_DTE)]
 
     # keep all reattempts for the one selected underlying on that day
     m = m.drop(columns=["actual_underlying_for_day"])
@@ -780,6 +1135,39 @@ def _autosize_columns_safe(ws) -> None:
     except Exception:
         # Never fail the whole run just because autosize misbehaved
         return
+
+def _color_actual_trades_by_date(wb, actual_trades_df) -> None:
+    """Shade rows so all attempts on the same calendar date share one colour,
+    alternating between two soft fills as the date changes (visual grouping)."""
+    if actual_trades_df is None or actual_trades_df.empty:
+        return
+    if "actual_trades" not in wb.sheetnames:
+        return
+    cols = list(actual_trades_df.columns)
+    if "day" not in cols:
+        return
+    from openpyxl.styles import PatternFill
+    ws = wb["actual_trades"]
+    ncols = len(cols)
+    fills = [
+        PatternFill(fill_type="solid", fgColor="E8F0FE"),  # light blue
+        PatternFill(fill_type="solid", fgColor="FFF3E0"),  # light amber
+    ]
+    days = actual_trades_df["day"].tolist()
+    color_idx = 0
+    prev_day = None
+    first = True
+    for i, d in enumerate(days):
+        if first:
+            first = False
+        elif d != prev_day:
+            color_idx ^= 1
+        prev_day = d
+        fill = fills[color_idx]
+        excel_row = i + 2  # header occupies row 1
+        for c in range(1, ncols + 1):
+            ws.cell(row=excel_row, column=c).fill = fill
+
 
 def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, skipped_df: pd.DataFrame) -> None:
     out_dir = os.path.dirname(os.path.abspath(OUTPUT_XLSX))
@@ -857,11 +1245,19 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
             )
         )
 
-        monthwise_summary = monthwise_summary.merge(
-            loss_day_stats,
-            on="month",
-            how="left",
-        )
+        # Date on which the worst (maximum-loss) day occurred, per month
+        worst_rows = daily_tmp.loc[daily_tmp.groupby("month")["daily_pnl"].idxmin()]
+        worst_day = worst_rows[["month", "day"]].rename(columns={"day": "max_loss_day_date"})
+
+        monthwise_summary = monthwise_summary.merge(loss_day_stats, on="month", how="left")
+        monthwise_summary = monthwise_summary.merge(worst_day, on="month", how="left")
+
+        # Place the date column right after the max-loss value column
+        _cols = list(monthwise_summary.columns)
+        if "max_loss_day_date" in _cols and "max_loss_in_a_day" in _cols:
+            _cols.remove("max_loss_day_date")
+            _cols.insert(_cols.index("max_loss_in_a_day") + 1, "max_loss_day_date")
+            monthwise_summary = monthwise_summary[_cols]
     else:
         monthwise_summary = pd.DataFrame()
 
@@ -879,6 +1275,8 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
             ws.freeze_panes = "A2"
             _autosize_columns_safe(ws)
 
+        _color_actual_trades_by_date(wb, actual_trades_df)
+
     print(f"[DONE] Excel written: {OUTPUT_XLSX}")
 
 
@@ -893,11 +1291,18 @@ def main():
     print(f"[INFO] Pickles found: {len(paths)}")
 
     end_day, min_expiry_map, min_day_seen = scan_pickles_pass1(paths)
-    window_start = compute_window_start(end_day, LOOKBACK_MONTHS)
+    window_start = determine_backtest_window_start(min_day_seen, end_day)
+
+    lookback_label = "AUTO/full pickle range" if LOOKBACK_MONTHS is None else f"{LOOKBACK_MONTHS} months cap"
 
     print(f"[INFO] Data day-range seen: {min_day_seen} -> {end_day}")
-    print(f"[INFO] Window: {window_start} -> {end_day}")
-    print(f"[INFO] Stoploss: -{LOSS_LIMIT_RUPEES} | ProfitProtect giveback: {PROFIT_PROTECT_TRIGGER_RUPEES} | Re-entry delay min: {REENTRY_DELAY_MINUTES}")
+    print(f"[INFO] Backtest window: {window_start} -> {end_day} ({lookback_label})")
+    print(f"[INFO] Stoploss %/attempt: {_fmt_pct_list(LOSS_LIMIT_RUPEES_BY_ATTEMPT)} | "
+          f"Per-attempt stop cap: Rs {_fmt_rupee_value(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT)} | "
+          f"Daily max loss: Rs {_fmt_rupee_value(MAX_DAILY_LOSS_RUPEES)} | "
+          f"ProfitProtect trigger/giveback %: {_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES)} | "
+          f"Re-entry delay min/attempt: {REENTRY_DELAY_BY_ATTEMPT} | Allowed DTE: {ALLOWED_DTE}")
+    print(f"[INFO] Day profit target: {PROFIT_TARGET_PCT:.0%} of premium (0 = disabled)")
     print(f"[INFO] Tradeables: {sorted(TRADEABLE)}")
     print(f"[INFO] Output: {OUTPUT_XLSX}")
 
