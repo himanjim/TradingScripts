@@ -40,17 +40,22 @@ backtest needs: a fixed strike series by `instrument`.
 Default behaviour
 -----------------
 - Downloads NIFTY and SENSEX weekly expiry sessions.
-- Keeps only DTE=0 rows by default, matching the current default in A:
+- Keeps the expiry day (DTE 0) AND the day before expiry (DTE 1) by default,
+  so the backtest can trade either. Configure A to match:
 
-      ALLOWED_DTE = [0]
+      ALLOWED_DTE = [0, 1]
 
-- If you later change A to test D-1 also, run this downloader with:
+- To download the expiry day only (the old behaviour), run with:
 
-      set DHAN_KEEP_DTE=0,1
+      set DHAN_KEEP_DTE=0          (Windows)
+      export DHAN_KEEP_DTE=0       (Linux/macOS)
 
-  or on Linux/macOS:
-
-      export DHAN_KEEP_DTE=0,1
+  NOTE: DTE here is CALENDAR days from the resolved expiry. The straddle-melt
+  verification validates ONLY the DTE=0 session, because a straddle melts to
+  intrinsic value at expiry; DTE=1 rows still carry a full day of time value
+  and are intentionally NOT melt-checked. On weeks where the day before
+  expiry is a holiday there is simply no DTE=1 row (consistent with A, which
+  also filters on calendar DTE).
 
 - Writes one A-compatible pickle per symbol-expiry.
 - Also writes an optional coverage CSV per pickle to help detect missing
@@ -102,7 +107,7 @@ import requests
 # generated pickles without code changes.
 OUT_DIR = os.getenv(
     "DHAN_EXPIRED_OUTDIR",
-    r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New",
+    r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New_0_1",
 )
 
 # How many calendar days to go back from today while generating scheduled
@@ -134,8 +139,9 @@ WINDOW_BACK_DAYS = int(os.getenv("DHAN_WINDOW_BACK_DAYS", "7"))
 
 # Rows retained from the fetched window, expressed as calendar DTE versus the
 # resolved expiry date.
-# Default "0" matches A's current ALLOWED_DTE=[0].
-# Use "0,1" only if A is configured to test DTE 0 and DTE 1.
+# Default "0,1" keeps the expiry day (DTE 0) AND the day before expiry (DTE 1).
+# IMPORTANT: set ALLOWED_DTE=[0,1] in A as well, otherwise the DTE=1 rows are
+# downloaded but never traded. Use DHAN_KEEP_DTE=0 to revert to expiry-day only.
 def _parse_int_csv(s: str, default: Iterable[int]) -> List[int]:
     try:
         vals = [int(x.strip()) for x in str(s).split(",") if x.strip() != ""]
@@ -144,7 +150,7 @@ def _parse_int_csv(s: str, default: Iterable[int]) -> List[int]:
         return list(default)
 
 
-KEEP_DTE = sorted(set(_parse_int_csv(os.getenv("DHAN_KEEP_DTE", "0"), [0])))
+KEEP_DTE = sorted(set(_parse_int_csv(os.getenv("DHAN_KEEP_DTE", "0,1"), [0, 1])))
 
 # Fields requested from Dhan. `spot` is needed for expiry-session validation
 # and for debugging ATM selection.
@@ -165,7 +171,7 @@ MELT_MIN_BARS = int(os.getenv("DHAN_MELT_MIN_BARS", "20"))
 MELT_STRICT = os.getenv("DHAN_MELT_STRICT", "0").strip().lower() not in ("0", "false", "no")
 
 # Credentials: environment only. Do not paste tokens into this file.
-ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzgyMTAwNjM1LCJpYXQiOjE3ODIwMTQyMzUsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.stQLIByV_Am4Z3FnfTUF93WNdKyW4k4O4SWYGFgta00ImcEGMdY-MUysY78nQTjUegcekadGusYJuoLPei-PTg").strip()
+ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzgyMTk4NTg5LCJpYXQiOjE3ODIxMTIxODksInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.YGJJ5S60DMTmNcrehY9gyi5YDaeLaHYLiXPWr-_goW5Q3FFF_0Ag3Pqz1jjxh0GXOzOUIUYsghnjn39D4cFfeg").strip()
 CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "1108588932").strip()
 
 
@@ -779,7 +785,9 @@ class ExpiryDayDownloader:
         if out.empty:
             return None
 
-        # Attach D0 straddle-melt metrics to every row for this expiry file.
+        # Attach DTE=0 straddle-melt metrics to every row of this expiry file.
+        # Verification is anchored to the expiry session ONLY; the DTE=1 rows
+        # (if KEEP_DTE includes 1) carry full time value and are not melt-checked.
         metrics = _straddle_melt_metrics(out)
         for kk, vv in (metrics or {}).items():
             out[kk] = vv

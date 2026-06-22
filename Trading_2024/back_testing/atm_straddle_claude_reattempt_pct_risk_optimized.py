@@ -108,8 +108,8 @@ SAMPLE_MAX_DAYS = None      # e.g. 20 -> simulate only the most recent N day-gro
 # =============================================================================
 # USER CONFIG
 # =============================================================================
-# PICKLES_DIR = r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New"
-PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
+PICKLES_DIR = r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New_0_1"
+# PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
 ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "10:00")  # "HH:MM"
 
 def _safe_fname_part(s: str) -> str:
@@ -277,7 +277,7 @@ def loss_limit_pct_for_attempt(attempt_idx: int) -> float:
 
 
 # --- Allowed days-to-expiry to trade: [0,1]=expiry day + day before; [0]=expiry only ---
-ALLOWED_DTE = _parse_int_list(os.getenv("ALLOWED_DTE"), [0])
+ALLOWED_DTE = _parse_int_list(os.getenv("ALLOWED_DTE"), [1])
 
 # --- Profit-protect threshold/giveback as % of premium collected on that attempt ---
 # Default: 30%.

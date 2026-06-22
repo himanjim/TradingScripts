@@ -2,7 +2,7 @@
 LIVE / PAPER multi-stock directional trader (Kite WebSocket).
 =============================================================================
 Pipeline:
-  1. Load symbols from fno_symbols.txt.
+  1. Load symbols: a FIXED_BASKET (hand-picked) if set, else fno_symbols.txt.
   2. Live-screen them for liquidity (tight spread + Rs 10L depth); keep the most
      liquid MAX_MONITOR names.
   3. Subscribe to those via Kite WebSocket (KiteTicker), build 1-min bars from
@@ -60,8 +60,47 @@ SQUAREOFF = dtime(15, 20)
 NO_NEW_TRADES_AFTER = dtime(15, 0)
 
 SYMBOLS_FILE = r"C:\Users\Local User\PycharmProjects\TradingScripts\Trading_2024\historic_data_fetcher\fno_symbols.txt"
-MAX_MONITOR = 50                # monitor the N most liquid names
+MAX_MONITOR = 15                 # (only used if FIXED_BASKET is empty)
+
+# ---- FIXED BASKET ----
+# If non-empty, trade ONLY these names (skip the whole-universe liquidity screen
+# and just monitor this hand-picked, sector-balanced, deep-liquid set).
+# Leave empty [] to fall back to screening fno_symbols.txt for the top MAX_MONITOR.
+FIXED_BASKET = [
+    "RELIANCE",    # Energy
+    "SBIN",        # Financials  (chosen over ICICIBANK: steadier, shallower worst month)
+    "TCS",         # IT          (chosen over HCLTECH)
+    "MARUTI",      # Auto
+    "TATASTEEL",   # Metals
+    "HINDUNILVR",  # Consumer    (chosen over ITC)
+    "LT",          # Capital Goods
+    "SUNPHARMA",   # Pharma
+]
 ORDER_VALUE_RS = 10_00_000
+
+# ---- MULTI-POSITION control ----
+# Hold several positions at once (one per stock), entering each the moment its
+# own signal fires. Cap concurrency to bound aggregate exposure / margin.
+MAX_CONCURRENT_POSITIONS = 8     # max stocks held simultaneously
+MAX_GROSS_EXPOSURE_RS = 80_00_000  # hard cap on total deployed notional (8 x 10L)
+
+# ---- Zerodha INTRADAY EQUITY charges (verified 2026) ----
+BROKERAGE_PCT = 0.0003; BROKERAGE_CAP = 20.0
+STT_SELL_PCT = 0.00025; EXCH_TXN_PCT = 0.0000297
+SEBI_PER_CRORE = 10.0; STAMP_BUY_PCT = 0.00003; GST_PCT = 0.18
+
+
+def intraday_equity_charges(buy_value: float, sell_value: float) -> float:
+    """Full Zerodha intraday equity cost for one round trip (buy + sell)."""
+    brokerage = min(BROKERAGE_PCT * buy_value, BROKERAGE_CAP) + \
+                min(BROKERAGE_PCT * sell_value, BROKERAGE_CAP)
+    stt = STT_SELL_PCT * sell_value
+    turnover = buy_value + sell_value
+    exch = EXCH_TXN_PCT * turnover
+    sebi = SEBI_PER_CRORE * turnover / 1_00_00_000
+    stamp = STAMP_BUY_PCT * buy_value
+    gst = GST_PCT * (brokerage + exch + sebi)
+    return brokerage + stt + exch + sebi + stamp + gst
 MAX_SPREAD_PCT = 0.0010
 MAX_DEPTH_SLIPPAGE_PCT = 0.0015
 QUOTE_THROTTLE_SEC = 0.34
@@ -196,6 +235,37 @@ def screen_and_rank(kite, symbols):
     return scored[:MAX_MONITOR]
 
 
+def resolve_basket(kite, symbols):
+    """Resolve a FIXED basket to tokens. Does NOT filter on liquidity -- these
+    are hand-picked -- but reports each name's live spread/depth so you can see
+    if any is unexpectedly thin at run time."""
+    out = []
+    for sym in symbols:
+        key = f"NSE:{sym}"
+        try:
+            q = kite.quote(key)[key]
+        except Exception as e:
+            log.error(f"  {sym}: quote failed ({e}) -- SKIPPING this name")
+            time.sleep(QUOTE_THROTTLE_SEC); continue
+        time.sleep(QUOTE_THROTTLE_SEC)
+        token = int(q.get("instrument_token") or 0)
+        depth = q.get("depth", {}) or {}
+        bids = depth.get("buy", []); asks = depth.get("sell", [])
+        bb = float(bids[0]["price"]) if bids and bids[0].get("price") else 0
+        ba = float(asks[0]["price"]) if asks and asks[0].get("price") else 0
+        if token <= 0:
+            log.error(f"  {sym}: no instrument token -- SKIPPING"); continue
+        if bb > 0 and ba > 0:
+            mid = (bb + ba) / 2; spread = (ba - bb) / mid
+            bs = depth_absorbs(asks, mid, ORDER_VALUE_RS)
+            ss = depth_absorbs(bids, mid, ORDER_VALUE_RS)
+            worst = max(bs or 0, ss or 0)
+            warn = "  <-- THIN, watch slippage" if (spread > MAX_SPREAD_PCT or worst > MAX_DEPTH_SLIPPAGE_PCT) else ""
+            log.info(f"  {sym}: spread {spread*100:.3f}% depth_slip {worst*100:.3f}%{warn}")
+        out.append({"symbol": sym, "token": token})
+    return out
+
+
 # ============================================================
 # THREAD-SAFE PER-STOCK BAR BUILDER
 # ============================================================
@@ -206,6 +276,28 @@ class StockBars:
 
     def seed(self, hist):
         self.bars.extend(hist)
+
+    def last_minute(self):
+        """Latest minute we have a CLOSED bar for (naive IST), or None."""
+        if self.bars:
+            return pd.to_datetime(self.bars[-1]["date"]).replace(second=0, microsecond=0)
+        return None
+
+    def has_minute(self, m):
+        return any(pd.to_datetime(b["date"]).replace(second=0, microsecond=0) == m
+                   for b in self.bars[-5:])  # only need to check the tail
+
+    def insert_bars(self, new_bars):
+        """Merge historical bars, skipping minutes we already have, keep sorted."""
+        have = {pd.to_datetime(b["date"]).replace(second=0, microsecond=0) for b in self.bars}
+        added = 0
+        for nb in new_bars:
+            m = pd.to_datetime(nb["date"]).replace(second=0, microsecond=0)
+            if m not in have:
+                self.bars.append(nb); have.add(m); added += 1
+        if added:
+            self.bars.sort(key=lambda b: b["date"])
+        return added
 
     def update(self, ts, ltp):
         m = ts.replace(second=0, microsecond=0)
@@ -314,32 +406,40 @@ def log_slippage(row: Dict):
 STATE = {
     "bars": {},            # sym -> StockBars
     "last_exit_bar": {},   # sym -> int
-    "position": None,      # single Position or None
-    "pending": {},         # sym -> {"dir","signal_px","minute","bar_idx"} latest fresh signal
+    "positions": {},       # sym -> Position (MULTIPLE held in parallel)
     "lock": threading.Lock(),
     "token2sym": {},
     "realized": 0.0,
+    "charges_total": 0.0,  # cumulative Zerodha intraday costs
     "trade_no": 0,
+    "wins": 0,
     "paper": True,
     "kite": None,
     "stop": False,
 }
 
-# A recorded signal is only takeable if it fired on the most recent minute
-# (within SIGNAL_FRESHNESS_SEC of now). Older recordings are discarded as stale.
-SIGNAL_FRESHNESS_SEC = 75      # ~1 bar; a signal older than this is "the move already happened"
+
+def _current_exposure():
+    return sum(p.entry_fill_px * p.qty for p in STATE["positions"].values())
 
 
 def _do_entry(sym, sig, ind, bar_idx, now):
-    """Open a position on sym in direction sig. Assumes slot is free + caller holds lock."""
+    """Open a position on sym. Multi-position: allowed if sym not already held,
+    concurrency cap not hit, and exposure cap not exceeded. Caller holds lock."""
+    if sym in STATE["positions"]:
+        return False                                   # already in this stock
+    if len(STATE["positions"]) >= MAX_CONCURRENT_POSITIONS:
+        return False                                   # concurrency cap
     kite = STATE["kite"]; paper = STATE["paper"]
     signal_px = ind.iloc[bar_idx]["close"]
+    qty = max(1, int(ORDER_VALUE_RS / signal_px))
+    if _current_exposure() + signal_px * qty > MAX_GROSS_EXPOSURE_RS:
+        return False                                   # exposure cap
     try:
         bid, ask, ltp = bid_ask(kite, sym)
     except Exception:
         bid = ask = signal_px
-    fill_px = ask if sig == "up" else bid          # buy at ask / short at bid
-    qty = max(1, int(ORDER_VALUE_RS / signal_px))
+    fill_px = ask if sig == "up" else bid              # buy at ask / short at bid
     if not paper:
         ok, fp = place_order(kite, sym, is_buy=(sig == "up"), qty=qty)
         if not ok:
@@ -347,55 +447,81 @@ def _do_entry(sym, sig, ind, bar_idx, now):
         fill_px = fp
     entry_slip = abs(fill_px - signal_px) / signal_px
     STATE["trade_no"] += 1
-    STATE["position"] = Position(symbol=sym, direction=sig, qty=qty,
-                                 entry_signal_px=signal_px, entry_fill_px=fill_px,
-                                 entry_bar=bar_idx, entry_time=now, extreme=signal_px)
-    STATE["pending"].pop(sym, None)                # consumed
+    STATE["positions"][sym] = Position(symbol=sym, direction=sig, qty=qty,
+                                       entry_signal_px=signal_px, entry_fill_px=fill_px,
+                                       entry_bar=bar_idx, entry_time=now, extreme=signal_px)
     log_slippage({"time": now.isoformat(), "symbol": sym, "event": "entry",
                   "reason": sig, "signal_px": round(signal_px, 2),
                   "fill_px": round(fill_px, 2), "slip_pct": round(entry_slip * 100, 4),
-                  "pnl": 0})
+                  "gross_pnl": 0, "charges": 0, "net_pnl": 0})
     log.info(f"ENTRY #{STATE['trade_no']} [{sig}] {sym} | signal {signal_px:.2f} "
-             f"fill {fill_px:.2f} slip {entry_slip*100:.3f}% qty {qty}")
+             f"fill {fill_px:.2f} slip {entry_slip*100:.3f}% qty {qty} | "
+             f"open positions {len(STATE['positions'])}/{MAX_CONCURRENT_POSITIONS} "
+             f"exposure Rs {_current_exposure():,.0f}")
     return True
 
 
-def _try_enter_freshest(now):
-    """Slot is free: among recorded signals fresh within SIGNAL_FRESHNESS_SEC,
-    enter the MOST RECENTLY fired one. Discards stale recordings."""
-    if now.time() >= NO_NEW_TRADES_AFTER:
-        STATE["pending"].clear(); return
-    candidates = []
-    for s, rec in list(STATE["pending"].items()):
-        age = (now - rec["stamp"]).total_seconds()
-        if age <= SIGNAL_FRESHNESS_SEC:
-            candidates.append((rec["stamp"], s, rec))
-        else:
-            STATE["pending"].pop(s, None)          # stale -> drop
-    if not candidates:
+def _close_position(sym, ind, bar_idx, now, force=False):
+    """Exit the open position on sym, logging gross PnL, Zerodha charges, net PnL."""
+    kite = STATE["kite"]; paper = STATE["paper"]
+    pos = STATE["positions"][sym]
+    reason = "session_squareoff" if force else eval_exit(ind, pos)
+    if not reason:
         return
-    # freshest = latest stamp
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    _, s, rec = candidates[0]
-    # re-derive current indicators for that stock to confirm signal still valid NOW
-    sb = STATE["bars"][s]
-    df = sb.df()
-    if len(df) < WARMUP_BARS:
-        return
-    df = df.copy(); df["day"] = pd.to_datetime(df["date"]).dt.date
-    ind = add_indicators(df).reset_index(drop=True)
-    bar_idx = len(ind) - 1
-    sig = eval_entry(ind, STATE["last_exit_bar"].get(s, -10_000))
-    if sig == rec["dir"]:
-        _do_entry(s, sig, ind, bar_idx, now)
+    try:
+        bid, ask, ltp = bid_ask(kite, sym)
+    except Exception:
+        bid = ask = ind.iloc[bar_idx]["close"]
+    signal_px = ind.iloc[bar_idx]["close"]
+    fill_px = bid if pos.direction == "up" else ask
+    if not paper:
+        ok, fp = place_order(kite, sym, is_buy=(pos.direction == "down"), qty=pos.qty)
+        if ok:
+            fill_px = fp
+    # gross PnL in rupees
+    if pos.direction == "up":
+        gross = (fill_px - pos.entry_fill_px) * pos.qty
+        buy_val = pos.entry_fill_px * pos.qty; sell_val = fill_px * pos.qty
     else:
-        STATE["pending"].pop(s, None)              # no longer valid
+        gross = (pos.entry_fill_px - fill_px) * pos.qty
+        sell_val = pos.entry_fill_px * pos.qty; buy_val = fill_px * pos.qty
+    charges = intraday_equity_charges(buy_val, sell_val)
+    net = gross - charges
+    STATE["realized"] += net
+    STATE["charges_total"] += charges
+    if net > 0:
+        STATE["wins"] += 1
+    exit_slip = abs(fill_px - signal_px) / signal_px
+    log_slippage({"time": now.isoformat(), "symbol": sym, "event": "exit",
+                  "reason": reason, "signal_px": round(signal_px, 2),
+                  "fill_px": round(fill_px, 2), "slip_pct": round(exit_slip * 100, 4),
+                  "gross_pnl": round(gross, 2), "charges": round(charges, 2),
+                  "net_pnl": round(net, 2)})
+    log.info(f"EXIT [{reason}] {sym} {pos.direction} | fill {fill_px:.2f} "
+             f"slip {exit_slip*100:.3f}% | gross Rs {gross:,.0f} cost Rs {charges:,.0f} "
+             f"net Rs {net:,.0f} | session net Rs {STATE['realized']:,.0f} "
+             f"(costs Rs {STATE['charges_total']:,.0f})")
+    STATE["last_exit_bar"][sym] = bar_idx
+    del STATE["positions"][sym]
 
 
 def handle_closed_bar(sym):
-    """Called when a stock's 1-min bar closes. Thread-safe via STATE['lock']."""
-    kite = STATE["kite"]; paper = STATE["paper"]
+    """Called when a stock's 1-min bar closes. Thread-safe via STATE['lock'].
+    MULTI-POSITION: each stock independently manages its own position and can
+    enter on its own signal while OTHER stocks are also held."""
+    kite = STATE["kite"]
     sb = STATE["bars"][sym]
+    # one-time gap backfill when the FIRST live bar closes for this stock
+    if sym not in STATE.get("backfilled_live", set()):
+        STATE.setdefault("backfilled_live", set()).add(sym)
+        try:
+            token = STATE["sym2token"].get(sym)
+            if token:
+                filled = backfill_gap(kite, sym, token, sb)
+                if filled:
+                    log.info(f"  live-gap backfill {sym}: +{filled} bars")
+        except Exception as e:
+            log.warning(f"live backfill {sym}: {e}")
     df = sb.df()
     if len(df) < WARMUP_BARS:
         return
@@ -404,55 +530,13 @@ def handle_closed_bar(sym):
     ind = add_indicators(df).reset_index(drop=True)
     bar_idx = len(ind) - 1
     now = datetime.now(IST); tnow = now.time()
-    pos = STATE["position"]
 
-    # ====== A position is open ======
-    if pos is not None:
-        if pos.symbol == sym:
-            # manage OUR open position
-            force = tnow >= SQUAREOFF
-            reason = "session_squareoff" if force else eval_exit(ind, pos)
-            if reason:
-                try:
-                    bid, ask, ltp = bid_ask(kite, sym)
-                except Exception:
-                    bid = ask = ind.iloc[bar_idx]["close"]
-                signal_px = ind.iloc[bar_idx]["close"]
-                fill_px = bid if pos.direction == "up" else ask
-                if not paper:
-                    ok, fp = place_order(kite, sym, is_buy=(pos.direction == "down"), qty=pos.qty)
-                    if ok:
-                        fill_px = fp
-                if pos.direction == "up":
-                    pnl = (fill_px - pos.entry_fill_px) * pos.qty
-                else:
-                    pnl = (pos.entry_fill_px - fill_px) * pos.qty
-                STATE["realized"] += pnl
-                exit_slip = abs(fill_px - signal_px) / signal_px
-                log_slippage({"time": now.isoformat(), "symbol": sym, "event": "exit",
-                              "reason": reason, "signal_px": round(signal_px, 2),
-                              "fill_px": round(fill_px, 2), "slip_pct": round(exit_slip * 100, 4),
-                              "pnl": round(pnl, 2)})
-                log.info(f"EXIT [{reason}] {sym} {pos.direction} | signal {signal_px:.2f} "
-                         f"fill {fill_px:.2f} slip {exit_slip*100:.3f}% | PnL Rs {pnl:,.0f} "
-                         f"| session Rs {STATE['realized']:,.0f}")
-                STATE["last_exit_bar"][sym] = bar_idx
-                STATE["position"] = None
-                # slot just freed -> immediately take the freshest pending signal
-                _try_enter_freshest(now)
-        else:
-            # OTHER stock closed a bar while we hold a position:
-            # keep monitoring -> RECORD its signal (timestamped) instead of ignoring it
-            if tnow < NO_NEW_TRADES_AFTER:
-                sig = eval_entry(ind, STATE["last_exit_bar"].get(sym, -10_000))
-                if sig is not None:
-                    STATE["pending"][sym] = {"dir": sig, "stamp": now,
-                                             "signal_px": ind.iloc[bar_idx]["close"]}
-                else:
-                    STATE["pending"].pop(sym, None)   # signal gone -> clear stale record
+    # ---- if we hold a position in THIS stock, manage it ----
+    if sym in STATE["positions"]:
+        _close_position(sym, ind, bar_idx, now, force=(tnow >= SQUAREOFF))
         return
 
-    # ====== No position open ======
+    # ---- otherwise look for a fresh entry on THIS stock (independent of others) ----
     if tnow >= NO_NEW_TRADES_AFTER:
         return
     sig = eval_entry(ind, STATE["last_exit_bar"].get(sym, -10_000))
@@ -524,13 +608,22 @@ def on_error(ws, code, reason):
 # ============================================================
 # HISTORICAL SEED
 # ============================================================
-def seed_today(kite, sym, token):
+def seed_today(kite, sym, token, retries=2):
+    """Fetch today's 1-min bars 09:15->now. Retries on failure since a late start
+    requests a large chunk and a single call can transiently fail/return partial."""
     start = datetime.now(IST).replace(hour=9, minute=15, second=0, microsecond=0)
     now = datetime.now(IST)
-    try:
-        rows = kite.historical_data(token, start, now, "minute", False, False)
-    except Exception as e:
-        log.warning(f"seed {sym} failed: {e}"); return []
+    rows = None
+    for attempt in range(retries + 1):
+        try:
+            rows = kite.historical_data(token, start, now, "minute", False, False)
+            if rows:
+                break
+        except Exception as e:
+            log.warning(f"seed {sym} attempt {attempt+1} failed: {e}")
+            time.sleep(0.5)
+    if not rows:
+        log.warning(f"seed {sym}: no data after {retries+1} attempts"); return []
     cur = now.replace(second=0, microsecond=0, tzinfo=None)
     out = []
     for r in rows:
@@ -543,6 +636,47 @@ def seed_today(kite, sym, token):
         out.append({"date": ts, "open": float(r["open"]), "high": float(r["high"]),
                     "low": float(r["low"]), "close": float(r["close"])})
     return out
+
+
+def backfill_gap(kite, sym, token, sb):
+    """Fetch and merge any minute bars missing between the last bar we have and
+    the most recent COMPLETED minute. Closes the hole created by the screening
+    delay or a late start. Returns number of bars added."""
+    now = datetime.now(IST)                       # tz-aware Python datetime
+    session_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    last = sb.last_minute()                        # pandas Timestamp (naive IST) or None
+
+    # Determine the 'from' as a tz-AWARE python datetime (what Kite expects),
+    # mirroring seed_today which works.
+    if last is not None:
+        # convert pandas Timestamp -> python datetime, add 1 min, localize to IST
+        last_py = last.to_pydatetime()
+        frm = IST.localize(last_py + pd.Timedelta(minutes=1).to_pytimedelta())
+    else:
+        frm = session_open
+
+    # last fully-completed minute
+    last_complete = now.replace(second=0, microsecond=0) - pd.Timedelta(minutes=1).to_pytimedelta()
+    if frm > last_complete:
+        return 0                                   # no gap to fill
+
+    try:
+        rows = kite.historical_data(token, frm, now, "minute", False, False)
+    except Exception as e:
+        log.warning(f"backfill {sym} failed: {e}"); return 0
+
+    cur = now.replace(second=0, microsecond=0, tzinfo=None)
+    new = []
+    for r in rows:
+        ts = pd.to_datetime(r["date"])
+        if ts.tzinfo is not None:
+            ts = ts.tz_convert(IST).tz_localize(None)
+        ts = ts.replace(second=0, microsecond=0)
+        if ts >= cur:           # skip the still-forming current minute
+            continue
+        new.append({"date": ts, "open": float(r["open"]), "high": float(r["high"]),
+                    "low": float(r["low"]), "close": float(r["close"])})
+    return sb.insert_bars(new)
 
 
 # ============================================================
@@ -570,14 +704,22 @@ def main():
     if not (SESSION_START <= now_t <= SESSION_END):
         log.error("Market not open. Run during 09:15-15:30 IST."); sys.exit(1)
 
-    symbols = load_symbols()
-    log.info(f"Screening {len(symbols)} symbols for liquidity...")
-    top = screen_and_rank(kite, symbols)
-    if not top:
-        log.error("No liquid names passed screen."); sys.exit(1)
-    log.info(f"Monitoring {len(top)} most-liquid: {[t['symbol'] for t in top]}")
+    if FIXED_BASKET:
+        log.info(f"FIXED BASKET mode: monitoring only {FIXED_BASKET}")
+        top = resolve_basket(kite, FIXED_BASKET)
+        if not top:
+            log.error("Could not resolve any basket symbols."); sys.exit(1)
+        log.info(f"Monitoring {len(top)} basket names: {[t['symbol'] for t in top]}")
+    else:
+        symbols = load_symbols()
+        log.info(f"Screening {len(symbols)} symbols for liquidity...")
+        top = screen_and_rank(kite, symbols)
+        if not top:
+            log.error("No liquid names passed screen."); sys.exit(1)
+        log.info(f"Monitoring {len(top)} most-liquid: {[t['symbol'] for t in top]}")
 
     # seed bars + register tokens
+    STATE["sym2token"] = {}
     for t in top:
         sym, token = t["symbol"], t["token"]
         sb = StockBars()
@@ -586,7 +728,33 @@ def main():
         STATE["bars"][sym] = sb
         STATE["last_exit_bar"][sym] = -10_000
         STATE["token2sym"][token] = sym
+        STATE["sym2token"][sym] = token
         log.info(f"  {sym}: seeded {len(seeded)} bars, token {token}")
+
+    # FINAL backfill right before going live: the screening + seeding loop above
+    # takes a couple of minutes, so re-fetch any minutes that closed during it.
+    # This closes the gap between "when each stock was seeded" and "now".
+    total_filled = 0
+    for sym, token in STATE["sym2token"].items():
+        filled = backfill_gap(kite, sym, token, STATE["bars"][sym])
+        total_filled += filled
+        if filled:
+            log.info(f"  backfill {sym}: +{filled} gap bars "
+                     f"(now {len(STATE['bars'][sym].bars)} total)")
+    log.info(f"Pre-connect backfill: filled {total_filled} missing bars across "
+             f"{len(STATE['sym2token'])} stocks.")
+    # readiness report: on a late start, confirm each stock has enough history to
+    # trade immediately (>= WARMUP_BARS). Names short of warmup will trade only
+    # after enough live bars accumulate.
+    ready = sum(1 for sym in STATE["sym2token"]
+                if len(STATE["bars"][sym].bars) >= WARMUP_BARS)
+    log.info(f"Warmup readiness: {ready}/{len(STATE['sym2token'])} stocks have "
+             f">= {WARMUP_BARS} bars and can trade immediately.")
+    for sym in STATE["sym2token"]:
+        nb = len(STATE["bars"][sym].bars)
+        if nb < WARMUP_BARS:
+            log.warning(f"  {sym}: only {nb} bars (< {WARMUP_BARS} warmup) -- "
+                        f"will start trading once enough live bars build.")
 
     # websocket
     api_key, access_token = oUtils.get_ws_credentials(kite) if hasattr(oUtils, "get_ws_credentials") else (None, None)
@@ -616,26 +784,39 @@ def main():
         log.info("Interrupted by user.")
     finally:
         STATE["stop"] = True
-        # close any open paper position at last known price
+        # close ALL open positions at last known price (with charges)
         with STATE["lock"]:
-            pos = STATE["position"]
-            if pos is not None:
+            for sym in list(STATE["positions"].keys()):
+                pos = STATE["positions"][sym]
                 try:
-                    bid, ask, ltp = bid_ask(kite, pos.symbol)
+                    bid, ask, ltp = bid_ask(kite, sym)
                     fill = bid if pos.direction == "up" else ask
                 except Exception:
                     fill = pos.entry_fill_px
-                pnl = ((fill - pos.entry_fill_px) if pos.direction == "up"
-                       else (pos.entry_fill_px - fill)) * pos.qty
-                STATE["realized"] += pnl
-                log.info(f"EOD close {pos.symbol}: PnL Rs {pnl:,.0f}")
+                if pos.direction == "up":
+                    gross = (fill - pos.entry_fill_px) * pos.qty
+                    buy_val = pos.entry_fill_px * pos.qty; sell_val = fill * pos.qty
+                else:
+                    gross = (pos.entry_fill_px - fill) * pos.qty
+                    sell_val = pos.entry_fill_px * pos.qty; buy_val = fill * pos.qty
+                charges = intraday_equity_charges(buy_val, sell_val)
+                net = gross - charges
+                STATE["realized"] += net; STATE["charges_total"] += charges
+                if net > 0:
+                    STATE["wins"] += 1
+                log.info(f"EOD close {sym}: gross Rs {gross:,.0f} cost Rs {charges:,.0f} "
+                         f"net Rs {net:,.0f}")
+                STATE["positions"].pop(sym, None)
         try:
             kws.close()
         except Exception:
             pass
-        log.info(f"=== DONE. Trades: {STATE['trade_no']}  Realized Rs {STATE['realized']:,.0f} "
+        n = STATE["trade_no"]; wins = STATE["wins"]
+        wr = (100 * wins / n) if n else 0
+        log.info(f"=== DONE. Trades: {n}  Win-rate: {wr:.0f}%  "
+                 f"Net Rs {STATE['realized']:,.0f}  (Zerodha costs Rs {STATE['charges_total']:,.0f}) "
                  f"({'PAPER' if paper else 'LIVE'}) ===")
-        log.info(f"Slippage log: {SLIP_LOG}")
+        log.info(f"Trade log (PnL + costs): {SLIP_LOG}")
 
 
 if __name__ == "__main__":

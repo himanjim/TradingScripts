@@ -31,7 +31,7 @@ except Exception:
 # =============================================================================
 PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
 # PICKLES_DIR = r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New"
-ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "11:50")  # "HH:MM"
+ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "12:05")  # "HH:MM"
 
 def _safe_fname_part(s: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in s)
@@ -210,7 +210,7 @@ ALLOWED_DTE = _parse_int_list(os.getenv("ALLOWED_DTE"), [0])
 # Current logic uses the same rupee amount for:
 #     1. arming profit-protect once peak P&L reaches G
 #     2. exiting when current P&L falls to peak - G
-PROFIT_PROTECT_TRIGGER_RUPEES = _parse_pct_value(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", 0.6660))
+PROFIT_PROTECT_TRIGGER_RUPEES = _parse_pct_value(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", 0.439073))
 
 # --- Absolute daily circuit breaker -------------------------------------------------
 # Once cumulative realized NET P&L for the current underlying/day reaches this
@@ -230,18 +230,18 @@ MAX_DAILY_LOSS_RUPEES = _parse_float_env("MAX_DAILY_LOSS_RUPEES", 30000.0)
 # Default: Rs. 3,000 loss per attempt. Set to 0 to disable the cap.
 MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT = _parse_float_env("MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT", 3000.0)
 
-MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "10"))  # 1 = only one re-entry
+MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "7"))  # 1 = only one re-entry
 
 # --- Per-DAY profit target as a fraction of premium collected on the CURRENT attempt ---
 # When an attempt's profit reaches PROFIT_TARGET_PCT * (CE+PE)*qty, it exits at the
 # target and NO further trades are taken that day. 0 disables. e.g. 0.70 = 70%.
-PROFIT_TARGET_PCT = float(os.getenv("PROFIT_TARGET_PCT", "0.3593"))
+PROFIT_TARGET_PCT = float(os.getenv("PROFIT_TARGET_PCT", 0.613274))
 # --- Per-attempt RE-ENTRY GAP in minutes (index 0 = gap before 1st re-entry, 1 = before 2nd, ...) ---
 # Attempts beyond the list reuse the LAST value. Override via env comma list, e.g.
 # REENTRY_DELAY_BY_ATTEMPT="10,15,20".
 REENTRY_DELAY_BY_ATTEMPT = _parse_int_list(
     os.getenv("REENTRY_DELAY_BY_ATTEMPT"),
-    [4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24],
+    [5, 14, 23, 32, 41, 50, 59, 68],
 )
 
 def reentry_delay_for_attempt(attempt_idx: int) -> int:
