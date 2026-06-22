@@ -12,7 +12,10 @@ block at the top (no command line -- just edit and press Run in PyCharm):
   2. ROBUSTNESS OPTIMIZER -> RUN_MODE = "optimize"
      Searches the six tunables with Optuna (TPE), maximizing ROBUSTNESS = the
      fraction of profitable MONTHS first, then profitable days. Loads the option
-     data ONCE and re-simulates per trial, printing progress every few trials.
+     data ONCE and re-simulates per trial, printing progress every trial. EVERY
+     tested config + its results is saved to a CSV in OPT_OUTPUT_DIR (flushed per
+     trial, so an interrupted run keeps everything). Set OPT_SAVE_DB = True to
+     also persist a resumable Optuna SQLite study.
 
 Optimized parameters:
      ENTRY_TIME_IST, LOSS_LIMIT_RUPEES_BY_ATTEMPT, PROFIT_PROTECT_TRIGGER_RUPEES,
@@ -77,10 +80,20 @@ except Exception:
 RUN_MODE = "optimize"
 
 # --- Optimizer settings (used only when RUN_MODE == "optimize") ---
-OPT_TRIALS = 50            # number of optimization trials
+OPT_TRIALS = 300            # number of optimization trials
 OPT_CV_FOLDS = 5            # 1 = score on full sample; >1 = walk-forward block robustness
 OPT_PROGRESS_EVERY = 5      # (retained for compatibility) per-trial stats now print EVERY trial
 OPT_SEED = 42              # RNG seed for reproducible searches
+
+# --- Where to SAVE every tested config + its results ---
+# A CSV row is written (and flushed) after EVERY trial, so an interrupted run
+# still keeps everything tested so far. A timestamped file is created per run.
+OPT_OUTPUT_DIR = r"G:\My Drive\Trading\optimizer_runs"
+OPT_STUDY_NAME = "atm_straddle_robust"
+# Set True to ALSO persist the Optuna study to a SQLite DB in OPT_OUTPUT_DIR.
+# That makes the study RESUMABLE: re-running appends more trials to the same
+# study (TPE keeps learning) instead of starting over. False = in-memory only.
+OPT_SAVE_DB = False
 
 # --- Small-sample smoke test (set BOTH to None for a real run) ---
 # For a quick end-to-end check, e.g. SAMPLE_MAX_PICKLES = 3 and SAMPLE_MAX_DAYS = 20.
@@ -1599,6 +1612,52 @@ OPT_MIN_DAYS = int(_parse_float_env("OPT_MIN_DAYS", 30))   # guard: need enough 
 OPT_MIN_MONTHS = int(_parse_float_env("OPT_MIN_MONTHS", 3))
 
 
+# Stable column order for the per-trial results CSV.
+_TRIAL_COLUMNS = [
+    "run_index", "trial_number", "state", "score",
+    "entry_time", "max_reattempts", "profit_protect_pct", "profit_target_pct",
+    "sl_base_pct", "sl_step_pct", "loss_limit_schedule",
+    "reentry_delay_base_min", "reentry_delay_step_min", "reentry_delay_schedule",
+    "net_pnl", "mean_month", "median_month", "worst_month",
+    "prof_month_ratio", "prof_day_ratio", "n_months", "n_days",
+    "elapsed_s",
+]
+
+
+def _trial_record(trial_, base, run_index: int, elapsed: float) -> Dict[str, Any]:
+    """Flatten one finished trial (suggested params + derived schedules + result
+    metrics) into a single CSV row. `base` supplies the non-optimized fields so we
+    reconstruct the full Params via the same mapping the objective used."""
+    p = dict(trial_.params)
+    bp = _params_from_trial(_FrozenTrialView(trial_), base)
+    ua = trial_.user_attrs
+    return {
+        "run_index": run_index,                  # 1..n_trials within THIS run
+        "trial_number": trial_.number,           # global index within the study
+        "state": str(getattr(trial_, "state", "")),
+        "score": trial_.value,
+        "entry_time": bp.entry_time.strftime("%H:%M"),
+        "max_reattempts": bp.max_reattempts,
+        "profit_protect_pct": round(bp.profit_protect_pct, 6),
+        "profit_target_pct": round(bp.profit_target_pct, 6),
+        "sl_base_pct": p.get("sl_base_pct"),
+        "sl_step_pct": p.get("sl_step_pct"),
+        "loss_limit_schedule": ";".join(str(round(x, 4)) for x in bp.loss_limit_pct_by_attempt),
+        "reentry_delay_base_min": p.get("reentry_delay_base_min"),
+        "reentry_delay_step_min": p.get("reentry_delay_step_min"),
+        "reentry_delay_schedule": ";".join(str(x) for x in bp.reentry_delay_by_attempt),
+        "net_pnl": round(float(ua.get("total_pnl", 0.0)), 2),
+        "mean_month": round(float(ua.get("mean_month", 0.0)), 2),
+        "median_month": round(float(ua.get("median_month", 0.0)), 2),
+        "worst_month": round(float(ua.get("worst_month", 0.0)), 2),
+        "prof_month_ratio": round(float(ua.get("prof_month_ratio", 0.0)), 4),
+        "prof_day_ratio": round(float(ua.get("prof_day_ratio", 0.0)), 4),
+        "n_months": int(ua.get("n_months", 0)),
+        "n_days": int(ua.get("n_days", 0)),
+        "elapsed_s": round(elapsed, 1),
+    }
+
+
 def _inr(x: float) -> str:
     """Format a rupee amount with Indian digit grouping, ASCII-safe for Windows
     consoles (e.g. 1234567 -> 'Rs.12,34,567'). Avoids the unicode rupee sign so
@@ -1754,9 +1813,21 @@ def optimize(
     """
     import optuna
     import time as _time
+    import csv as _csv
+    import datetime as _dt
     optuna.logging.set_verbosity(optuna.logging.WARNING)  # we do our own printing
 
     base = default_params()  # supplies the non-optimized fields (daily cap, stop cap)
+
+    # ---- results file(s): every tested config is saved here ----
+    os.makedirs(OPT_OUTPUT_DIR, exist_ok=True)
+    run_ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    csv_path = os.path.join(OPT_OUTPUT_DIR, f"{OPT_STUDY_NAME}_{run_ts}_trials.csv")
+    csv_file = open(csv_path, "w", newline="")
+    csv_writer = _csv.DictWriter(csv_file, fieldnames=_TRIAL_COLUMNS)
+    csv_writer.writeheader()
+    csv_file.flush()
+    print(f"[OPT] saving every tested config to: {csv_path}", flush=True)
 
     def objective(trial):
         # 1) turn the trial's suggestions into a concrete Params object
@@ -1778,27 +1849,48 @@ def optimize(
             return _cv_score(actual_df, cv_folds)
         return _score_from_metrics(m)
 
+    # Optional SQLite persistence -> the study becomes resumable (re-running adds
+    # more trials to the same study instead of starting fresh).
+    storage = None
+    study_name = OPT_STUDY_NAME
+    if OPT_SAVE_DB:
+        db_path = os.path.join(OPT_OUTPUT_DIR, f"{OPT_STUDY_NAME}.db")
+        storage = f"sqlite:///{db_path}"
+        print(f"[OPT] study persisted (resumable) at: {db_path}", flush=True)
     study = optuna.create_study(direction="maximize",
-                                sampler=optuna.samplers.TPESampler(seed=seed))
+                                sampler=optuna.samplers.TPESampler(seed=seed),
+                                study_name=study_name, storage=storage,
+                                load_if_exists=bool(storage))
 
     # ---- live progress callback ----
     # Prints a rich stats line on EVERY trial: the score, net P/L, mean & median
     # monthly P/L, profitable-month and profitable-day ratios, and the worst
     # month -- plus elapsed/ETA. Whenever a new best appears, it also prints the
     # full month-by-month P/L of that best config so you can eyeball consistency.
+    # It ALSO appends the trial to the results CSV (flushed) so nothing is lost if
+    # the run is interrupted.
     start = _time.time()
+    run_counter = {"n": 0}   # trials completed THIS run (robust to DB resume)
 
     def _progress(study_, trial_):
-        n_done = trial_.number + 1
+        run_counter["n"] += 1
+        n_done = run_counter["n"]                 # trials done THIS run (resume-safe)
         ua = trial_.user_attrs
         val = trial_.value if trial_.value is not None else float("nan")
         elapsed = _time.time() - start
-        eta = (elapsed / n_done) * (n_trials - n_done)
+        eta = (elapsed / n_done) * max(0, n_trials - n_done)
         try:
             best_val = study_.best_value
             best_num = study_.best_trial.number
         except Exception:
             best_val, best_num = float("nan"), -1
+
+        # ---- persist this tested config + its results (flush so nothing is lost) ----
+        try:
+            csv_writer.writerow(_trial_record(trial_, base, n_done, elapsed))
+            csv_file.flush()
+        except Exception as e:
+            print(f"[OPT WARN] could not write trial {trial_.number} to CSV: {e}", flush=True)
 
         n_mo = int(ua.get("n_months", 0))
         pmr = float(ua.get("prof_month_ratio", 0.0))
@@ -1827,7 +1919,22 @@ def optimize(
 
     print(f"[OPT] starting {n_trials} trials over {len(groups)} day-groups "
           f"(cv_folds={cv_folds}) ...", flush=True)
-    study.optimize(objective, n_trials=n_trials, callbacks=[_progress], show_progress_bar=False)
+    try:
+        study.optimize(objective, n_trials=n_trials, callbacks=[_progress], show_progress_bar=False)
+    finally:
+        # Always close the per-trial CSV, and also dump Optuna's own full table
+        # (includes datetimes, durations, every param) for completeness.
+        try:
+            csv_file.close()
+        except Exception:
+            pass
+        try:
+            full_path = os.path.join(OPT_OUTPUT_DIR, f"{OPT_STUDY_NAME}_{run_ts}_full.csv")
+            study.trials_dataframe().to_csv(full_path, index=False)
+            print(f"[OPT] full Optuna trials table saved to: {full_path}", flush=True)
+        except Exception as e:
+            print(f"[OPT WARN] could not write full trials table: {e}", flush=True)
+    print(f"[OPT] per-trial results saved to: {csv_path}", flush=True)
 
     best = study.best_trial
     print("\n================ BEST CONFIG ================")
