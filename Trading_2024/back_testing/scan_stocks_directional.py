@@ -68,9 +68,20 @@ SQUAREOFF_TIME = "15:20"
 # ============================================================
 # LIVE LIQUIDITY SCREEN
 # ============================================================
-ORDER_VALUE_RS = 10_00_000          # the order size you want to place comfortably
+ORDER_VALUE_RS = 10_00_000          # base order size for the pass/fail screen
 MAX_SPREAD_PCT = 0.0010             # <=0.10% bid/ask spread to qualify
 MAX_DEPTH_SLIPPAGE_PCT = 0.0015     # Rs 10L must fill within 0.15% of mid
+# ORDER-SIZE SWEEP: for each stock, measure fill slippage at each of these sizes
+# so you can see how far you can SCALE before slippage crosses your ~0.15% edge.
+SIZE_SWEEP_RS = [10_00_000, 30_00_000, 50_00_000, 1_00_00_000]
+
+# ---- MULTI-SAMPLE LIQUIDITY WINDOW ----
+# A single snapshot is fragile (a thin moment rejects even SBIN/TCS). Instead,
+# sample each stock repeatedly over a window and report the DISTRIBUTION
+# (median = typical liquidity, worst = liquidity on its worst sampled moment).
+# A stock you can trust for scaling is liquid even at its WORST sample.
+LIQUIDITY_SAMPLE_MINUTES = 15      # how long to sample (set 0 for single snapshot)
+LIQUIDITY_SAMPLE_ROUNDS = 5        # how many full passes over all symbols in that window
 QUOTE_THROTTLE_SEC = 0.34           # ~3 quote calls/sec (Kite global limit)
 REQUIRE_LIVE_MARKET = True          # set False to bypass the market-hours gate (e.g. dry run)
 
@@ -136,63 +147,139 @@ def market_is_live(kite) -> bool:
 # LIVE LIQUIDITY SCREEN
 # ============================================================
 def depth_fill_slippage(depth_side, mid, target_value):
-    """Walk the order-book side; return slippage % to fill target_value, or None
-    if the visible depth can't absorb it."""
+    """Walk the order-book side and compute the TRUE volume-weighted fill price
+    to absorb target_value, returning VWAP slippage % vs mid. Returns None if the
+    visible book can't absorb target_value."""
     filled_val = 0.0
-    weighted_px = 0.0
+    filled_qty = 0.0
     for level in depth_side:
         px = float(level.get("price") or 0)
         qty = int(level.get("quantity") or 0)
         if px <= 0 or qty <= 0:
             continue
         level_val = px * qty
-        take = min(level_val, target_value - filled_val)
-        weighted_px += (take / px) * px       # = take (value); track value-weighted px below
-        filled_val += take
+        take_val = min(level_val, target_value - filled_val)
+        take_qty = take_val / px
+        filled_val += take_val
+        filled_qty += take_qty
         if filled_val >= target_value:
-            # value-weighted average price approximation
-            return abs(px - mid) / mid          # conservative: use deepest touched level
+            vwap = filled_val / filled_qty       # true average fill price
+            return abs(vwap - mid) / mid
     return None                                  # not enough visible depth
 
 
+def size_sweep(asks, bids, mid):
+    """For each size in SIZE_SWEEP_RS, return worst-side VWAP slippage % (or None
+    if that size can't be filled from visible depth)."""
+    out = {}
+    for sz in SIZE_SWEEP_RS:
+        bs = depth_fill_slippage(asks, mid, sz)
+        ss = depth_fill_slippage(bids, mid, sz)
+        if bs is None or ss is None:
+            out[sz] = None
+        else:
+            out[sz] = max(bs, ss)
+    return out
+
+
+def _sample_one(kite, sym):
+    """Take ONE liquidity sample of a stock. Returns dict with spread, per-size
+    slippage, ltp -- or None if no valid quote this round."""
+    key = f"NSE:{sym}"
+    try:
+        q = kite.quote(key)[key]
+    except Exception:
+        return None
+    ltp = float(q.get("last_price") or 0)
+    depth = q.get("depth", {}) or {}
+    bids = depth.get("buy", []); asks = depth.get("sell", [])
+    best_bid = float(bids[0]["price"]) if bids and bids[0].get("price") else 0
+    best_ask = float(asks[0]["price"]) if asks and asks[0].get("price") else 0
+    if best_bid <= 0 or best_ask <= 0 or ltp <= 0:
+        return None
+    mid = (best_bid + best_ask) / 2
+    spread_pct = (best_ask - best_bid) / mid
+    sweep = size_sweep(asks, bids, mid)   # {size: worst-side slip or None}
+    return {"ltp": ltp, "spread_pct": spread_pct, "sweep": sweep}
+
+
 def screen_liquidity(kite, symbols):
-    """Return list of symbols that pass spread + depth screen for ORDER_VALUE_RS."""
+    """Sample each stock repeatedly over LIQUIDITY_SAMPLE_MINUTES and report the
+    DISTRIBUTION of spread / depth-slippage. A name passes if its MEDIAN spread
+    and median Rs-10L slippage clear the thresholds (robust to thin moments);
+    we also report the WORST sample so you can judge scaling reliability."""
+    rounds = max(1, LIQUIDITY_SAMPLE_ROUNDS) if LIQUIDITY_SAMPLE_MINUTES > 0 else 1
+    gap = (LIQUIDITY_SAMPLE_MINUTES * 60 / rounds) if rounds > 1 else 0
+    # collect samples: sym -> list of sample dicts
+    samples = {s: [] for s in symbols}
+    print(f"[INFO] Sampling liquidity: {rounds} rounds over "
+          f"{LIQUIDITY_SAMPLE_MINUTES} min ({len(symbols)} names/round)...")
+    for rnd in range(rounds):
+        t0 = time.time()
+        got = 0
+        for sym in symbols:
+            s = _sample_one(kite, sym)
+            if s is not None:
+                samples[sym].append(s); got += 1
+            time.sleep(QUOTE_THROTTLE_SEC)
+        print(f"  round {rnd+1}/{rounds}: {got}/{len(symbols)} quoted")
+        # wait out the remainder of this round's time budget (except after last round)
+        if rnd < rounds - 1 and gap > 0:
+            elapsed = time.time() - t0
+            if elapsed < gap:
+                time.sleep(gap - elapsed)
+
     passed, rejected = [], []
-    for k, sym in enumerate(symbols, 1):
-        key = f"NSE:{sym}"
-        try:
-            q = kite.quote(key)[key]
-        except Exception as e:
-            rejected.append({"symbol": sym, "reason": f"quote_err:{e}"});
-            time.sleep(QUOTE_THROTTLE_SEC); continue
-        ltp = float(q.get("last_price") or 0)
-        depth = q.get("depth", {}) or {}
-        bids = depth.get("buy", []); asks = depth.get("sell", [])
-        best_bid = float(bids[0]["price"]) if bids and bids[0].get("price") else 0
-        best_ask = float(asks[0]["price"]) if asks and asks[0].get("price") else 0
-        time.sleep(QUOTE_THROTTLE_SEC)
-        if best_bid <= 0 or best_ask <= 0 or ltp <= 0:
-            rejected.append({"symbol": sym, "reason": "no_quote"}); continue
-        mid = (best_bid + best_ask) / 2
-        spread_pct = (best_ask - best_bid) / mid
-        if spread_pct > MAX_SPREAD_PCT:
-            rejected.append({"symbol": sym, "reason": f"wide_spread {spread_pct*100:.3f}%"})
-            print(f"[SCREEN {k}] {sym}: REJECT spread {spread_pct*100:.3f}%")
-            continue
-        buy_slip = depth_fill_slippage(asks, mid, ORDER_VALUE_RS)
-        sell_slip = depth_fill_slippage(bids, mid, ORDER_VALUE_RS)
-        if buy_slip is None or sell_slip is None:
-            rejected.append({"symbol": sym, "reason": "thin_depth"})
-            print(f"[SCREEN {k}] {sym}: REJECT thin depth for Rs {ORDER_VALUE_RS:,.0f}")
-            continue
-        worst = max(buy_slip, sell_slip)
-        if worst > MAX_DEPTH_SLIPPAGE_PCT:
-            rejected.append({"symbol": sym, "reason": f"depth_slip {worst*100:.3f}%"})
-            print(f"[SCREEN {k}] {sym}: REJECT depth slippage {worst*100:.3f}%")
-            continue
-        passed.append({"symbol": sym, "spread_pct": round(spread_pct*100, 4),
-                       "depth_slip_pct": round(worst*100, 4), "ltp": ltp})
-        print(f"[SCREEN {k}] {sym}: PASS spread {spread_pct*100:.3f}% depth_slip {worst*100:.3f}%")
+    for sym in symbols:
+        ss = samples[sym]
+        if not ss:
+            rejected.append({"symbol": sym, "reason": "no_quote_any_round"}); continue
+        spreads = [x["spread_pct"] for x in ss]
+        med_spread = float(np.median(spreads))
+        max_spread = float(np.max(spreads))
+        # per-size: collect slippage across rounds; a round where size couldn't
+        # fill contributes None -> counts as a "thin" occurrence
+        rec = {"symbol": sym, "samples": len(ss),
+               "ltp": round(ss[-1]["ltp"], 2),
+               "med_spread_pct": round(med_spread * 100, 4),
+               "max_spread_pct": round(max_spread * 100, 4)}
+        base_slips = []   # Rs 10L slippage across rounds (for pass/fail on median)
+        for sz in SIZE_SWEEP_RS:
+            vals = [x["sweep"].get(sz) for x in ss]
+            ok = [v for v in vals if v is not None]
+            fill_rate = len(ok) / len(vals)        # fraction of rounds this size filled
+            tag = sz // 100000
+            if ok:
+                rec[f"med_slip_{tag}L"] = round(float(np.median(ok)) * 100, 4)
+                rec[f"max_slip_{tag}L"] = round(float(np.max(ok)) * 100, 4)
+            else:
+                rec[f"med_slip_{tag}L"] = None
+                rec[f"max_slip_{tag}L"] = None
+            rec[f"fillrate_{tag}L"] = round(fill_rate, 2)
+            if sz == ORDER_VALUE_RS:
+                base_slips = ok
+        # PASS/FAIL on the ROBUST criteria: median spread + median Rs-10L slippage,
+        # and the base size must fill in a majority of rounds
+        base_tag = ORDER_VALUE_RS // 100000
+        base_med = rec[f"med_slip_{base_tag}L"]
+        base_fill = rec[f"fillrate_{base_tag}L"]
+        if med_spread > MAX_SPREAD_PCT:
+            rejected.append({"symbol": sym, "reason": f"median_wide_spread {med_spread*100:.3f}%"})
+            print(f"[SCREEN] {sym}: REJECT median spread {med_spread*100:.3f}%"); continue
+        if base_med is None or base_fill < 0.5:
+            rejected.append({"symbol": sym, "reason": f"thin_depth (fillrate {base_fill:.0%})"})
+            print(f"[SCREEN] {sym}: REJECT thin depth Rs {ORDER_VALUE_RS:,.0f} "
+                  f"(filled {base_fill:.0%} of rounds)"); continue
+        if base_med > MAX_DEPTH_SLIPPAGE_PCT * 100:
+            rejected.append({"symbol": sym, "reason": f"median_depth_slip {base_med:.3f}%"})
+            print(f"[SCREEN] {sym}: REJECT median depth slip {base_med:.3f}%"); continue
+        passed.append(rec)
+        sweep_str = " ".join(
+            f"{sz//100000}L:{rec[f'med_slip_{sz//100000}L']}%/{rec[f'fillrate_{sz//100000}L']:.0%}"
+            if rec[f'med_slip_{sz//100000}L'] is not None else f"{sz//100000}L:THIN"
+            for sz in SIZE_SWEEP_RS)
+        print(f"[SCREEN] {sym}: PASS med_spread {med_spread*100:.3f}% | "
+              f"med_slip/fillrate {sweep_str}")
     return passed, rejected
 
 
@@ -232,6 +319,7 @@ def scan_day(g, symbol, qty):
     if n < 2:
         return []
     close = g["close"].to_numpy(); high = g["high"].to_numpy(); low = g["low"].to_numpy()
+    open_arr = g["open"].to_numpy()
     atr = g["atr"].to_numpy(); ema_f = g["ema_f"].to_numpy(); ema_m = g["ema_m"].to_numpy()
     ema_s = g["ema_s"].to_numpy(); slope_s = g["slope_s"].to_numpy()
     roll_hi = g["roll_hi"].to_numpy(); roll_lo = g["roll_lo"].to_numpy()
@@ -298,9 +386,35 @@ def scan_day(g, symbol, qty):
             charges = intraday_equity_charges(buy_val, sell_val)
             net_rs = gross_rs - charges
             pnl_pct_gross = pnl_pts / entry_px * 100
+            entry_ts = pd.to_datetime(date_arr[entry_idx])
+            # --- "how much has it already moved?" measures, computed at ENTRY ---
+            day_open = open_arr[0]
+            # (a) % move from day open at entry
+            move_from_open = (entry_px - day_open) / day_open * 100
+            # (b) % move from the day's extreme BEFORE entry:
+            #     for a buy, distance above the day-so-far LOW (how far it has run up);
+            #     for a sell, distance below the day-so-far HIGH (how far it has run down)
+            day_low_so_far = low[:entry_idx + 1].min()
+            day_high_so_far = high[:entry_idx + 1].max()
+            if direction == "up":
+                move_from_extreme = (entry_px - day_low_so_far) / day_low_so_far * 100
+            else:
+                move_from_extreme = (day_high_so_far - entry_px) / day_high_so_far * 100
+            # (c) reversal check: is entry BELOW day-open (for a buy) / ABOVE (for a sell)?
+            #     True => entering counter to the open, i.e. a potential reversal entry
+            if direction == "up":
+                reversal_entry = bool(entry_px < day_open)
+            else:
+                reversal_entry = bool(entry_px > day_open)
             eps.append({"symbol": symbol, "day": day0, "entry_time": date_arr[entry_idx],
+                        "entry_hhmm": entry_ts.strftime("%H:%M"),
+                        "entry_minutes_from_open": int((entry_ts.hour - 9) * 60 + entry_ts.minute - 15),
                         "direction": direction, "shares": shares,
                         "entry_px": round(entry_px, 2), "exit_px": round(exit_px, 2),
+                        "day_open": round(day_open, 2),
+                        "move_from_open_pct": round(move_from_open, 3),
+                        "move_from_extreme_pct": round(move_from_extreme, 3),
+                        "reversal_entry": reversal_entry,
                         "pnl_pct_gross": round(pnl_pct_gross, 4),
                         "gross_rs": round(gross_rs, 2), "charges_rs": round(charges, 2),
                         "net_rs": round(net_rs, 2), "bars": bars})
@@ -345,7 +459,52 @@ def main():
     passed, rejected = screen_liquidity(kite, all_syms)
     liquid = pd.DataFrame(passed)
     liquid.to_csv("liquid_universe.csv", index=False)
-    print(f"[INFO] {len(passed)} passed liquidity screen, {len(rejected)} rejected")
+
+    # ---- SCALING CAPABILITY SUMMARY (from multi-sample medians) ----
+    EDGE_SLIP_PCT = 0.075   # per-side slip guard (~half the ~0.15% round-trip edge)
+    if passed:
+        print("\n=== SCALING CAPABILITY (median slippage / fill-rate by order size) ===")
+        print(f"Edge-safe guard: median <= {EDGE_SLIP_PCT:.3f}% per side AND fills >=80% of samples\n")
+        hdr = f"{'symbol':12s}" + "".join(f"{sz//100000}L".rjust(14) for sz in SIZE_SWEEP_RS) + "   max_safe"
+        print(hdr)
+        def sortkey(x):
+            v = x.get("med_slip_100L"); return v if v is not None else 999
+        for r in sorted(passed, key=sortkey):
+            line = f"{r['symbol']:12s}"
+            max_safe = 0
+            for sz in SIZE_SWEEP_RS:
+                tag = sz // 100000
+                v = r.get(f"med_slip_{tag}L"); fr = r.get(f"fillrate_{tag}L", 0)
+                if v is None:
+                    line += "THIN".rjust(14)
+                else:
+                    line += f"{v:.3f}%/{fr:.0%}".rjust(14)
+                    if v <= EDGE_SLIP_PCT and fr >= 0.8:
+                        max_safe = sz
+            line += f"   Rs {max_safe//100000}L" if max_safe else "   <10L only"
+            print(line)
+        print("\nNames edge-safe (median<=guard & fill>=80%) at each size:")
+        for sz in SIZE_SWEEP_RS:
+            tag = sz // 100000
+            n = sum(1 for r in passed
+                    if r.get(f"med_slip_{tag}L") is not None
+                    and r[f"med_slip_{tag}L"] <= EDGE_SLIP_PCT
+                    and r.get(f"fillrate_{tag}L", 0) >= 0.8)
+            print(f"  Rs {sz//100000:>3}L: {n}/{len(passed)} names")
+
+
+    # SAVE the rejected names + reasons so you can see WHY a stock (e.g. TATASTEEL,
+    # LT) was excluded -- wide_spread / thin_depth / depth_slip / no_quote.
+    rej_df = pd.DataFrame(rejected)
+    if not rej_df.empty:
+        rej_df.to_csv("liquid_rejected.csv", index=False)
+    print(f"[INFO] {len(passed)} passed liquidity screen, {len(rejected)} rejected "
+          f"(reasons in liquid_rejected.csv)")
+    # explicitly report a few names of interest if they were rejected
+    watch = {"TATASTEEL", "LT"}
+    for r in rejected:
+        if r["symbol"] in watch:
+            print(f"   -> {r['symbol']} REJECTED: {r['reason']}")
     if not passed:
         print("[ABORT] No names passed the liquidity screen."); return
     liquid_syms = set(liquid["symbol"])

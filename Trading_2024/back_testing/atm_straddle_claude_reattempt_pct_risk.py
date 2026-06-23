@@ -29,9 +29,47 @@ except Exception:
 # =============================================================================
 # USER CONFIG
 # =============================================================================
-PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
-# PICKLES_DIR = r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New"
-ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "12:05")  # "HH:MM"
+# ---------------------------------------------------------------------------
+# CONFIGURATION SOURCE: external property file
+# ---------------------------------------------------------------------------
+# Every tunable setting lives in a simple KEY=VALUE property file so it can be
+# changed WITHOUT editing this script. Path defaults to
+# "straddle_config.properties" next to this file; override with the
+# STRADDLE_CONFIG environment variable. Values are pushed into the process
+# environment so all the os.getenv(...) reads below pick them up. A real
+# environment variable that is already set takes precedence over the file.
+def _load_property_file() -> str:
+    cfg_path = os.getenv(
+        "STRADDLE_CONFIG",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "straddle_config.properties"),
+    )
+    if not os.path.exists(cfg_path):
+        print(f"[CONFIG] Property file not found at {cfg_path}; using built-in defaults.")
+        return cfg_path
+    loaded = 0
+    with open(cfg_path, "r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#") or line.startswith(";"):
+                continue
+            if "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key, val = key.strip(), val.strip()
+            # strip optional surrounding quotes
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+                val = val[1:-1]
+            if key and key not in os.environ:   # real env vars win over the file
+                os.environ[key] = val
+                loaded += 1
+    print(f"[CONFIG] Loaded {loaded} setting(s) from {cfg_path}")
+    return cfg_path
+
+PROPERTY_FILE_PATH = _load_property_file()
+
+# PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
+PICKLES_DIR = os.getenv("PICKLES_DIR", r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New")
+ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "11:55")  # "HH:MM"
 
 def _safe_fname_part(s: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in s)
@@ -149,43 +187,9 @@ def _fmt_rupee_value(v: float) -> str:
     return str(int(round(float(v))))
 
 
-# =============================================================================
-# RISK CONFIGURATION AS % OF ENTRY PREMIUM
-# =============================================================================
-# IMPORTANT:
-# The original version used absolute rupee values in these two variables.
-# This version intentionally keeps the same variable names for compatibility
-# with your existing env-var workflow, but the meaning is now PERCENTAGE.
-#
-# Base for percentage calculation:
-#     entry_premium_sum_rupees = (entry_ce + entry_pe) * qty
-#
-# Stop-loss threshold:
-#     loss_limit_rupees = LOSS_LIMIT_% * entry_premium_sum_rupees
-#
-# Profit-protect threshold/giveback:
-#     G = PROFIT_PROTECT_% * entry_premium_sum_rupees
-#
-# Example:
-#     If CE+PE premium collected = 120 and qty = 325,
-#     entry_premium_sum_rupees = 39,000.
-#     10% stop-loss = 3,900.
-#     30% profit-protect trigger/giveback = 11,700.
-# =============================================================================
-
-# --- Per-attempt STOP-LOSS as % of premium collected on that attempt ---
-# Index 0 = first entry, 1 = first re-entry, etc.
-# Attempts beyond the list reuse the LAST value.
-#
-# Default: 10% for every attempt.
-#
-# Env examples:
-#     LOSS_LIMIT_RUPEES_BY_ATTEMPT="10"
-#     LOSS_LIMIT_RUPEES_BY_ATTEMPT="10,12,15"
-#     LOSS_LIMIT_RUPEES_BY_ATTEMPT="0.10,0.12,0.15"
 LOSS_LIMIT_RUPEES_BY_ATTEMPT = _parse_pct_list(
     os.getenv("LOSS_LIMIT_RUPEES_BY_ATTEMPT"),
-    [0.2978, 0.2999, 0.3019, 0.304, 0.3061, 0.3081, 0.3102, 0.3122, 0.3143, 0.3164, 0.3184],
+    [0.2487, 0.2824, 0.3162, 0.3499, 0.3837, 0.4174, 0.4512],
 )
 
 
@@ -210,7 +214,7 @@ ALLOWED_DTE = _parse_int_list(os.getenv("ALLOWED_DTE"), [0])
 # Current logic uses the same rupee amount for:
 #     1. arming profit-protect once peak P&L reaches G
 #     2. exiting when current P&L falls to peak - G
-PROFIT_PROTECT_TRIGGER_RUPEES = _parse_pct_value(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", 0.439073))
+PROFIT_PROTECT_TRIGGER_RUPEES = _parse_pct_value(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", 0.254741))
 
 # --- Absolute daily circuit breaker -------------------------------------------------
 # Once cumulative realized NET P&L for the current underlying/day reaches this
@@ -230,18 +234,18 @@ MAX_DAILY_LOSS_RUPEES = _parse_float_env("MAX_DAILY_LOSS_RUPEES", 30000.0)
 # Default: Rs. 3,000 loss per attempt. Set to 0 to disable the cap.
 MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT = _parse_float_env("MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT", 3000.0)
 
-MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "7"))  # 1 = only one re-entry
+MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "10"))  # 1 = only one re-entry
 
 # --- Per-DAY profit target as a fraction of premium collected on the CURRENT attempt ---
 # When an attempt's profit reaches PROFIT_TARGET_PCT * (CE+PE)*qty, it exits at the
 # target and NO further trades are taken that day. 0 disables. e.g. 0.70 = 70%.
-PROFIT_TARGET_PCT = float(os.getenv("PROFIT_TARGET_PCT", 0.613274))
+PROFIT_TARGET_PCT = float(os.getenv("PROFIT_TARGET_PCT", 0.7))
 # --- Per-attempt RE-ENTRY GAP in minutes (index 0 = gap before 1st re-entry, 1 = before 2nd, ...) ---
 # Attempts beyond the list reuse the LAST value. Override via env comma list, e.g.
 # REENTRY_DELAY_BY_ATTEMPT="10,15,20".
 REENTRY_DELAY_BY_ATTEMPT = _parse_int_list(
     os.getenv("REENTRY_DELAY_BY_ATTEMPT"),
-    [5, 14, 23, 32, 41, 50, 59, 68],
+    [6, 8, 10, 12, 14, 16, 18, 15, 15, 15, 15],
 )
 
 def reentry_delay_for_attempt(attempt_idx: int) -> int:
@@ -1245,12 +1249,22 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
             )
         )
 
+        # Count of profitable vs loss days within each month
+        day_count_stats = (
+            daily_tmp.groupby("month", as_index=False)
+            .agg(
+                profitable_days=("daily_pnl", lambda s: int((s > 0).sum())),
+                loss_days=("daily_pnl", lambda s: int((s < 0).sum())),
+            )
+        )
+
         # Date on which the worst (maximum-loss) day occurred, per month
         worst_rows = daily_tmp.loc[daily_tmp.groupby("month")["daily_pnl"].idxmin()]
         worst_day = worst_rows[["month", "day"]].rename(columns={"day": "max_loss_day_date"})
 
         monthwise_summary = monthwise_summary.merge(loss_day_stats, on="month", how="left")
         monthwise_summary = monthwise_summary.merge(worst_day, on="month", how="left")
+        monthwise_summary = monthwise_summary.merge(day_count_stats, on="month", how="left")
 
         # Place the date column right after the max-loss value column
         _cols = list(monthwise_summary.columns)
@@ -1258,6 +1272,33 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
             _cols.remove("max_loss_day_date")
             _cols.insert(_cols.index("max_loss_in_a_day") + 1, "max_loss_day_date")
             monthwise_summary = monthwise_summary[_cols]
+
+        # ---- Grand-total row across all months (totals for every column) ----
+        if not monthwise_summary.empty:
+            tot_trades = int(monthwise_summary["trades"].sum())
+            tot_win = int(monthwise_summary["winning_trades"].sum())
+            tot_lose = int(monthwise_summary["losing_trades"].sum())
+            tot_pnl = float(monthwise_summary["total_exit_pnl"].sum())
+            tot_prof_days = int(monthwise_summary["profitable_days"].sum())
+            tot_loss_days = int(monthwise_summary["loss_days"].sum())
+            neg_days = daily_tmp[daily_tmp["daily_pnl"] < 0]
+            overall_worst_idx = daily_tmp["daily_pnl"].idxmin()
+            total_row = {
+                "month": "TOTAL",
+                "trades": tot_trades,
+                "total_exit_pnl": round(tot_pnl, 2),
+                "avg_exit_pnl": round(tot_pnl / tot_trades, 2) if tot_trades else 0.0,
+                "winning_trades": tot_win,
+                "losing_trades": tot_lose,
+                "win_rate_pct": round(100.0 * tot_win / tot_trades, 2) if tot_trades else 0.0,
+                "avg_loss_on_loss_days": round(float(neg_days["daily_pnl"].mean()), 2) if len(neg_days) else 0.0,
+                "max_loss_in_a_day": round(float(daily_tmp["daily_pnl"].min()), 2),
+                "max_loss_day_date": daily_tmp.loc[overall_worst_idx, "day"],
+                "profitable_days": tot_prof_days,
+                "loss_days": tot_loss_days,
+            }
+            total_df = pd.DataFrame([total_row]).reindex(columns=monthwise_summary.columns)
+            monthwise_summary = pd.concat([monthwise_summary, total_df], ignore_index=True)
     else:
         monthwise_summary = pd.DataFrame()
 
