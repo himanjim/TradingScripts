@@ -516,8 +516,6 @@ def demo_read_sample(
 # ========== MAIN SCRIPT ==========
 
 def main():
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     # Parse date range
     start_date = parse_date_dmy(START_DATE_STR)
     end_date = parse_date_dmy(END_DATE_STR)

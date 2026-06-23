@@ -312,7 +312,7 @@ def scan_day(g: pd.DataFrame):
 
 def main():
     if len(sys.argv) < 2:
-        path = r"C:\Users\himan\PycharmProjects\TradingScripts\Trading_2024\back_testing\nifty50_1min_history\NIFTY50_1min_20210614_to_20260613.parquet"
+        path = r"../Trading_2024/back_testing/nifty50_1min_history/NIFTY50_1min_20210614_to_20260613.parquet"
         print("Usage: python scan_directional_trends.py <data_file.parquet|csv|pkl>")
         # sys.exit(1)
     else:

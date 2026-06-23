@@ -19,8 +19,7 @@ import pandas as pd
 from kiteconnect import exceptions as kite_ex
 import plotly.graph_objects as go
 
-import Trading_2024.OptionTradeUtils as oUtils
-
+import Trading_2024 as oUtils
 
 # =========================
 # CONFIG

@@ -31,8 +31,7 @@ import plotly.graph_objects as go
 import webbrowser
 
 from kiteconnect import KiteConnect
-import Trading_2024.OptionTradeUtils as oUtils  # your helper
-
+import Trading_2024 as oUtils
 
 # ===================== CONFIG =====================
 

@@ -32,11 +32,11 @@ Run:  python live_swell_fade.py
 """
 
 from __future__ import annotations
-import os, sys, json, time, signal, threading
+import os, json, time, signal
 from collections import deque
 from dataclasses import dataclass, asdict, field
-from datetime import datetime, date, time as dtime, timedelta
-from typing import Dict, List, Optional, Deque, Tuple, Any
+from datetime import datetime, date, time as dtime
+from typing import Dict, Optional, Deque, Tuple, Any
 
 import pandas as pd
 

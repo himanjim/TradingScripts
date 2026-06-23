@@ -22,7 +22,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import webbrowser
 
-import Trading_2024.OptionTradeUtils as oUtils
+import Trading_2024 as oUtils
 
 from wm_cpr_utils import (
     WMParams,

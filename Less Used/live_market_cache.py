@@ -24,8 +24,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 from kiteconnect import KiteConnect, KiteTicker
 
-import Trading_2024.OptionTradeUtils as oUtils
-
+import Trading_2024 as oUtils
 
 # ===================== USER CONFIG =====================
 
