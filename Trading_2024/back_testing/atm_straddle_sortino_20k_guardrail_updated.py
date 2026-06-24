@@ -10,12 +10,14 @@ block at the top (no command line -- just edit and press Run in PyCharm):
      multi-sheet Excel report. Identical to the original workflow.
 
   2. ROBUSTNESS OPTIMIZER -> RUN_MODE = "optimize"
-     Searches the six tunables with Optuna (TPE), maximizing ROBUSTNESS = the
-     fraction of profitable MONTHS first, then profitable days. Loads the option
-     data ONCE and re-simulates per trial, printing progress every trial. EVERY
-     tested config + its results is saved to a CSV in OPT_OUTPUT_DIR (flushed per
-     trial, so an interrupted run keeps everything). Set OPT_SAVE_DB = True to
-     also persist a resumable Optuna SQLite study.
+     Searches the six tunables with Optuna (TPE), maximizing daily net-P&L
+     Sortino ratio after applying a hard worst-single-day-loss guardrail.
+     The default guardrail is Rs. 20,000 on ACTUAL trades, i.e. the one
+     NIFTY/SENSEX trade stream this script would really select for a day.
+     Loads the option data ONCE and re-simulates per trial, printing progress
+     every trial. EVERY tested config + its results is saved to a CSV in
+     OPT_OUTPUT_DIR (flushed per trial, so an interrupted run keeps everything).
+     Set OPT_SAVE_DB = True to also persist a resumable Optuna SQLite study.
 
 Optimized parameters:
      ENTRY_TIME_IST, LOSS_LIMIT_RUPEES_BY_ATTEMPT, PROFIT_PROTECT_TRIGGER_RUPEES,
@@ -89,7 +91,7 @@ OPT_SEED = 42              # RNG seed for reproducible searches
 # A CSV row is written (and flushed) after EVERY trial, so an interrupted run
 # still keeps everything tested so far. A timestamped file is created per run.
 OPT_OUTPUT_DIR = r"G:\My Drive\Trading\optimizer_runs"
-OPT_STUDY_NAME = "atm_straddle_robust"
+OPT_STUDY_NAME = "atm_straddle_sortino_20k_guard"
 # Set True to ALSO persist the Optuna study to a SQLite DB in OPT_OUTPUT_DIR.
 # That makes the study RESUMABLE: re-running appends more trials to the same
 # study (TPE keeps learning) instead of starting over. False = in-memory only.
@@ -102,8 +104,9 @@ OPT_SAVE_DB = False
 SAMPLE_MAX_PICKLES = None   # e.g. 3  -> read only the first N pickle files
 SAMPLE_MAX_DAYS = None      # e.g. 20 -> simulate only the most recent N day-groups
 
-# (Objective weights / guards live with the optimizer further down: OPT_W_MONTH,
-#  OPT_W_DAY, OPT_W_PNL, OPT_CV_PENALTY, OPT_MIN_DAYS, OPT_MIN_MONTHS.)
+# Optimizer objective / guards live with the optimizer further down:
+#   OPT_MAX_WORST_DAY_LOSS_RUPEES, OPT_MIN_DAYS, OPT_MIN_MONTHS,
+#   OPT_DOWNSIDE_DEV_FLOOR_RUPEES, and OPT_CV_PENALTY.
 
 # =============================================================================
 # USER CONFIG
@@ -295,8 +298,11 @@ PROFIT_PROTECT_TRIGGER_RUPEES = _parse_pct_value(os.getenv("PROFIT_PROTECT_TRIGG
 # Once cumulative realized NET P&L for the current underlying/day reaches this
 # loss, no further re-entry is allowed for that day.
 #
-# Default: Rs. 30,000 loss. Set MAX_DAILY_LOSS_RUPEES=0 to disable.
-MAX_DAILY_LOSS_RUPEES = _parse_float_env("MAX_DAILY_LOSS_RUPEES", 30000.0)
+# Default: Rs. 20,000 loss, aligned with the optimizer's default hard
+# worst-day guardrail. Set MAX_DAILY_LOSS_RUPEES=0 only if you deliberately want
+# to disable the simulator-level circuit breaker; the optimizer guardrail below
+# will still reject configs whose ACTUAL daily P&L breaches Rs. 20,000.
+MAX_DAILY_LOSS_RUPEES = _parse_float_env("MAX_DAILY_LOSS_RUPEES", 20000.0)
 
 # --- Absolute cap on the percentage-based per-attempt stop-loss ----------------------
 # The stop-loss is still calculated as:
@@ -1587,10 +1593,21 @@ def main():
 # =============================================================================
 # ROBUSTNESS OPTIMIZER  (Optuna TPE + optional walk-forward CV)
 # =============================================================================
-# Goal: maximize ROBUSTNESS, defined primarily as the fraction of PROFITABLE
-# MONTHS (then profitable days), not raw total PnL. A config that earns a little
-# every month is preferred over one that makes a fortune in two months and
-# bleeds the rest.
+# Goal: maximize daily net-P&L SORTINO ratio after rejecting any configuration
+# whose ACTUAL-trades daily net P&L breaches the user's pain threshold.
+#
+# Why this target is better for a short straddle:
+#   - Profitable-day count can be misleading. A config can win 95% of days and
+#     still be bad if one loss day is huge.
+#   - Sortino focuses only on downside volatility. It does not punish upside
+#     variation, which is appropriate here because a large green day is not risk.
+#   - The hard worst-day guardrail prevents the optimizer from selecting a
+#     "picking pennies in front of a steamroller" configuration.
+#
+# Important: the objective is computed from ACTUAL trades, not from all simulated
+# candidates. This matches the one-underlying-per-day book produced by
+# build_actual_trades_df(). Diagnostics still report profitable days/months,
+# worst month, drawdown, etc., but those do not drive the optimizer directly.
 #
 # Tunables exposed to the optimizer (the 6 requested), with the variable-length
 # per-attempt lists parameterized compactly as (base, step) so the search space
@@ -1599,35 +1616,63 @@ def main():
 #   LOSS_LIMIT_RUPEES_BY_ATTEMPT  -> sl_base_pct + n*sl_step_pct  (rising stops)
 #   PROFIT_PROTECT_TRIGGER_RUPEES -> single pct (0 disables)
 #   MAX_REATTEMPTS                -> int
-#   PROFIT_TARGET_PCT             -> single pct (0 disables)
+#   PROFIT_TARGET_PCT             -> single pct
 #   REENTRY_DELAY_BY_ATTEMPT      -> delay_base + n*delay_step (minutes)
 # =============================================================================
 
-# ---- objective weights / guards (override via env if desired) ----
-OPT_W_MONTH = _parse_float_env("OPT_W_MONTH", 1.0)    # weight on profitable-month ratio
-OPT_W_DAY = _parse_float_env("OPT_W_DAY", 0.30)       # weight on profitable-day ratio
-OPT_W_PNL = _parse_float_env("OPT_W_PNL", 0.10)       # tiny tie-break toward positive PnL
-OPT_CV_PENALTY = _parse_float_env("OPT_CV_PENALTY", 0.50)  # penalty * std across CV folds
-OPT_MIN_DAYS = int(_parse_float_env("OPT_MIN_DAYS", 30))   # guard: need enough data
+# ---- objective guards / scoring controls (override via env if desired) ----
+# Minimum sample-size guards. Without these, a tiny smoke-test sample can produce
+# misleadingly high Sortino values. Keep these enabled for real optimization.
+OPT_MIN_DAYS = int(_parse_float_env("OPT_MIN_DAYS", 30))
 OPT_MIN_MONTHS = int(_parse_float_env("OPT_MIN_MONTHS", 3))
 
+# Hard risk guardrail requested by user: reject any parameter set whose worst
+# ACTUAL-trades daily net P&L is below -Rs. 20,000. Set to 0 to disable, though
+# disabling it is not recommended for a short-option strategy.
+OPT_MAX_WORST_DAY_LOSS_RUPEES = _parse_float_env("OPT_MAX_WORST_DAY_LOSS_RUPEES", 20000.0)
 
-# Stable column order for the per-trial results CSV.
+# Downside target used by Sortino. 0 means the benchmark is breakeven daily P&L.
+# A negative target would tolerate a small daily loss before counting downside.
+OPT_DOWNSIDE_TARGET_RUPEES = _parse_float_env("OPT_DOWNSIDE_TARGET_RUPEES", 0.0)
+
+# Practical floor for downside deviation. If a trial has zero or near-zero loss
+# days, the mathematical Sortino can become infinite. A Rs. 1,000 floor keeps the
+# score finite and comparable while still rewarding smooth positive configs.
+OPT_DOWNSIDE_DEV_FLOOR_RUPEES = _parse_float_env("OPT_DOWNSIDE_DEV_FLOOR_RUPEES", 1000.0)
+
+# When cv_folds > 1, score = mean(fold Sortino) - OPT_CV_PENALTY * std(fold Sortino).
+# This penalizes configs that perform well only in one time block.
+OPT_CV_PENALTY = _parse_float_env("OPT_CV_PENALTY", 0.25)
+
+# Returned score for thin-data or guardrail-breaching configs. The objective then
+# subtracts a small extra penalty based on breach magnitude so Optuna can still
+# learn which rejected configs are "less bad" if early trials all breach.
+OPT_REJECT_SCORE = _parse_float_env("OPT_REJECT_SCORE", -1_000_000.0)
+
+
+# Stable column order for the per-trial results CSV. These columns intentionally
+# include both the objective fields and the human diagnostics, so after the run
+# you can sort/filter in Excel without reopening the Python objects.
 _TRIAL_COLUMNS = [
-    "run_index", "trial_number", "state", "score",
-    "entry_time", "max_reattempts", "profit_protect_pct", "profit_target_pct",
-    "sl_base_pct", "sl_step_pct", "loss_limit_schedule",
-    "reentry_delay_base_min", "reentry_delay_step_min", "reentry_delay_schedule",
-    "net_pnl", "mean_month", "median_month", "worst_month",
-    "prof_month_ratio", "prof_day_ratio", "n_months", "n_days",
-    "elapsed_s",
+    "run_index", "trial_number", "state", "score", "sortino",
+    "guardrail_breached", "guardrail_limit", "entry_time", "max_reattempts",
+    "profit_protect_pct", "profit_target_pct", "sl_base_pct", "sl_step_pct",
+    "loss_limit_schedule", "reentry_delay_base_min", "reentry_delay_step_min",
+    "reentry_delay_schedule", "net_pnl", "mean_day", "downside_dev_raw",
+    "downside_dev_used", "loss_days", "worst_day", "max_drawdown",
+    "mean_month", "median_month", "worst_month", "prof_month_ratio",
+    "prof_day_ratio", "n_months", "n_days", "elapsed_s",
 ]
 
 
 def _trial_record(trial_, base, run_index: int, elapsed: float) -> Dict[str, Any]:
-    """Flatten one finished trial (suggested params + derived schedules + result
-    metrics) into a single CSV row. `base` supplies the non-optimized fields so we
-    reconstruct the full Params via the same mapping the objective used."""
+    """
+    Flatten one finished trial into a single CSV row.
+
+    `trial_.params` stores only the compact Optuna search parameters. We rebuild
+    the full Params object so the CSV shows the derived per-attempt schedules
+    exactly as the simulator used them.
+    """
     p = dict(trial_.params)
     bp = _params_from_trial(_FrozenTrialView(trial_), base)
     ua = trial_.user_attrs
@@ -1636,6 +1681,9 @@ def _trial_record(trial_, base, run_index: int, elapsed: float) -> Dict[str, Any
         "trial_number": trial_.number,           # global index within the study
         "state": str(getattr(trial_, "state", "")),
         "score": trial_.value,
+        "sortino": round(float(ua.get("sortino", 0.0)), 6),
+        "guardrail_breached": bool(ua.get("guardrail_breached", False)),
+        "guardrail_limit": round(float(ua.get("guardrail_limit", 0.0)), 2),
         "entry_time": bp.entry_time.strftime("%H:%M"),
         "max_reattempts": bp.max_reattempts,
         "profit_protect_pct": round(bp.profit_protect_pct, 6),
@@ -1647,6 +1695,12 @@ def _trial_record(trial_, base, run_index: int, elapsed: float) -> Dict[str, Any
         "reentry_delay_step_min": p.get("reentry_delay_step_min"),
         "reentry_delay_schedule": ";".join(str(x) for x in bp.reentry_delay_by_attempt),
         "net_pnl": round(float(ua.get("total_pnl", 0.0)), 2),
+        "mean_day": round(float(ua.get("mean_day", 0.0)), 2),
+        "downside_dev_raw": round(float(ua.get("downside_dev_raw", 0.0)), 2),
+        "downside_dev_used": round(float(ua.get("downside_dev_used", 0.0)), 2),
+        "loss_days": int(ua.get("loss_days", 0)),
+        "worst_day": round(float(ua.get("worst_day", 0.0)), 2),
+        "max_drawdown": round(float(ua.get("max_drawdown", 0.0)), 2),
         "mean_month": round(float(ua.get("mean_month", 0.0)), 2),
         "median_month": round(float(ua.get("median_month", 0.0)), 2),
         "worst_month": round(float(ua.get("worst_month", 0.0)), 2),
@@ -1659,9 +1713,11 @@ def _trial_record(trial_, base, run_index: int, elapsed: float) -> Dict[str, Any
 
 
 def _inr(x: float) -> str:
-    """Format a rupee amount with Indian digit grouping, ASCII-safe for Windows
+    """
+    Format a rupee amount with Indian digit grouping, ASCII-safe for Windows
     consoles (e.g. 1234567 -> 'Rs.12,34,567'). Avoids the unicode rupee sign so
-    it never throws UnicodeEncodeError in a cp1252 terminal."""
+    it never throws UnicodeEncodeError in a cp1252 terminal.
+    """
     try:
         n = int(round(float(x)))
     except (ValueError, TypeError):
@@ -1674,89 +1730,206 @@ def _inr(x: float) -> str:
         last3, rest = s[-3:], s[:-3]
         parts = []
         while len(rest) > 2:               # group remaining digits in pairs (Indian style)
-            parts.insert(0, rest[-2:]); rest = rest[:-2]
+            parts.insert(0, rest[-2:])
+            rest = rest[:-2]
         if rest:
             parts.insert(0, rest)
         body = ",".join(parts) + "," + last3
     return f"Rs.{sign}{body}"
 
 
+def _max_drawdown_from_daily(daily: pd.Series) -> float:
+    """
+    Return peak-to-trough drawdown from a daily P&L series.
+
+    The series is rupee P&L, not percentage return. The returned value is <= 0.
+    Example: if cumulative P&L goes from +50k to +10k, max_drawdown is -40k.
+    The starting equity is treated as zero, so a loss on day one is counted as
+    drawdown from the zero starting point.
+    """
+    if daily is None or len(daily) == 0:
+        return 0.0
+    equity = pd.to_numeric(daily, errors="coerce").dropna().cumsum()
+    if equity.empty:
+        return 0.0
+    running_peak = equity.cummax().clip(lower=0.0)
+    drawdown = equity - running_peak
+    return float(drawdown.min()) if len(drawdown) else 0.0
+
+
+def _sortino_from_daily_pnl(daily: pd.Series) -> Tuple[float, float, float, float]:
+    """
+    Compute Sortino from daily rupee P&L.
+
+    Returns:
+        mean_day          : average daily P&L after subtracting target
+        downside_dev_raw  : mathematical downside deviation before floor
+        downside_dev_used : denominator after applying practical floor
+        sortino           : mean_day / downside_dev_used
+
+    This is intentionally NOT annualized. Annualization would multiply all trials
+    by the same constant and would not change the ranking. Keeping it unannualized
+    makes the numbers easier to reason about for intraday strategy selection.
+    """
+    if daily is None or len(daily) == 0:
+        return 0.0, 0.0, max(1.0, float(OPT_DOWNSIDE_DEV_FLOOR_RUPEES)), 0.0
+
+    pnl = pd.to_numeric(daily, errors="coerce").dropna().astype(float)
+    if pnl.empty:
+        return 0.0, 0.0, max(1.0, float(OPT_DOWNSIDE_DEV_FLOOR_RUPEES)), 0.0
+
+    # Excess P&L relative to target. Target is 0 by default, i.e. breakeven.
+    excess = pnl - float(OPT_DOWNSIDE_TARGET_RUPEES)
+    mean_day = float(excess.mean())
+
+    # Sortino counts only the downside. Positive days contribute zero to the
+    # downside deviation; they are not treated as risk.
+    downside = excess.clip(upper=0.0)
+    downside_dev_raw = float((downside.pow(2).mean()) ** 0.5)
+
+    # Floor avoids infinite/absurd Sortino when the sample has no loss days.
+    downside_dev_used = max(float(OPT_DOWNSIDE_DEV_FLOOR_RUPEES), downside_dev_raw, 1.0)
+    sortino = float(mean_day / downside_dev_used)
+    return mean_day, downside_dev_raw, downside_dev_used, sortino
+
+
 def robustness_metrics(actual_df: pd.DataFrame) -> Dict[str, Any]:
     """
-    Per-day and per-month profitability stats from an actual_trades frame.
+    Compute objective metrics and diagnostics from the ACTUAL-trades frame.
 
-    Returns the headline robustness ratios PLUS rupee P/L summaries used in the
-    per-trial print: net P/L, mean monthly P/L, median monthly P/L, worst month,
-    and the full month->P/L series (`monthly`) for the best-trial breakdown.
+    ACTUAL trades are the one-underlying-per-day trades created by
+    build_actual_trades_df(). This is the correct book for optimization because
+    it matches the strategy you would actually execute.
     """
+    empty_daily = pd.Series(dtype="float64")
+    empty_monthly = pd.Series(dtype="float64")
+    guardrail_limit = float(OPT_MAX_WORST_DAY_LOSS_RUPEES)
+
     if actual_df is None or actual_df.empty:
-        return {"n_days": 0, "n_months": 0, "prof_day_ratio": 0.0,
-                "prof_month_ratio": 0.0, "total_pnl": 0.0, "mean_month": 0.0,
-                "median_month": 0.0, "worst_day": 0.0, "worst_month": 0.0,
-                "monthly": pd.Series(dtype="float64")}
+        return {
+            "n_days": 0, "n_months": 0, "prof_day_ratio": 0.0,
+            "prof_month_ratio": 0.0, "total_pnl": 0.0, "mean_day": 0.0,
+            "downside_dev_raw": 0.0,
+            "downside_dev_used": max(1.0, float(OPT_DOWNSIDE_DEV_FLOOR_RUPEES)),
+            "sortino": 0.0, "loss_days": 0, "mean_month": 0.0,
+            "median_month": 0.0, "worst_day": 0.0, "worst_month": 0.0,
+            "max_drawdown": 0.0, "guardrail_limit": guardrail_limit,
+            "guardrail_breached": False, "daily": empty_daily,
+            "monthly": empty_monthly,
+        }
+
     t = actual_df.copy()
     d = pd.to_datetime(t["day"])
-    daily = t.groupby(d.dt.date)["exit_pnl"].sum()
+
+    # Daily P&L is the unit of risk for this optimizer. If there are multiple
+    # reattempts on a day, they are summed into one actual daily result.
+    daily = t.groupby(d.dt.date)["exit_pnl"].sum().sort_index()
+
+    # Monthly P&L remains a diagnostic. It is useful for judging consistency, but
+    # it is not the main objective anymore.
     monthly = t.groupby(d.dt.to_period("M"))["exit_pnl"].sum().sort_index()
+
+    mean_day, downside_raw, downside_used, sortino = _sortino_from_daily_pnl(daily)
+    worst_day = float(daily.min()) if len(daily) else 0.0
+    worst_month = float(monthly.min()) if len(monthly) else 0.0
+    guardrail_breached = bool(guardrail_limit > 0 and worst_day < -guardrail_limit)
+
     return {
         "n_days": int(len(daily)),
         "n_months": int(len(monthly)),
-        "prof_day_ratio": float((daily > 0).mean()),
-        "prof_month_ratio": float((monthly > 0).mean()),
-        "total_pnl": float(daily.sum()),          # NET P/L across the whole sample
-        "mean_month": float(monthly.mean()),      # MEAN monthly P/L
-        "median_month": float(monthly.median()),  # MEDIAN monthly P/L
-        "worst_day": float(daily.min()),
-        "worst_month": float(monthly.min()),
-        "monthly": monthly,                       # full month -> P/L (for breakdown)
+        "prof_day_ratio": float((daily > 0).mean()) if len(daily) else 0.0,
+        "prof_month_ratio": float((monthly > 0).mean()) if len(monthly) else 0.0,
+        "total_pnl": float(daily.sum()),
+        "mean_day": float(mean_day),
+        "downside_dev_raw": float(downside_raw),
+        "downside_dev_used": float(downside_used),
+        "sortino": float(sortino),
+        "loss_days": int((daily < 0).sum()),
+        "mean_month": float(monthly.mean()) if len(monthly) else 0.0,
+        "median_month": float(monthly.median()) if len(monthly) else 0.0,
+        "worst_day": worst_day,
+        "worst_month": worst_month,
+        "max_drawdown": _max_drawdown_from_daily(daily),
+        "guardrail_limit": guardrail_limit,
+        "guardrail_breached": guardrail_breached,
+        "daily": daily,
+        "monthly": monthly,
     }
 
 
-def _score_from_metrics(m: Dict[str, float]) -> float:
-    """Single-sample robustness score. Guards against thin data."""
-    if m["n_days"] < OPT_MIN_DAYS or m["n_months"] < OPT_MIN_MONTHS:
-        return -1.0
-    pnl_norm = m["total_pnl"] / (abs(m["total_pnl"]) + 1_000_000.0)  # bounded (-1, 1)
-    return (OPT_W_MONTH * m["prof_month_ratio"]
-            + OPT_W_DAY * m["prof_day_ratio"]
-            + OPT_W_PNL * pnl_norm)
+def _score_from_metrics(m: Dict[str, Any]) -> float:
+    """
+    Convert metrics into the scalar score Optuna maximizes.
+
+    The ordering is deliberate:
+      1. Reject too-thin samples.
+      2. Reject worst-day guardrail breaches.
+      3. Among survivors, maximize Sortino.
+    """
+    n_days = int(m.get("n_days", 0))
+    n_months = int(m.get("n_months", 0))
+
+    if n_days < OPT_MIN_DAYS or n_months < OPT_MIN_MONTHS:
+        # Small additional penalty makes "more data" rank above "less data" if
+        # many trials are invalid during a smoke test.
+        missing_days = max(0, int(OPT_MIN_DAYS) - n_days)
+        missing_months = max(0, int(OPT_MIN_MONTHS) - n_months)
+        return float(OPT_REJECT_SCORE - missing_days - 10 * missing_months)
+
+    limit = float(m.get("guardrail_limit", OPT_MAX_WORST_DAY_LOSS_RUPEES))
+    worst_day = float(m.get("worst_day", 0.0))
+    if limit > 0 and worst_day < -limit:
+        # Hard rejection. The breach-size term lets Optuna distinguish a -22k
+        # config from a -70k config if early trials all violate the guardrail.
+        breach_amt = abs(worst_day) - limit
+        return float(OPT_REJECT_SCORE - breach_amt / max(1.0, limit))
+
+    return float(m.get("sortino", 0.0))
 
 
 def _cv_score(actual_df: pd.DataFrame, folds: int) -> float:
     """
-    Walk-forward-style robustness: split the months into `folds` CONTIGUOUS time
-    blocks and reward configs that stay profitable in EVERY block, not just on
-    average. Score = mean(block profitable-month ratio) - penalty*std. This
-    resists overfitting to one lucky regime.
-    """
-    if actual_df is None or actual_df.empty:
-        return -1.0
-    t = actual_df.copy()
-    d = pd.to_datetime(t["day"])
-    monthly = t.groupby(d.dt.to_period("M"))["exit_pnl"].sum().sort_index()
-    if len(monthly) < max(OPT_MIN_MONTHS, folds):
-        return -1.0
-    # global activity guard
-    daily = t.groupby(d.dt.date)["exit_pnl"].sum()
-    if len(daily) < OPT_MIN_DAYS:
-        return -1.0
+    Walk-forward-style Sortino score.
 
-    months = list(monthly.items())
-    block_ratios: List[float] = []
-    n = len(months)
+    The full sample must first pass the same thin-data and worst-day guardrails.
+    Then the daily P&L series is split into chronological blocks. The score is:
+
+        mean(block Sortino) - OPT_CV_PENALTY * std(block Sortino)
+
+    This discourages configs that look excellent only because one period was
+    unusually favourable.
+    """
+    m = robustness_metrics(actual_df)
+    base_score = _score_from_metrics(m)
+
+    # If the trial is invalid globally, do not rescue it with CV math.
+    if base_score <= float(OPT_REJECT_SCORE) / 2.0:
+        return base_score
+
+    daily = m.get("daily", pd.Series(dtype="float64"))
+    if daily is None or len(daily) == 0:
+        return float(OPT_REJECT_SCORE)
+
+    n = len(daily)
+    folds = max(1, min(int(folds), n))
+    if folds <= 1:
+        return base_score
+
+    fold_scores: List[float] = []
     for k in range(folds):
         lo = (k * n) // folds
         hi = ((k + 1) * n) // folds
-        block = months[lo:hi]
-        if not block:
+        block = daily.iloc[lo:hi]
+        if block.empty:
             continue
-        wins = sum(1 for _, v in block if v > 0)
-        block_ratios.append(wins / len(block))
-    if not block_ratios:
-        return -1.0
-    s = pd.Series(block_ratios)
-    return float(s.mean() - OPT_CV_PENALTY * s.std(ddof=0))
+        _, _, _, block_sortino = _sortino_from_daily_pnl(block)
+        fold_scores.append(float(block_sortino))
 
+    if not fold_scores:
+        return float(OPT_REJECT_SCORE)
+
+    s = pd.Series(fold_scores, dtype="float64")
+    return float(s.mean() - float(OPT_CV_PENALTY) * s.std(ddof=0))
 
 def _params_from_trial(trial, base: "Params") -> "Params":
     """Map an Optuna trial to a Params object. Lists are built from (base, step)."""
@@ -1799,17 +1972,18 @@ def optimize(
     n_trials: int = 100,
     cv_folds: int = 1,
     seed: int = 42,
-    progress_every: int = 5,   # print a progress line every this many trials
+    progress_every: int = 5,   # retained for compatibility; progress prints every trial
 ):
     """
-    Run the Optuna study over pre-built groups.
+    Run the Optuna study over pre-built day-groups.
 
-    cv_folds <= 1 : score on the full sample (profitable-month-first).
-    cv_folds  > 1 : contiguous-block walk-forward robustness score.
+    Objective:
+        - cv_folds <= 1: maximize full-sample daily-P&L Sortino.
+        - cv_folds  > 1: maximize walk-forward block Sortino stability.
 
-    Progress: a callback prints after every `progress_every` trials, showing this
-    trial's score, the best-so-far score, the best config's profitable-month
-    ratio, and elapsed/ETA so a long search is never silent.
+    In both cases, any configuration whose ACTUAL daily net P&L breaches the
+    Rs. 20,000 default worst-day guardrail is hard-rejected before it can become
+    the best config.
     """
     import optuna
     import time as _time
@@ -1817,7 +1991,21 @@ def optimize(
     import datetime as _dt
     optuna.logging.set_verbosity(optuna.logging.WARNING)  # we do our own printing
 
-    base = default_params()  # supplies the non-optimized fields (daily cap, stop cap)
+    base = default_params()  # supplies non-optimized fields: daily cap, stop cap, etc.
+
+    # Keep simulator-level daily loss control coherent with optimizer-level risk.
+    # If user leaves MAX_DAILY_LOSS_RUPEES above the optimizer guardrail, a trial
+    # could continue re-entering past the tolerated pain level and then be rejected
+    # later. Aligning it saves time and keeps simulation behaviour realistic.
+    if OPT_MAX_WORST_DAY_LOSS_RUPEES > 0:
+        if base.max_daily_loss_rupees <= 0 or base.max_daily_loss_rupees > OPT_MAX_WORST_DAY_LOSS_RUPEES:
+            print(
+                f"[OPT] aligning simulator daily circuit breaker from "
+                f"{_inr(base.max_daily_loss_rupees)} to "
+                f"{_inr(OPT_MAX_WORST_DAY_LOSS_RUPEES)}",
+                flush=True,
+            )
+            base.max_daily_loss_rupees = float(OPT_MAX_WORST_DAY_LOSS_RUPEES)
 
     # ---- results file(s): every tested config is saved here ----
     os.makedirs(OPT_OUTPUT_DIR, exist_ok=True)
@@ -1828,29 +2016,46 @@ def optimize(
     csv_writer.writeheader()
     csv_file.flush()
     print(f"[OPT] saving every tested config to: {csv_path}", flush=True)
+    print(
+        f"[OPT] objective=Sortino(daily actual P&L), "
+        f"worst-day guardrail={_inr(OPT_MAX_WORST_DAY_LOSS_RUPEES)}, "
+        f"downside floor={_inr(OPT_DOWNSIDE_DEV_FLOOR_RUPEES)}",
+        flush=True,
+    )
 
     def objective(trial):
-        # 1) turn the trial's suggestions into a concrete Params object
+        # 1) Turn the trial's compact suggestions into a concrete Params object.
         params = _params_from_trial(trial, base)
-        # 2) re-simulate all cached day-groups for this parameter set (the cheap part)
+
+        # 2) Re-simulate all cached day-groups for this parameter set.
         all_df, _ = simulate_groups(params, groups)
-        # 3) reduce to the actually-traded book and measure robustness
+
+        # 3) Reduce to the actual one-underlying-per-day book and compute metrics.
         actual_df = build_actual_trades_df(all_df, min_expiry_map)
         m = robustness_metrics(actual_df)
-        # 4) stash SCALAR diagnostics so the progress callback can print them
-        #    (Optuna user_attrs must be JSON-serializable -> no pandas objects).
-        for k in ("n_days", "n_months", "prof_day_ratio", "prof_month_ratio",
-                  "total_pnl", "mean_month", "median_month", "worst_day", "worst_month"):
+
+        # 4) Stash scalar diagnostics for progress printing and CSV output.
+        #    Optuna user_attrs must be JSON-serializable; do not store pandas Series.
+        diagnostic_keys = (
+            "n_days", "n_months", "prof_day_ratio", "prof_month_ratio",
+            "total_pnl", "mean_day", "downside_dev_raw", "downside_dev_used",
+            "sortino", "loss_days", "worst_day", "max_drawdown", "mean_month",
+            "median_month", "worst_month", "guardrail_limit", "guardrail_breached",
+        )
+        for k in diagnostic_keys:
             trial.set_user_attr(k, m[k])
-        # month -> P/L as a plain dict so we can print a month-wise breakdown
+
+        # Month -> P&L as a plain dict so the best-trial breakdown is readable.
         trial.set_user_attr("monthly_pnl", {str(p): float(v) for p, v in m["monthly"].items()})
-        # 5) the score Optuna maximizes
+
+        # 5) Return the scalar score Optuna maximizes.
         if cv_folds and cv_folds > 1:
             return _cv_score(actual_df, cv_folds)
         return _score_from_metrics(m)
 
-    # Optional SQLite persistence -> the study becomes resumable (re-running adds
-    # more trials to the same study instead of starting fresh).
+    # Optional SQLite persistence -> the study becomes resumable. Because this
+    # file changes the objective, the default study name was changed to avoid
+    # mixing old profitable-month trials with new Sortino trials.
     storage = None
     study_name = OPT_STUDY_NAME
     if OPT_SAVE_DB:
@@ -1863,18 +2068,14 @@ def optimize(
                                 load_if_exists=bool(storage))
 
     # ---- live progress callback ----
-    # Prints a rich stats line on EVERY trial: the score, net P/L, mean & median
-    # monthly P/L, profitable-month and profitable-day ratios, and the worst
-    # month -- plus elapsed/ETA. Whenever a new best appears, it also prints the
-    # full month-by-month P/L of that best config so you can eyeball consistency.
-    # It ALSO appends the trial to the results CSV (flushed) so nothing is lost if
-    # the run is interrupted.
+    # Prints after every trial and appends the trial to CSV immediately, so an
+    # interrupted optimization still leaves a useful audit trail.
     start = _time.time()
-    run_counter = {"n": 0}   # trials completed THIS run (robust to DB resume)
+    run_counter = {"n": 0}   # trials completed THIS run; robust to DB resume
 
     def _progress(study_, trial_):
         run_counter["n"] += 1
-        n_done = run_counter["n"]                 # trials done THIS run (resume-safe)
+        n_done = run_counter["n"]
         ua = trial_.user_attrs
         val = trial_.value if trial_.value is not None else float("nan")
         elapsed = _time.time() - start
@@ -1885,7 +2086,8 @@ def optimize(
         except Exception:
             best_val, best_num = float("nan"), -1
 
-        # ---- persist this tested config + its results (flush so nothing is lost) ----
+        # Persist this tested config + its results. Flush each row so nothing is
+        # lost if PyCharm or the machine stops mid-run.
         try:
             csv_writer.writerow(_trial_record(trial_, base, n_done, elapsed))
             csv_file.flush()
@@ -1895,24 +2097,28 @@ def optimize(
         n_mo = int(ua.get("n_months", 0))
         pmr = float(ua.get("prof_month_ratio", 0.0))
         prof_mo = int(round(pmr * n_mo))
+        breach = bool(ua.get("guardrail_breached", False))
+        breach_txt = " BREACH" if breach else ""
+
         print(
             f"[TRIAL {n_done:>4}/{n_trials}] score={val:+.4f} "
+            f"sortino={float(ua.get('sortino', 0.0)):+.3f}{breach_txt} "
             f"net={_inr(ua.get('total_pnl', 0))} "
-            f"mean/mo={_inr(ua.get('mean_month', 0))} "
-            f"med/mo={_inr(ua.get('median_month', 0))} "
+            f"mean/day={_inr(ua.get('mean_day', 0))} "
+            f"worst_day={_inr(ua.get('worst_day', 0))} "
+            f"dd={_inr(ua.get('max_drawdown', 0))} "
+            f"loss_days={int(ua.get('loss_days', 0))}/{int(ua.get('n_days', 0))} "
             f"prof_mo={pmr*100:3.0f}%({prof_mo}/{n_mo}) "
             f"prof_day={float(ua.get('prof_day_ratio', 0.0))*100:3.0f}% "
-            f"worst_mo={_inr(ua.get('worst_month', 0))} "
             f"| best={best_val:+.4f} | {elapsed:5.0f}s eta={eta:6.0f}s",
             flush=True,
         )
 
-        # New best -> print the month-wise P/L breakdown of the best config.
+        # New best -> print month-wise P&L breakdown for consistency check.
         if trial_.number == best_num:
             mp = ua.get("monthly_pnl", {})
             if mp:
                 cells = [f"{k}:{_inr(v)}" for k, v in sorted(mp.items())]
-                # wrap a few months per line so it stays readable
                 print("   >>> NEW BEST -- month-wise net P/L:", flush=True)
                 for i in range(0, len(cells), 4):
                     print("       " + "   ".join(cells[i:i + 4]), flush=True)
@@ -1922,8 +2128,7 @@ def optimize(
     try:
         study.optimize(objective, n_trials=n_trials, callbacks=[_progress], show_progress_bar=False)
     finally:
-        # Always close the per-trial CSV, and also dump Optuna's own full table
-        # (includes datetimes, durations, every param) for completeness.
+        # Always close the per-trial CSV and dump Optuna's full table.
         try:
             csv_file.close()
         except Exception:
@@ -1946,16 +2151,31 @@ def optimize(
     print(f"MAX_REATTEMPTS              = {bp.max_reattempts}")
     print(f"PROFIT_TARGET_PCT           = {bp.profit_target_pct:.4f}")
     print(f"REENTRY_DELAY_BY_ATTEMPT    = {bp.reentry_delay_by_attempt}")
-    print("---- robustness of best (full sample) ----")
+    print(f"MAX_DAILY_LOSS_RUPEES       = {bp.max_daily_loss_rupees:.2f}")
+
+    print("---- Sortino/risk diagnostics of best ----")
     ba = best.user_attrs
-    print(f"  net P/L            = {_inr(ba.get('total_pnl', 0))}")
-    print(f"  mean monthly P/L   = {_inr(ba.get('mean_month', 0))}")
-    print(f"  median monthly P/L = {_inr(ba.get('median_month', 0))}")
-    print(f"  worst month        = {_inr(ba.get('worst_month', 0))}")
+    if bool(ba.get("guardrail_breached", False)):
+        print("  WARNING: best trial still breaches the guardrail. This usually means all trials breached it.")
+    print(f"  objective Sortino   = {float(ba.get('sortino', 0.0)):.4f}")
+    print(f"  guardrail limit     = {_inr(ba.get('guardrail_limit', OPT_MAX_WORST_DAY_LOSS_RUPEES))}")
+    print(f"  worst day           = {_inr(ba.get('worst_day', 0))}")
+    print(f"  max drawdown        = {_inr(ba.get('max_drawdown', 0))}")
+    print(f"  downside deviation  = {_inr(ba.get('downside_dev_used', 0))} used "
+          f"({_inr(ba.get('downside_dev_raw', 0))} raw)")
+    print(f"  loss days           = {int(ba.get('loss_days', 0))}/{int(ba.get('n_days', 0))}")
+
+    print("---- profitability diagnostics of best ----")
+    print(f"  net P/L             = {_inr(ba.get('total_pnl', 0))}")
+    print(f"  mean daily P/L      = {_inr(ba.get('mean_day', 0))}")
+    print(f"  mean monthly P/L    = {_inr(ba.get('mean_month', 0))}")
+    print(f"  median monthly P/L  = {_inr(ba.get('median_month', 0))}")
+    print(f"  worst month         = {_inr(ba.get('worst_month', 0))}")
     n_mo = int(ba.get('n_months', 0))
     pmr = float(ba.get('prof_month_ratio', 0.0))
-    print(f"  profitable months  = {int(round(pmr*n_mo))}/{n_mo} ({pmr*100:.1f}%)")
-    print(f"  profitable days    = {float(ba.get('prof_day_ratio', 0.0))*100:.1f}% of {int(ba.get('n_days', 0))} days")
+    print(f"  profitable months   = {int(round(pmr*n_mo))}/{n_mo} ({pmr*100:.1f}%)")
+    print(f"  profitable days     = {float(ba.get('prof_day_ratio', 0.0))*100:.1f}% of {int(ba.get('n_days', 0))} days")
+
     mp = ba.get("monthly_pnl", {})
     if mp:
         print("  month-wise net P/L:")
@@ -1963,8 +2183,8 @@ def optimize(
             flag = "" if v > 0 else "   <-- loss"
             print(f"     {k}: {_inr(v)}{flag}")
 
-    # Ready-to-paste config block so you can drop the winner straight into
-    # the RUN CONTROL / param section for a confirmation backtest.
+    # Ready-to-paste config block so you can drop the winner straight into the
+    # RUN CONTROL / param section for a confirmation backtest.
     print("\n---- paste into your single-run params to verify ----")
     print(f"ENTRY_TIME_IST = \"{bp.entry_time.strftime('%H:%M')}\"")
     print(f"# LOSS_LIMIT schedule (per attempt): {[round(x,4) for x in bp.loss_limit_pct_by_attempt]}")
@@ -1972,6 +2192,7 @@ def optimize(
     print(f"# MAX_REATTEMPTS: {bp.max_reattempts}")
     print(f"# PROFIT_TARGET_PCT: {bp.profit_target_pct:.4f}")
     print(f"# REENTRY_DELAY_BY_ATTEMPT (min): {bp.reentry_delay_by_attempt}")
+    print(f"# MAX_DAILY_LOSS_RUPEES: {bp.max_daily_loss_rupees:.2f}")
     return study, bp
 
 
@@ -2024,7 +2245,11 @@ def run_optimizer(n_trials: int, cv_folds: int,
     if not groups:
         raise RuntimeError("No day-groups built; nothing to optimize. Check window / pickles.")
 
-    print(f"[PHASE 4] Optimizing: {n_trials} trials, cv_folds={cv_folds} ...", flush=True)
+    print(
+        f"[PHASE 4] Optimizing: {n_trials} trials, cv_folds={cv_folds}, "
+        f"objective=Sortino, worst-day guardrail={_inr(OPT_MAX_WORST_DAY_LOSS_RUPEES)} ...",
+        flush=True,
+    )
     return optimize(groups, min_expiry_map, n_trials=n_trials, cv_folds=cv_folds,
                     progress_every=progress_every, seed=seed)
 

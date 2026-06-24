@@ -1,7 +1,6 @@
-import json
 import time
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 import pandas as pd
 from kiteconnect import KiteConnect, exceptions as kite_ex

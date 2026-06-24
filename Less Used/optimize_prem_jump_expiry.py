@@ -81,7 +81,8 @@ except Exception:  # pragma: no cover
 # Path to the strategy file we optimise. Defaults to the uploaded filename.
 STRATEGY_PATH = os.getenv(
     "STRATEGY_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "atm_straddle_prem_jump_reattempt.py"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "../Trading_2024/back_testing/atm_straddle_prem_jump_reattempt.py"),
 )
 
 # Optimise on this many months of history (expiry days only).

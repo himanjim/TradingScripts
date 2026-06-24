@@ -83,7 +83,7 @@ from dash import Dash, Input, Output, dcc, html
 # Optional imports from the user's trading environment
 # =============================================================================
 try:
-    import Trading_2024.OptionTradeUtils as oUtils  # type: ignore
+    import Trading_2024 as oUtils
 except Exception:
     try:
         import OptionTradeUtils as oUtils  # type: ignore

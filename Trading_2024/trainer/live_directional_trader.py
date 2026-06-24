@@ -30,8 +30,8 @@ import time
 import threading
 import logging
 from dataclasses import dataclass
-from datetime import datetime, date, time as dtime
-from typing import Optional, Dict, List
+from datetime import datetime, time as dtime
+from typing import Dict, List
 
 import numpy as np
 import pandas as pd

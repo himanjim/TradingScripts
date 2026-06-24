@@ -134,7 +134,7 @@ OUTPUT_EXCEL = os.environ.get(
     f"{SYMBOL}_3yr_movement_analysis.xlsx",
 ).strip()
 
-DATA_CACHE_DIR = os.environ.get("DATA_CACHE_DIR", "./stock_daily_cache").strip()
+DATA_CACHE_DIR = os.environ.get("DATA_CACHE_DIR", "../Trading_2024/back_testing/stock_daily_cache").strip()
 
 FORCE_REFRESH = os.environ.get("FORCE_REFRESH", "0").strip() == "1"
 

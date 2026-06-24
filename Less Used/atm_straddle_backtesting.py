@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple, Optional, Any, Set
 
 import pandas as pd
 
-import Trading_2024.OptionTradeUtils as oUtils
+import Trading_2024 as oUtils
 
 try:
     from zoneinfo import ZoneInfo  # py3.9+
