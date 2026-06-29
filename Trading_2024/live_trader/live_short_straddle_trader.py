@@ -44,6 +44,7 @@ import os
 import sys
 import time
 import math
+import json
 import threading
 import logging
 from logging.handlers import RotatingFileHandler
@@ -52,7 +53,7 @@ from datetime import datetime, date, time as dtime, timedelta
 import pytz
 
 # Your existing helper module (same one A and B import).
-import OptionTradeUtils as oUtils
+import OptionTradeUtils_env as oUtils
 
 # KiteTicker is the Kite WebSocket client.
 try:
@@ -172,6 +173,22 @@ OPTION_TICK = float(os.getenv("OPTION_TICK", "0.05"))
 LOG_FILE = os.getenv("LOG_FILE", os.path.join(os.path.expanduser("~"),
                                               "short_straddle_live.log"))
 
+# --- Resilience: retry/backoff when the Zerodha API is unreachable ---------
+# API_MAX_RETRIES = 0 means retry FOREVER (the trader pauses through an outage
+# instead of crashing). Order placement uses a bounded retry to avoid the risk
+# of duplicate orders if a reply is lost.
+API_MAX_RETRIES = int(os.getenv("API_MAX_RETRIES", "0"))            # 0 = infinite (reads)
+API_ORDER_MAX_RETRIES = int(os.getenv("API_ORDER_MAX_RETRIES", "5"))
+API_RETRY_BACKOFF_SECONDS = float(os.getenv("API_RETRY_BACKOFF_SECONDS", "2"))
+API_RETRY_BACKOFF_MAX = float(os.getenv("API_RETRY_BACKOFF_MAX", "30"))
+
+# --- Resilience: on-disk state, supplementing live broker reconciliation ----
+# On (re)start the trader rebuilds today's state from the BROKER (orders +
+# positions); this file supplements that with attempt count, realized P&L and
+# the per-attempt risk thresholds / trailing peak that the broker cannot know.
+STATE_FILE = os.getenv("STATE_FILE", os.path.join(os.path.expanduser("~"),
+                                                  "short_straddle_state.json"))
+
 
 # ===========================================================================
 # 2) LOGGING  (file + console; every epoch is recorded)
@@ -196,6 +213,31 @@ def _build_logger() -> logging.Logger:
 
 
 log = _build_logger()
+
+
+# ===========================================================================
+# API RETRY WRAPPER  (resilience against Zerodha API outages)
+# ===========================================================================
+def _api(fn, *args, desc="kite call", max_retries=None, **kwargs):
+    """Call a Kite API function, retrying with exponential backoff on any
+    exception. max_retries=0 retries indefinitely, so a Zerodha outage pauses
+    the trader rather than crashing it. Reads use the infinite default; order
+    placements pass a bounded max_retries to avoid duplicate orders."""
+    if max_retries is None:
+        max_retries = API_MAX_RETRIES
+    attempt = 0
+    delay = API_RETRY_BACKOFF_SECONDS
+    while True:
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            attempt += 1
+            if max_retries and attempt >= max_retries:
+                log.error(f"[API] {desc} failed after {attempt} attempt(s): {e}")
+                raise
+            log.warning(f"[API] {desc} failed (attempt {attempt}): {e}; retrying in {delay:.0f}s")
+            time.sleep(delay)
+            delay = min(delay * 2, API_RETRY_BACKOFF_MAX)
 
 
 # ===========================================================================
@@ -260,7 +302,14 @@ class PriceFeed:
     def __init__(self, api_key: str, access_token: str):
         if KiteTicker is None:
             raise RuntimeError("kiteconnect is not installed: pip install kiteconnect")
-        self.ticker = KiteTicker(api_key, access_token)
+        # Auto-reconnect (on by default in pykiteconnect) keeps the feed alive
+        # through transient Zerodha outages; we raise the retry budget.
+        try:
+            self.ticker = KiteTicker(api_key, access_token,
+                                     reconnect=True, reconnect_max_tries=300,
+                                     reconnect_max_delay=60)
+        except TypeError:
+            self.ticker = KiteTicker(api_key, access_token)
         self.ltp = {}                      # token -> last_price
         self._subscribed = set()
         self._connected = threading.Event()
@@ -270,6 +319,8 @@ class PriceFeed:
         self.ticker.on_connect = self._on_connect
         self.ticker.on_close = self._on_close
         self.ticker.on_error = self._on_error
+        self.ticker.on_reconnect = self._on_reconnect
+        self.ticker.on_noreconnect = self._on_noreconnect
 
     # --- websocket callbacks (run on the ticker's own thread) ---
     def _on_ticks(self, ws, ticks):
@@ -291,6 +342,12 @@ class PriceFeed:
 
     def _on_error(self, ws, code, reason):
         log.warning(f"[WS] Error (code={code}, reason={reason}).")
+
+    def _on_reconnect(self, ws, attempts_count):
+        log.warning(f"[WS] Reconnecting... (attempt {attempts_count})")
+
+    def _on_noreconnect(self, ws):
+        log.error("[WS] Reconnection attempts exhausted; relying on process restart.")
 
     # --- control ---
     def start(self, timeout: float = 15.0):
@@ -375,7 +432,8 @@ class Broker:
 
     # ----- live helpers (mirrors A) -----
     def _marketable_limit_price(self, tradingsymbol: str, transaction_type) -> float:
-        q = self.kite.quote(f"{self.exchange}:{tradingsymbol}")[f"{self.exchange}:{tradingsymbol}"]
+        q = _api(self.kite.quote, f"{self.exchange}:{tradingsymbol}",
+                 desc=f"quote {tradingsymbol}")[f"{self.exchange}:{tradingsymbol}"]
         depth = q.get("depth", {})
         buy_depth = depth.get("buy", [])
         sell_depth = depth.get("sell", [])
@@ -387,7 +445,7 @@ class Broker:
         return round_to_tick(px)
 
     def _order_snapshot(self, order_id):
-        for o in reversed(self.kite.orders()):
+        for o in reversed(_api(self.kite.orders, desc="orders")):
             if o.get("order_id") == order_id:
                 return o
         return None
@@ -411,11 +469,11 @@ class Broker:
                 return False, avg
             if pending > 0 and not market_modified:
                 try:
-                    self.kite.modify_order(
-                        variety=self.kite.VARIETY_REGULAR, order_id=order_id,
-                        order_type=self.kite.ORDER_TYPE_MARKET,
-                        market_protection=self.MARKET_PROTECTION,
-                    )
+                    _api(self.kite.modify_order,
+                         variety=self.kite.VARIETY_REGULAR, order_id=order_id,
+                         order_type=self.kite.ORDER_TYPE_MARKET,
+                         market_protection=self.MARKET_PROTECTION,
+                         desc=f"modify->MARKET {tradingsymbol}", max_retries=API_ORDER_MAX_RETRIES)
                     market_modified = True
                     log.warning(f"[ORDER] {tradingsymbol}: pending -> converted to MARKET.")
                 except Exception as e:
@@ -427,17 +485,17 @@ class Broker:
         return False, float(row.get("average_price") or 0.0) if row else 0.0
 
     def _square_off_naked(self, tradingsymbol):
-        for p in self.kite.positions()["net"]:
+        for p in _api(self.kite.positions, desc="positions")["net"]:
             if p["tradingsymbol"] == tradingsymbol and int(p["quantity"]) != 0:
                 net = int(p["quantity"])
                 txn = self.kite.TRANSACTION_TYPE_BUY if net < 0 else self.kite.TRANSACTION_TYPE_SELL
                 try:
-                    self.kite.place_order(
-                        tradingsymbol=tradingsymbol, variety=self.kite.VARIETY_REGULAR,
-                        exchange=self.exchange, transaction_type=txn, quantity=abs(net),
-                        order_type=self.kite.ORDER_TYPE_MARKET, product=self.kite.PRODUCT_NRML,
-                        tag=oUtils.SS_ORDER_TAG, market_protection=self.MARKET_PROTECTION,
-                    )
+                    _api(self.kite.place_order,
+                         tradingsymbol=tradingsymbol, variety=self.kite.VARIETY_REGULAR,
+                         exchange=self.exchange, transaction_type=txn, quantity=abs(net),
+                         order_type=self.kite.ORDER_TYPE_MARKET, product=self.kite.PRODUCT_NRML,
+                         tag=oUtils.SS_ORDER_TAG, market_protection=self.MARKET_PROTECTION,
+                         desc=f"square-off {tradingsymbol}", max_retries=API_ORDER_MAX_RETRIES)
                     log.warning(f"[SAFETY] Squared off naked leg {tradingsymbol} qty={abs(net)}")
                 except Exception as e:
                     log.error(f"[SAFETY] Failed to square off {tradingsymbol}: {e}")
@@ -455,14 +513,16 @@ class Broker:
         txn = self.kite.TRANSACTION_TYPE_SELL
         pe_px = self._marketable_limit_price(pe_sym, txn)
         ce_px = self._marketable_limit_price(ce_sym, txn)
-        pe_id = self.kite.place_order(tradingsymbol=pe_sym, variety=self.kite.VARIETY_REGULAR,
-                                      exchange=self.exchange, transaction_type=txn, quantity=qty,
-                                      order_type=self.kite.ORDER_TYPE_LIMIT, price=pe_px,
-                                      product=self.kite.PRODUCT_NRML, tag=oUtils.SS_ORDER_TAG)
-        ce_id = self.kite.place_order(tradingsymbol=ce_sym, variety=self.kite.VARIETY_REGULAR,
-                                      exchange=self.exchange, transaction_type=txn, quantity=qty,
-                                      order_type=self.kite.ORDER_TYPE_LIMIT, price=ce_px,
-                                      product=self.kite.PRODUCT_NRML, tag=oUtils.SS_ORDER_TAG)
+        pe_id = _api(self.kite.place_order, tradingsymbol=pe_sym, variety=self.kite.VARIETY_REGULAR,
+                     exchange=self.exchange, transaction_type=txn, quantity=qty,
+                     order_type=self.kite.ORDER_TYPE_LIMIT, price=pe_px,
+                     product=self.kite.PRODUCT_NRML, tag=oUtils.SS_ORDER_TAG,
+                     desc=f"place {pe_sym}", max_retries=API_ORDER_MAX_RETRIES)
+        ce_id = _api(self.kite.place_order, tradingsymbol=ce_sym, variety=self.kite.VARIETY_REGULAR,
+                     exchange=self.exchange, transaction_type=txn, quantity=qty,
+                     order_type=self.kite.ORDER_TYPE_LIMIT, price=ce_px,
+                     product=self.kite.PRODUCT_NRML, tag=oUtils.SS_ORDER_TAG,
+                     desc=f"place {ce_sym}", max_retries=API_ORDER_MAX_RETRIES)
         log.info(f"[LIVE] SELL LIMIT {pe_sym}@{pe_px}, {ce_sym}@{ce_px} (qty={qty})")
         pe_ok, pe_fill = self._ensure_filled_or_market(pe_id, pe_sym)
         ce_ok, ce_fill = self._ensure_filled_or_market(ce_id, ce_sym)
@@ -482,14 +542,16 @@ class Broker:
         txn = self.kite.TRANSACTION_TYPE_BUY
         pe_px = self._marketable_limit_price(pe_sym, txn)
         ce_px = self._marketable_limit_price(ce_sym, txn)
-        pe_id = self.kite.place_order(tradingsymbol=pe_sym, variety=self.kite.VARIETY_REGULAR,
-                                      exchange=self.exchange, transaction_type=txn, quantity=qty,
-                                      order_type=self.kite.ORDER_TYPE_LIMIT, price=pe_px,
-                                      product=self.kite.PRODUCT_NRML, tag=oUtils.SS_ORDER_TAG)
-        ce_id = self.kite.place_order(tradingsymbol=ce_sym, variety=self.kite.VARIETY_REGULAR,
-                                      exchange=self.exchange, transaction_type=txn, quantity=qty,
-                                      order_type=self.kite.ORDER_TYPE_LIMIT, price=ce_px,
-                                      product=self.kite.PRODUCT_NRML, tag=oUtils.SS_ORDER_TAG)
+        pe_id = _api(self.kite.place_order, tradingsymbol=pe_sym, variety=self.kite.VARIETY_REGULAR,
+                     exchange=self.exchange, transaction_type=txn, quantity=qty,
+                     order_type=self.kite.ORDER_TYPE_LIMIT, price=pe_px,
+                     product=self.kite.PRODUCT_NRML, tag=oUtils.SS_ORDER_TAG,
+                     desc=f"place {pe_sym}", max_retries=API_ORDER_MAX_RETRIES)
+        ce_id = _api(self.kite.place_order, tradingsymbol=ce_sym, variety=self.kite.VARIETY_REGULAR,
+                     exchange=self.exchange, transaction_type=txn, quantity=qty,
+                     order_type=self.kite.ORDER_TYPE_LIMIT, price=ce_px,
+                     product=self.kite.PRODUCT_NRML, tag=oUtils.SS_ORDER_TAG,
+                     desc=f"place {ce_sym}", max_retries=API_ORDER_MAX_RETRIES)
         log.info(f"[LIVE] BUY LIMIT {pe_sym}@{pe_px}, {ce_sym}@{ce_px} (qty={qty})")
         pe_ok, pe_fill = self._ensure_filled_or_market(pe_id, pe_sym)
         ce_ok, ce_fill = self._ensure_filled_or_market(ce_id, ce_sym)
@@ -514,16 +576,22 @@ class LiveStraddleTrader:
         self.entry_time = parse_hhmm(ENTRY_TIME_IST)
         self.squareoff_time = parse_hhmm(SQUAREOFF_TIME_IST)
         self.daily_realized_pnl = 0.0
+        # --- restart-recovery state (rebuilt from broker on startup) ---
+        self.phase = "WAITING"        # WAITING | IN_POSITION | WAITING_REENTRY | DONE
+        self.attempt_idx = 0
+        self.position = None          # dict describing the currently open straddle
+        self.reentry_target = None    # dtime to re-enter at (WAITING_REENTRY)
+        self._state_loaded_today = False
 
     # ----- token / symbol resolution -----
     def _underlying_ltp(self) -> float:
-        q = self.kite.ltp([self.underlying_quote_key])[self.underlying_quote_key]
+        q = _api(self.kite.ltp, [self.underlying_quote_key], desc="ltp underlying")[self.underlying_quote_key]
         return float(q["last_price"])
 
     def _resolve_option(self, tradingsymbol: str):
         """Return (instrument_token, ltp) for an option tradingsymbol."""
         key = f"{self.broker.exchange}:{tradingsymbol}"
-        info = self.kite.ltp([key])[key]
+        info = _api(self.kite.ltp, [key], desc=f"ltp {tradingsymbol}")[key]
         return int(info["instrument_token"]), float(info["last_price"])
 
     # ----- waiting utilities (with EOD guard) -----
@@ -539,80 +607,323 @@ class LiveStraddleTrader:
             time.sleep(1.0)
 
     # ----- one attempt: enter, monitor, exit -----
-    def run_attempt(self, attempt_idx: int) -> str:
-        """
-        Place one short straddle and manage it until an exit fires.
-        Returns the exit reason: STOPLOSS | PROFIT_TARGET | PROFIT_PROTECT | EOD.
-        Updates self.daily_realized_pnl.
-        """
-        # --- choose ATM from live underlying ---
+    # ----- on-disk state (supplements broker reconciliation) -----
+    def _today_str(self) -> str:
+        return now_ist().date().isoformat()
+
+    def _save_state(self) -> None:
+        """Persist the day state atomically so a restart can resume quickly."""
+        state = {
+            "date": self._today_str(),
+            "phase": self.phase,
+            "attempt_idx": self.attempt_idx,
+            "daily_realized_pnl": self.daily_realized_pnl,
+            "reentry_target": self.reentry_target.strftime("%H:%M") if self.reentry_target else None,
+            "position": self.position,
+            "mode": "PAPER" if self.broker.paper else "LIVE",
+        }
+        try:
+            tmp = STATE_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(state, fh, indent=2, default=str)
+            os.replace(tmp, STATE_FILE)
+        except Exception as e:
+            log.warning(f"[STATE] Could not save state: {e}")
+
+    def _load_state(self) -> None:
+        """Load today's saved state if present (only as a SUPPLEMENT to the
+        broker reconciliation). Sets self._state_loaded_today accordingly."""
+        self.phase = "WAITING"
+        self.attempt_idx = 0
+        self.daily_realized_pnl = 0.0
+        self.position = None
+        self.reentry_target = None
+        self._state_loaded_today = False
+        if not os.path.exists(STATE_FILE):
+            return
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as fh:
+                st = json.load(fh)
+        except Exception as e:
+            log.warning(f"[STATE] Could not read state file: {e}")
+            return
+        if st.get("date") != self._today_str():
+            log.info("[STATE] Saved state is from a previous day; ignoring it.")
+            return
+        self._state_loaded_today = True
+        self.phase = st.get("phase", "WAITING")
+        self.attempt_idx = int(st.get("attempt_idx", 0))
+        self.daily_realized_pnl = float(st.get("daily_realized_pnl", 0.0))
+        self.position = st.get("position")
+        rt = st.get("reentry_target")
+        self.reentry_target = parse_hhmm(rt) if rt else None
+        log.info(f"[STATE] Saved state for today found: phase={self.phase} "
+                 f"attempt={self.attempt_idx} day_realized=Rs{self.daily_realized_pnl:,.0f} "
+                 f"position={'YES' if self.position else 'no'}")
+
+    # ----- broker introspection helpers (the SOURCE OF TRUTH on restart) -----
+    def _is_ss_option(self, sym: str) -> bool:
+        """True if a trading symbol is one of OUR straddle legs."""
+        return bool(sym) and sym.startswith(self.part_symbol) and (sym.endswith("CE") or sym.endswith("PE"))
+
+    def _ss_open_legs(self, net) -> dict:
+        """From positions['net'], return {symbol: {qty, entry, avg}} for our
+        option legs that are currently OPEN (non-zero net quantity). The short
+        entry premium is taken as the average SELL price of the leg."""
+        legs = {}
+        for p in net:
+            sym = p.get("tradingsymbol", "")
+            qty = int(p.get("quantity") or 0)
+            if qty != 0 and self._is_ss_option(sym):
+                sell_q = float(p.get("sell_quantity") or 0)
+                sell_val = float(p.get("sell_value") or 0.0)
+                sell_avg = (sell_val / sell_q) if sell_q else float(p.get("sell_price") or 0.0)
+                legs[sym] = {"qty": qty,
+                             "entry": sell_avg,
+                             "avg": float(p.get("average_price") or 0.0)}
+        return legs
+
+    def _ss_day_realised(self, net) -> float:
+        """Sum the broker's BOOKED realized P&L across our legs today (used as a
+        fallback for the daily-loss breaker when no saved state exists)."""
+        tot = 0.0
+        for p in net:
+            if self._is_ss_option(p.get("tradingsymbol", "")):
+                tot += float(p.get("realised", 0.0) or 0.0)
+        return tot
+
+    def _count_completed_entries(self, orders) -> int:
+        """Number of straddles entered today = COMPLETE SELL orders on the CE
+        leg (each entry sells exactly one CE). Used to infer the attempt index
+        when no saved state is available."""
+        n = 0
+        for o in orders:
+            if (o.get("tag") == oUtils.SS_ORDER_TAG
+                    and str(o.get("transaction_type", "")).upper() == "SELL"
+                    and str(o.get("tradingsymbol", "")).endswith("CE")
+                    and str(o.get("status", "")).upper() == "COMPLETE"):
+                n += 1
+        return n
+
+    def _cancel_stale_ss_orders(self, orders) -> None:
+        """Cancel any of OUR orders left pending/open from a previous session,
+        so a stale limit order can't surprise-fill after a restart."""
+        open_states = {"OPEN", "TRIGGER PENDING", "OPEN PENDING", "MODIFY PENDING",
+                       "VALIDATION PENDING", "AMO REQ RECEIVED", "PUT ORDER REQ RECEIVED"}
+        for o in orders:
+            if o.get("tag") != oUtils.SS_ORDER_TAG:
+                continue
+            if str(o.get("status", "")).upper() in open_states:
+                sym = o.get("tradingsymbol", "")
+                try:
+                    _api(self.kite.cancel_order, variety=self.kite.VARIETY_REGULAR,
+                         order_id=o.get("order_id"),
+                         desc=f"cancel stale {sym}", max_retries=API_ORDER_MAX_RETRIES)
+                    log.warning(f"[RECONCILE] Cancelled stale pending order {sym} ({o.get('order_id')}).")
+                except Exception as e:
+                    log.warning(f"[RECONCILE] Could not cancel {sym}: {e}")
+
+    def _adopt_open_straddle(self, ce_sym, pe_sym, open_legs, completed_entries) -> None:
+        """Rebuild self.position from a broker-confirmed open straddle. If the
+        saved state matches the same strikes, reuse its risk thresholds and
+        trailing peak; otherwise rebuild thresholds from the broker fills."""
+        ce_leg, pe_leg = open_legs[ce_sym], open_legs[pe_sym]
+        qty = abs(ce_leg["qty"]) or self.qty
+        ce_entry = ce_leg["entry"] or ce_leg["avg"]
+        pe_entry = pe_leg["entry"] or pe_leg["avg"]
+        # _resolve_option retries via _api until it gets a token.
+        ce_tok, _ = self._resolve_option(ce_sym)
+        pe_tok, _ = self._resolve_option(pe_sym)
+
+        saved = self.position
+        if saved and saved.get("ce_sym") == ce_sym and saved.get("pe_sym") == pe_sym:
+            attempt_idx = int(saved.get("attempt_idx", max(0, completed_entries - 1)))
+            stop_rupees = saved["stop_rupees"]
+            target_rupees = saved["target_rupees"]
+            G = saved["G"]
+            peak = saved.get("peak", 0.0)
+            armed = saved.get("armed", False)
+            ce_entry = saved.get("ce_entry", ce_entry)
+            pe_entry = saved.get("pe_entry", pe_entry)
+            log.info("[RECONCILE] Saved thresholds match the open straddle; reusing them "
+                     f"(peak=Rs{peak:,.0f}, armed={armed}).")
+        else:
+            attempt_idx = max(self.attempt_idx, max(0, completed_entries - 1))
+            premium_sum = (ce_entry + pe_entry) * qty
+            stop_rupees = effective_stop_rupees(attempt_idx, premium_sum)
+            target_rupees = PROFIT_TARGET_PCT * premium_sum if PROFIT_TARGET_PCT > 0 else None
+            G = PROFIT_PROTECT_PCT * premium_sum if PROFIT_PROTECT_PCT > 0 else None
+            peak, armed = 0.0, False
+            log.warning("[RECONCILE] No matching saved state; rebuilt thresholds from broker "
+                        "fills (trailing peak reset to 0 -> profit-protect will re-arm).")
+
+        self.position = {
+            "attempt_idx": attempt_idx, "pe_sym": pe_sym, "ce_sym": ce_sym,
+            "pe_tok": int(pe_tok), "ce_tok": int(ce_tok),
+            "ce_entry": ce_entry, "pe_entry": pe_entry, "qty": qty,
+            "premium_sum": (ce_entry + pe_entry) * qty, "stop_rupees": stop_rupees,
+            "target_rupees": target_rupees, "G": G, "peak": peak, "armed": armed,
+        }
+        self.attempt_idx = attempt_idx
+        self.phase = "IN_POSITION"
+        log.warning(f"[RECONCILE] Adopted OPEN straddle from broker: {ce_sym}/{pe_sym} "
+                    f"qty={qty} entryCE={ce_entry} entryPE={pe_entry} attempt#{attempt_idx+1} "
+                    f"stop=Rs{stop_rupees:,.0f}")
+
+    def reconcile_on_startup(self) -> None:
+        """Rebuild today's trading state from the BROKER (orders + positions),
+        using the saved state file only as a supplement. This is what makes the
+        trader safe to kill and restart at any moment."""
+        self._load_state()   # supplement: thresholds / attempt / peak / realized
+
+        if self.broker.paper:
+            log.info("[RECONCILE] Paper mode: no live broker state; using the saved file only.")
+            return
+
+        # 1) Read the order book; cancel stale pendings; count today's entries.
+        try:
+            orders = _api(self.kite.orders, desc="orders(startup)")
+        except Exception as e:
+            log.error(f"[RECONCILE] orders() failed ({e}); proceeding with state file only.")
+            orders = []
+        self._cancel_stale_ss_orders(orders)
+        completed_entries = self._count_completed_entries(orders)
+
+        # 2) Read live positions -> what is actually open right now.
+        try:
+            net = _api(self.kite.positions, desc="positions(startup)")["net"]
+        except Exception as e:
+            log.error(f"[RECONCILE] positions() failed ({e}); proceeding with state file only.")
+            net = []
+        open_legs = self._ss_open_legs(net)
+        day_realised = self._ss_day_realised(net)
+        ce_syms = sorted(s for s in open_legs if s.endswith("CE"))
+        pe_syms = sorted(s for s in open_legs if s.endswith("PE"))
+
+        # 3) Naked-leg safety: exactly one side open -> square it off, treat flat.
+        if bool(ce_syms) != bool(pe_syms):
+            lone = (ce_syms or pe_syms)[0]
+            log.warning(f"[RECONCILE] Naked leg {lone} open on restart; squaring it off.")
+            self.broker._square_off_naked(lone)
+            ce_syms, pe_syms, open_legs = [], [], {}
+
+        # 4) Both legs open -> adopt and resume; else reconcile a flat book.
+        if ce_syms and pe_syms:
+            self._adopt_open_straddle(ce_syms[0], pe_syms[0], open_legs, completed_entries)
+        else:
+            if self.position is not None:
+                log.warning("[RECONCILE] Saved state had an open position but the broker is FLAT; "
+                            "clearing it (it was closed while we were down).")
+                self.position = None
+                if self.phase == "IN_POSITION":
+                    self.phase = "WAITING"
+            if not self._state_loaded_today:
+                if completed_entries > 0:
+                    # Prior trading happened today but we have no saved state and are
+                    # flat now -> assume the strategy already ran; do NOT start over.
+                    log.warning(f"[RECONCILE] {completed_entries} prior entr(ies) today, FLAT now, "
+                                "no saved state -> assuming the day already ran. Not resuming.")
+                    self.phase = "DONE"
+                else:
+                    log.info("[RECONCILE] No prior trades and no saved state today; fresh start.")
+                    self.phase, self.attempt_idx = "WAITING", 0
+
+        # 5) Daily realized P&L: prefer the file; else seed from broker booked P&L.
+        if not self._state_loaded_today and abs(day_realised) > 1e-9:
+            log.warning(f"[RECONCILE] Seeding day realized P&L from broker booked realised: "
+                        f"Rs{day_realised:,.0f}")
+            self.daily_realized_pnl = day_realised
+
+        self._save_state()
+        log.warning(f"[RECONCILE] Final startup state: phase={self.phase} attempt#{self.attempt_idx+1} "
+                    f"open={'YES' if self.position else 'no'} "
+                    f"day_realized=Rs{self.daily_realized_pnl:,.0f}")
+
+    # ----- enter one straddle (sets self.position, persists state) -----
+    def enter(self, attempt_idx: int) -> bool:
         ul = self._underlying_ltp()
         atm = round_to_step(ul, self.strike_step)
         pe_sym = f"{self.part_symbol}{atm}PE"
         ce_sym = f"{self.part_symbol}{atm}CE"
-        log.info(f"[ENTRY] attempt #{attempt_idx+1}: underlying={ul:.2f} -> ATM={atm} "
-                 f"| {ce_sym} / {pe_sym}")
-
-        # --- resolve tokens, subscribe to the feed, wait for first ticks ---
+        log.info(f"[ENTRY] attempt #{attempt_idx+1}: underlying={ul:.2f} -> ATM={atm} | {ce_sym} / {pe_sym}")
         try:
             pe_tok, _ = self._resolve_option(pe_sym)
             ce_tok, _ = self._resolve_option(ce_sym)
         except Exception as e:
             log.error(f"[ENTRY] Could not resolve option tokens ({e}); skipping attempt.")
-            return "EOD"
+            return False
         self.feed.subscribe([pe_tok, ce_tok])
         if not self.feed.wait_for([pe_tok, ce_tok], timeout=10):
             log.error("[ENTRY] No ticks for legs; skipping attempt.")
             self.feed.unsubscribe([pe_tok, ce_tok])
-            return "EOD"
+            return False
 
-        # --- open the short straddle ---
         fills = self.broker.open_short_straddle(pe_sym, ce_sym, pe_tok, ce_tok, self.qty)
         ce_entry, pe_entry = fills["ce_fill"], fills["pe_fill"]
         premium_sum = (ce_entry + pe_entry) * self.qty
-
-        # --- per-attempt risk thresholds (rupees), exactly as in B ---
         stop_rupees = effective_stop_rupees(attempt_idx, premium_sum)
         target_rupees = PROFIT_TARGET_PCT * premium_sum if PROFIT_TARGET_PCT > 0 else None
         G = PROFIT_PROTECT_PCT * premium_sum if PROFIT_PROTECT_PCT > 0 else None
+
+        self.position = {
+            "attempt_idx": attempt_idx, "pe_sym": pe_sym, "ce_sym": ce_sym,
+            "pe_tok": int(pe_tok), "ce_tok": int(ce_tok),
+            "ce_entry": ce_entry, "pe_entry": pe_entry, "qty": self.qty,
+            "premium_sum": premium_sum, "stop_rupees": stop_rupees,
+            "target_rupees": target_rupees, "G": G, "peak": 0.0, "armed": False,
+        }
+        self.phase = "IN_POSITION"
+        self._save_state()   # persist immediately so a crash here can resume
         log.info(f"[ENTRY] filled CE={ce_entry} PE={pe_entry} premium=Rs{premium_sum:,.0f} "
                  f"| stop=Rs{stop_rupees:,.0f} "
                  f"| target={'Rs%.0f' % target_rupees if target_rupees else 'off'} "
                  f"| protectG={'Rs%.0f' % G if G else 'off'}")
+        return True
 
-        # --- monitor the position on the tick feed ---
-        peak = 0.0
-        armed = False
+    # ----- monitor the current self.position until an exit fires -----
+    def monitor_and_exit(self) -> str:
+        p = self.position
+        pe_tok, ce_tok = int(p["pe_tok"]), int(p["ce_tok"])
+        ce_entry, pe_entry, qty = p["ce_entry"], p["pe_entry"], p["qty"]
+        stop_rupees, target_rupees, G = p["stop_rupees"], p["target_rupees"], p["G"]
+        peak, armed = p.get("peak", 0.0), p.get("armed", False)
+
+        # Re-subscribe (essential after a restart; harmless otherwise).
+        self.feed.subscribe([pe_tok, ce_tok])
+        self.feed.wait_for([pe_tok, ce_tok], timeout=10)
+
         last_hb = 0.0
+        last_save = time.time()
         exit_reason = "EOD"
         while True:
             now_t = now_ist().time()
             ce_ltp = self.feed.get(ce_tok)
             pe_ltp = self.feed.get(pe_tok)
-
-            # EOD square-off check first.
             if now_t >= self.squareoff_time:
                 exit_reason = "EOD"
                 break
-
             if ce_ltp is None or pe_ltp is None:
                 time.sleep(MONITOR_POLL_SECONDS)
                 continue
 
-            # Live MTM profit of the short straddle (rupees).
-            pnl = (ce_entry - ce_ltp) * self.qty + (pe_entry - pe_ltp) * self.qty
+            pnl = (ce_entry - ce_ltp) * qty + (pe_entry - pe_ltp) * qty
             peak = max(peak, pnl)
             if G is not None and not armed and peak >= G:
                 armed = True
                 log.info(f"[PROTECT] armed: peak=Rs{peak:,.0f} >= G=Rs{G:,.0f}")
 
-            # Heartbeat P&L log.
+            # Persist peak/armed periodically so a restart resumes accurately.
+            if time.time() - last_save >= 10:
+                p["peak"], p["armed"] = peak, armed
+                self._save_state()
+                last_save = time.time()
+
             if time.time() - last_hb >= MONITOR_HEARTBEAT_SECONDS:
                 log.info(f"[MONITOR] pnl=Rs{pnl:,.0f} peak=Rs{peak:,.0f} "
                          f"(CE {ce_ltp} / PE {pe_ltp}) armed={armed}")
                 last_hb = time.time()
 
-            # --- exit checks; same priority as B: STOP > TARGET > PROTECT ---
+            # Exit priority (same as B): STOP > TARGET > PROTECT.
             if pnl <= -stop_rupees:
                 exit_reason = "STOPLOSS"
                 break
@@ -622,42 +933,99 @@ class LiveStraddleTrader:
             if armed and G is not None and pnl <= (peak - G):
                 exit_reason = "PROFIT_PROTECT"
                 break
-
             time.sleep(MONITOR_POLL_SECONDS)
 
-        # --- close the position ---
-        close = self.broker.close_short_straddle(pe_sym, ce_sym, pe_tok, ce_tok, self.qty)
+        close = self.broker.close_short_straddle(p["pe_sym"], p["ce_sym"], pe_tok, ce_tok, qty)
         ce_exit, pe_exit = close["ce_fill"], close["pe_fill"]
-        gross = (ce_entry - ce_exit) * self.qty + (pe_entry - pe_exit) * self.qty
+        gross = (ce_entry - ce_exit) * qty + (pe_entry - pe_exit) * qty
         self.daily_realized_pnl += gross
         log.info(f"[EXIT] {exit_reason}: CE {ce_entry}->{ce_exit}, PE {pe_entry}->{pe_exit} "
                  f"| gross=Rs{gross:,.0f} | day_realized=Rs{self.daily_realized_pnl:,.0f}")
 
         self.feed.unsubscribe([pe_tok, ce_tok])
+        self.position = None
+        self.phase = "WAITING"
+        self._save_state()
         return exit_reason
 
     # ----- full trading day -----
+    def _handle_post_exit(self, exit_reason: str) -> bool:
+        """Decide whether to re-enter. Returns True to continue, False to end."""
+        if exit_reason in ("STOPLOSS", "PROFIT_PROTECT") and self.attempt_idx < MAX_REATTEMPTS:
+            delay = reentry_delay_for_attempt(self.attempt_idx)
+            self.attempt_idx += 1
+            self.reentry_target = (now_ist() + timedelta(minutes=delay)).time()
+            self.phase = "WAITING_REENTRY"
+            self._save_state()
+            log.info(f"[REENTRY] {exit_reason} -> wait {delay} min, next attempt #{self.attempt_idx+1}")
+            if not self._sleep_until(self.reentry_target, f"re-entry #{self.attempt_idx+1}"):
+                return False
+            self.phase = "WAITING"
+            self.reentry_target = None
+            self._save_state()
+            return True
+        log.info(f"[DAY] No re-entry after {exit_reason}; day complete.")
+        return False
+
+    def _finish_day(self) -> None:
+        self.phase = "DONE"
+        self.reentry_target = None
+        self._save_state()
+        log.info(f"[DAY DONE] total realized P&L = Rs{self.daily_realized_pnl:,.0f}")
+
     def run_day(self):
+        # Rebuild today's state from the BROKER (orders + positions); the saved
+        # file only supplements it. This is what makes a restart correct.
+        self.reconcile_on_startup()
         log.info("=" * 70)
         log.info(f"[DAY] {date.today()} | mode={'PAPER' if self.broker.paper else 'LIVE'} "
                  f"| entry={ENTRY_TIME_IST} | squareoff={SQUAREOFF_TIME_IST}")
         log.info(f"[DAY] qty={self.qty} step={self.strike_step} "
                  f"max_reattempts={MAX_REATTEMPTS} daily_loss_cap=Rs{MAX_DAILY_LOSS_RUPEES:,.0f}")
 
-        # Wait for the configured entry time.
-        if now_ist().time() < self.entry_time:
-            if not self._sleep_until(self.entry_time, "entry time"):
-                log.info("[DAY] Square-off time reached before entry; nothing to do.")
-                return
-        elif now_ist().time() >= self.squareoff_time:
-            log.info("[DAY] Past square-off time at startup; nothing to do.")
+        if self.phase == "DONE":
+            log.info("[DAY] State shows today already completed; nothing to do.")
             return
-        else:
-            log.warning("[DAY] Started AFTER entry time; entering immediately on this run.")
 
-        attempt_idx = 0
+        # Past square-off: flatten anything still open, then finish.
+        if now_ist().time() >= self.squareoff_time:
+            if self.position is not None:
+                log.warning("[DAY] Past square-off with an open position; squaring off now.")
+                self.monitor_and_exit()
+            self._finish_day()
+            return
+
+        # Resume a broker-confirmed open position (set by reconcile).
+        if self.position is not None:
+            log.warning(f"[RESUME] Monitoring open straddle "
+                        f"{self.position['ce_sym']}/{self.position['pe_sym']} from attempt "
+                        f"#{self.attempt_idx+1}.")
+            exit_reason = self.monitor_and_exit()
+            if not self._handle_post_exit(exit_reason):
+                self._finish_day()
+                return
+
+        # Resume a pending re-entry timer that was in effect at crash time.
+        if self.phase == "WAITING_REENTRY" and self.reentry_target is not None:
+            log.info(f"[RESUME] Waiting for saved re-entry time {self.reentry_target.strftime('%H:%M')}.")
+            if not self._sleep_until(self.reentry_target, "saved re-entry"):
+                self._finish_day()
+                return
+            self.phase = "WAITING"
+            self.reentry_target = None
+            self._save_state()
+
+        # First-entry wait (fresh day; nothing open yet).
+        if self.attempt_idx == 0 and self.position is None and self.phase == "WAITING":
+            if now_ist().time() < self.entry_time:
+                if not self._sleep_until(self.entry_time, "entry time"):
+                    self._finish_day()
+                    return
+            else:
+                log.warning("[DAY] Started AFTER entry time; entering immediately on this run.")
+
+        # Main attempt loop.
         while True:
-            # Daily circuit-breaker (checked before each entry, as in B).
             if MAX_DAILY_LOSS_RUPEES > 0 and self.daily_realized_pnl <= -MAX_DAILY_LOSS_RUPEES:
                 log.warning(f"[BREAKER] Daily loss cap hit "
                             f"(realized=Rs{self.daily_realized_pnl:,.0f}); no more trades today.")
@@ -666,24 +1034,13 @@ class LiveStraddleTrader:
                 log.info("[DAY] Square-off time reached; ending the day.")
                 break
 
-            exit_reason = self.run_attempt(attempt_idx)
+            if not self.enter(self.attempt_idx):
+                break
+            exit_reason = self.monitor_and_exit()
+            if not self._handle_post_exit(exit_reason):
+                break
 
-            # Re-entry rule mirrors B: only STOPLOSS / PROFIT_PROTECT re-enter.
-            if exit_reason in ("STOPLOSS", "PROFIT_PROTECT") and attempt_idx < MAX_REATTEMPTS:
-                delay = reentry_delay_for_attempt(attempt_idx)
-                attempt_idx += 1
-                target_t = (now_ist() + timedelta(minutes=delay)).time()
-                log.info(f"[REENTRY] {exit_reason} -> wait {delay} min, next attempt #{attempt_idx+1}")
-                if not self._sleep_until(target_t, f"re-entry #{attempt_idx+1}"):
-                    log.info("[DAY] Square-off reached during re-entry wait; ending day.")
-                    break
-                continue
-
-            # PROFIT_TARGET or EOD -> the day is done.
-            log.info(f"[DAY] No re-entry after {exit_reason}; day complete.")
-            break
-
-        log.info(f"[DAY DONE] total realized P&L = Rs{self.daily_realized_pnl:,.0f}")
+        self._finish_day()
 
 
 # ===========================================================================
@@ -697,13 +1054,13 @@ def main():
         log.warning("[BOOT] LIVE MODE: real orders WILL be placed. Ctrl+C to abort.")
 
     # --- Kite session ---
-    kite = oUtils.intialize_kite_api()
+    kite = _api(oUtils.intialize_kite_api, desc="kite session init")
     log.info("[BOOT] Kite session initialised.")
 
     # --- Instrument config (same source A uses) ---
     (UNDER_LYING_EXCHANGE, UNDERLYING, OPTIONS_EXCHANGE, PART_SYMBOL,
      NO_OF_LOTS, STRIKE_MULTIPLE, STOPLOSS_POINTS, MINIMUM_LOTS,
-     LONG_STRADDLE_STRIKE_DISTANCE) = oUtils.get_instruments(kite)
+     LONG_STRADDLE_STRIKE_DISTANCE) = _api(oUtils.get_instruments, kite, desc="get_instruments")
     PART_SYMBOL = PART_SYMBOL.replace(":", "")
     underlying_quote_key = UNDER_LYING_EXCHANGE + UNDERLYING
     log.info(f"[BOOT] Instruments: underlying='{underlying_quote_key}', "
@@ -733,12 +1090,26 @@ def main():
         qty=int(NO_OF_LOTS),
     )
 
+    # Auto-restart loop: if run_day crashes before square-off, restart it. The
+    # broker reconciliation + on-disk state mean it RESUMES (re-adopts an open
+    # position / pending re-entry) rather than starting the day over. For
+    # crash-proofing across reboots, also run this under an OS supervisor
+    # (Windows Task Scheduler "restart on failure" / systemd Restart=always).
     try:
-        trader.run_day()
-    except KeyboardInterrupt:
-        log.warning("[SHUTDOWN] Interrupted by user.")
-    except Exception as e:
-        log.exception(f"[FATAL] Unhandled error: {e}")
+        while True:
+            try:
+                trader.run_day()
+                break
+            except KeyboardInterrupt:
+                log.warning("[SHUTDOWN] Interrupted by user.")
+                break
+            except Exception as e:
+                log.exception(f"[RESILIENCE] run_day crashed: {e}")
+                if now_ist().time() >= trader.squareoff_time:
+                    log.info("[RESILIENCE] Past square-off; not restarting.")
+                    break
+                log.warning("[RESILIENCE] Restarting run_day in 5s (state preserved on disk).")
+                time.sleep(5)
     finally:
         feed.stop()
         log.info("[SHUTDOWN] Feed closed. Bye.")
