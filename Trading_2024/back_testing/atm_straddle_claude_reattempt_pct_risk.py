@@ -70,9 +70,9 @@ PROPERTY_FILE_PATH = _load_property_file()
 # PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
 PICKLES_DIR = os.getenv("PICKLES_DIR", r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New")
 ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "11:55")  # "HH:MM"
-# EXIT_TIME_IST is a last-entry / last-re-entry cutoff, not a forced square-off time.
-# New trades are allowed only up to and including this time. Any open trade keeps
-# following the existing STOPLOSS / PROFIT_TARGET / PROFIT_PROTECT / EOD logic.
+# EXIT_TIME_IST is the strategy time filter / square-off cutoff.
+# No fresh entry or re-entry is initiated at or after this time. If an attempt is
+# still open at this time, it is closed at the cutoff with exit_reason="TIME_EXIT".
 EXIT_TIME_IST = os.getenv("EXIT_TIME_IST", "15:30")  # "HH:MM"
 
 def _safe_fname_part(s: str) -> str:
@@ -326,8 +326,8 @@ def parse_hhmm(s: str) -> dtime:
     return dtime(int(hh), int(mm))
 
 ENTRY_TIME = parse_hhmm(ENTRY_TIME_IST)
-# Last permissible time for placing a fresh trade/re-entry.
-# This does NOT alter the existing exit rules for an already-open trade.
+# Strategy cutoff time. The simulator will not initiate a new attempt at or
+# after this time, and the current attempt will not be monitored beyond it.
 EXIT_TIME = parse_hhmm(EXIT_TIME_IST)
 
 def ist_tz():
@@ -687,11 +687,21 @@ def simulate_day_multi_trades(
     idx_all = build_minute_index(dy, SESSION_START_IST, SESSION_END_IST)
     session_end_ts = idx_all[-1]
 
-    # Fresh entries/re-entries are allowed only until EXIT_TIME_IST.
-    # The actual monitoring/exit horizon remains SESSION_END_IST, so this cutoff
-    # does not forcibly close an already-open trade.
+    # EXIT_TIME_IST is the strategy time filter.
+    #
+    # Earlier versions used EXIT_TIME_IST only as a "last new entry" gate while
+    # still allowing the currently-open trade to run till SESSION_END_IST. That
+    # made the Excel output look as if the filter was not working because trade
+    # rows could still show exit_time after EXIT_TIME_IST.
+    #
+    # In this corrected version:
+    #   1. no fresh entry/re-entry is initiated at or after EXIT_TIME_IST; and
+    #   2. the active attempt is monitored only up to EXIT_TIME_IST.
+    #
+    # Therefore, when EXIT_TIME_IST is earlier than 15:30, the trade exits at the
+    # cutoff if STOPLOSS / PROFIT_TARGET / PROFIT_PROTECT has not already fired.
     configured_exit_cutoff_ts = pd.Timestamp(datetime.combine(dy, EXIT_TIME), tz=ist_tz())
-    entry_cutoff_ts = min(session_end_ts, configured_exit_cutoff_ts)
+    trade_end_ts = min(session_end_ts, configured_exit_cutoff_ts)
 
     qty = int(QTY_UNITS[und])
     step = int(STRIKE_STEP[und])
@@ -704,17 +714,17 @@ def simulate_day_multi_trades(
     cur_entry_ts = pd.Timestamp(datetime.combine(dy, ENTRY_TIME), tz=ist_tz())
     trade_seq = 1
 
-    # If the configured first entry itself is after EXIT_TIME_IST, the day is
-    # skipped cleanly. This is intentional: EXIT_TIME_IST means no fresh trade
-    # may be initiated after that cutoff.
-    if cur_entry_ts > entry_cutoff_ts:
+    # If the configured first entry itself is at/after EXIT_TIME_IST, the day
+    # is skipped cleanly. This is intentional: EXIT_TIME_IST is the hard strategy
+    # time filter, so a trade needs at least one minute of monitoring before it.
+    if cur_entry_ts >= trade_end_ts:
         skipped.append({
             "day": dy,
             "underlying": und,
             "expiry": expiry,
             "trade_seq": trade_seq,
             "reason": (
-                f"No entry: ENTRY_TIME_IST {ENTRY_TIME_IST} is after "
+                f"No entry: ENTRY_TIME_IST {ENTRY_TIME_IST} is at/after "
                 f"configured EXIT_TIME_IST {EXIT_TIME_IST}"
             ),
         })
@@ -725,7 +735,7 @@ def simulate_day_multi_trades(
     daily_realized_pnl = 0.0
     daily_loss_limit_enabled = MAX_DAILY_LOSS_RUPEES > 0
 
-    while cur_entry_ts <= entry_cutoff_ts:
+    while cur_entry_ts < trade_end_ts:
         if daily_loss_limit_enabled and daily_realized_pnl <= -float(MAX_DAILY_LOSS_RUPEES):
             skipped.append({
                 "day": dy,
@@ -778,7 +788,7 @@ def simulate_day_multi_trades(
         ce_entry = ce_close_raw.loc[cur_entry_ts]
         pe_entry = pe_close_raw.loc[cur_entry_ts]
         monitor_start_ts = pd.Timestamp(cur_entry_ts) + pd.Timedelta(minutes=1)
-        if monitor_start_ts > session_end_ts:
+        if monitor_start_ts > trade_end_ts:
             break
 
         if pd.isna(ce_entry) or pd.isna(pe_entry):
@@ -819,7 +829,7 @@ def simulate_day_multi_trades(
 
         # Close-based PnL (same as before)
         pnl_close_all = (float(ce_entry) - ce_close) * qty + (float(pe_entry) - pe_close) * qty
-        pnl = pnl_close_all.loc[monitor_start_ts:].dropna()  # keep 'pnl' as close-based for profit-protect
+        pnl = pnl_close_all.loc[monitor_start_ts:trade_end_ts].dropna()  # keep 'pnl' as close-based for profit-protect
 
         # STOPLOSS worst-case PnL candidates within each minute:
         #  A) CE high, PE low
@@ -829,7 +839,7 @@ def simulate_day_multi_trades(
 
         # Worst-case PnL per minute among (close, A, B)
         pnl_sl_all = pd.concat([pnl_close_all, pnl_ceHigh_peLow_all, pnl_ceLow_peHigh_all], axis=1).min(axis=1)
-        pnl_sl = pnl_sl_all.loc[monitor_start_ts:].dropna()
+        pnl_sl = pnl_sl_all.loc[monitor_start_ts:trade_end_ts].dropna()
 
         if pnl.empty:
             skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
@@ -838,6 +848,12 @@ def simulate_day_multi_trades(
 
         eod_ts = pnl.index[-1]
         eod_pnl = float(pnl.iloc[-1])
+
+        # If EXIT_TIME_IST is earlier than market close and no risk/profit event
+        # triggers before that, the attempt is closed at the configured cutoff.
+        # The old "EOD" label is retained only when the monitoring horizon is
+        # the real session end.
+        default_exit_reason = "TIME_EXIT" if trade_end_ts < session_end_ts else "EOD"
 
         max_profit = float(max(0.0, pnl.max()))
         max_loss = float(min(0.0, pnl.min()))
@@ -865,14 +881,14 @@ def simulate_day_multi_trades(
             # best-case (favourable) intrabar profit: both legs bought back at their lows
             pnl_best_all = (float(ce_entry) - ce_low) * qty + (float(pe_entry) - pe_low) * qty
             pnl_tp = pd.concat([pnl_close_all, pnl_best_all], axis=1).max(axis=1)
-            pnl_tp = pnl_tp.loc[monitor_start_ts:].dropna()
+            pnl_tp = pnl_tp.loc[monitor_start_ts:trade_end_ts].dropna()
             tp_hit = pnl_tp >= float(target_rupees)
             target_ts = pnl_tp.index[tp_hit.to_numpy().argmax()] if tp_hit.any() else None
 
         # Earliest triggered exit wins; on identical timestamps prefer the more
         # conservative outcome: STOPLOSS, then PROFIT_TARGET, then PROFIT_PROTECT.
         exit_ts = eod_ts
-        exit_reason = "EOD"
+        exit_reason = default_exit_reason
         _candidates = []
         if stop_ts is not None:
             _candidates.append((stop_ts, 0, "STOPLOSS"))
@@ -973,10 +989,10 @@ def simulate_day_multi_trades(
             trade_seq += 1
             cur_entry_ts = pd.Timestamp(exit_ts) + pd.Timedelta(minutes=delay_min)
 
-            # Do not initiate any further trade after EXIT_TIME_IST.
-            # Existing trade exit logic above is left unchanged; only fresh
-            # re-entry is blocked by this condition.
-            if cur_entry_ts > entry_cutoff_ts:
+            # Do not initiate any further trade at or after EXIT_TIME_IST.
+            # Because trade_end_ts is also the monitoring end, this keeps the
+            # output strictly filtered by EXIT_TIME_IST.
+            if cur_entry_ts >= trade_end_ts:
                 skipped.append({
                     "day": dy,
                     "underlying": und,
@@ -984,7 +1000,7 @@ def simulate_day_multi_trades(
                     "trade_seq": trade_seq,
                     "reason": (
                         f"No re-entry: next entry time {pd.Timestamp(cur_entry_ts).strftime('%H:%M')} "
-                        f"is after configured EXIT_TIME_IST {EXIT_TIME_IST}"
+                        f"is at/after configured EXIT_TIME_IST {EXIT_TIME_IST}"
                     ),
                 })
                 break
@@ -1387,7 +1403,7 @@ def main():
           f"Daily max loss: Rs {_fmt_rupee_value(MAX_DAILY_LOSS_RUPEES)} | "
           f"ProfitProtect trigger/giveback %: {_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES)} | "
           f"Re-entry delay min/attempt: {REENTRY_DELAY_BY_ATTEMPT} | Allowed DTE: {ALLOWED_DTE}")
-    print(f"[INFO] Entry time: {ENTRY_TIME_IST} | Last new-trade cutoff: {EXIT_TIME_IST}")
+    print(f"[INFO] Entry time: {ENTRY_TIME_IST} | Strategy exit/filter cutoff: {EXIT_TIME_IST}")
     print(f"[INFO] Day profit target: {PROFIT_TARGET_PCT:.0%} of premium (0 = disabled)")
     print(f"[INFO] Tradeables: {sorted(TRADEABLE)}")
     print(f"[INFO] Output: {OUTPUT_XLSX}")
