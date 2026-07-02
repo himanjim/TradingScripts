@@ -6,7 +6,7 @@ KITE_API_KEY = '453dipfh64qcl484'
 KITE_API_SECRET = 'cnt30fp12ftbzk7s0a84ieqv8wbquer4'
 
 
-KITE_ACCESS_CODE = 'DDazvLQ1jO7ftIRvReqnssu1JkKxVNpT'
+KITE_ACCESS_CODE = 'h3WoOB4vjKHDvUdc7xVwou2uOgvVFhfy'
 
 
 def get_instruments(kite_):

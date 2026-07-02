@@ -1,7 +1,7 @@
 import time as tm
 from datetime import datetime
 import pytz
-import OptionTradeUtils as oUtils
+import Trading_2024.OptionTradeUtils as oUtils
 
 # winsound is Windows-only; guard so script doesn't crash on Linux/macOS
 try:
@@ -139,7 +139,7 @@ def _get_tagged_orders(kite):
             if (
                 o.get("product") in ("NRML", "MIS")
                 and o.get("variety") == "regular"
-                and str(o.get("tag", "")) == str(oUtils.SS_ORDER_TAG)
+                # and str(o.get("tag", "")) == str(oUtils.SS_ORDER_TAG)
                 and o.get("status") in ("OPEN", "COMPLETE")
             ):
                 # Must have some fill, otherwise avg price is junk
@@ -262,9 +262,9 @@ def pick_latest_open_straddle_from_orders(kite, max_leg_gap_sec=180):
 
 if __name__ == "__main__":
     # === HONOR THESE EXACTLY ===
-    MAX_PROFIT = 3000
-    MAX_LOSS = -2500
-    MAX_PROFIT_EROSION = 3000
+    MAX_PROFIT = 20000
+    MAX_LOSS = -3000
+    MAX_PROFIT_EROSION = 8000
 
     max_profit_set = None  # e.g. 14500.0 if restarting and you already saw peak profit ~14500
 
