@@ -80,7 +80,7 @@ except Exception:
 RUN_MODE = "optimize"
 
 # --- Optimizer settings (used only when RUN_MODE == "optimize") ---
-OPT_TRIALS = 3000            # number of optimization trials
+OPT_TRIALS = 300            # number of optimization trials
 OPT_CV_FOLDS = 5            # 1 = score on full sample; >1 = walk-forward block robustness
 OPT_PROGRESS_EVERY = 5      # (retained for compatibility) per-trial stats now print EVERY trial
 OPT_SEED = 42              # RNG seed for reproducible searches
@@ -108,8 +108,8 @@ SAMPLE_MAX_DAYS = None      # e.g. 20 -> simulate only the most recent N day-gro
 # =============================================================================
 # USER CONFIG
 # =============================================================================
-# PICKLES_DIR = r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New_0_1"
-PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
+PICKLES_DIR = r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New_0_1_2"
+# PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
 ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "10:00")  # "HH:MM"
 
 def _safe_fname_part(s: str) -> str:
@@ -277,7 +277,7 @@ def loss_limit_pct_for_attempt(attempt_idx: int) -> float:
 
 
 # --- Allowed days-to-expiry to trade: [0,1]=expiry day + day before; [0]=expiry only ---
-ALLOWED_DTE = _parse_int_list(os.getenv("ALLOWED_DTE"), [0])
+ALLOWED_DTE = _parse_int_list(os.getenv("ALLOWED_DTE"), [2])
 
 # --- Profit-protect threshold/giveback as % of premium collected on that attempt ---
 # Default: 30%.
@@ -958,7 +958,8 @@ def simulate_day_multi_trades(
         else:
             loss_limit_rupees = float(uncapped_loss_limit_rupees)
 
-        # G is the same variable used by the existing profit-protect logic:
+        # G is
+        # the same variable used by the existing profit-protect logic:
         #   - profit-protect arms when peak P&L >= G
         #   - profit-protect exits when current P&L <= peak - G
         G = float(profit_protect_pct * entry_premium_sum)

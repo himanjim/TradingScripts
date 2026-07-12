@@ -21,7 +21,7 @@ print ('Starting at:', datetime.now ())
 while True:
     try:
         orders = upstox_api.get_order_history ()
-        positions = upstox_api.get_positions()
+        positions = upstox_api.get_positions_from_orders()
 
         for order in orders:
             order_position = None

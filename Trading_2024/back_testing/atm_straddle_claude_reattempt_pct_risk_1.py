@@ -75,6 +75,16 @@ ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "11:55")  # "HH:MM"
 # still open at this time, it is closed at the cutoff with exit_reason="TIME_EXIT".
 EXIT_TIME_IST = os.getenv("EXIT_TIME_IST", "15:30")  # "HH:MM"
 
+# Last time (IST) at/after which NO fresh entry or re-entry is initiated.
+# UNLIKE EXIT_TIME_IST (which also force-exits the open attempt at the cutoff),
+# this gate ONLY blocks NEW entries: a trade already open before this time
+# keeps running to its normal exit (STOPLOSS / PROFIT_TARGET / PROFIT_PROTECT /
+# TIME_EXIT / EOD). Data note: fresh entries in the final ~30 minutes were net
+# noise (Rs ~15/trade average) while positions held late retained a median 77%
+# of their peak -- so blocking late ENTRIES while letting open trades run is
+# the combination the data supports. Default 15:30 = no restriction.
+LAST_ENTRY_TIME_IST = os.getenv("LAST_ENTRY_TIME_IST", "15:30")  # "HH:MM"
+
 def _safe_fname_part(s: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in s)
 
@@ -284,6 +294,7 @@ _DEFAULT_OUT = os.path.join(
     _get_downloads_folder(),
     f"short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}"
     f"_exit{_safe_fname_part(EXIT_TIME_IST)}"
+    + (f"_LE_{_safe_fname_part(LAST_ENTRY_TIME_IST)}" if LAST_ENTRY_TIME_IST != "15:30" else "") +
     # f"_SLpct_{_safe_fname_part(_fmt_pct_list(LOSS_LIMIT_RUPEES_BY_ATTEMPT))}"
     # f"_DTE_{_safe_fname_part('-'.join(str(d) for d in ALLOWED_DTE))}"
     f"_PPTpct_{_safe_fname_part(_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES))}"
@@ -355,6 +366,31 @@ ENTRY_TIME = parse_hhmm(ENTRY_TIME_IST)
 # Strategy cutoff time. The simulator will not initiate a new attempt at or
 # after this time, and the current attempt will not be monitored beyond it.
 EXIT_TIME = parse_hhmm(EXIT_TIME_IST)
+LAST_ENTRY_TIME = parse_hhmm(LAST_ENTRY_TIME_IST)   # fresh-entry gate only
+
+# ---------------------------------------------------------------------------
+# EFFECTIVE CONFIG DUMP
+# ---------------------------------------------------------------------------
+# Printed once at import so a mis-loaded/renamed property file (or an OS env
+# var silently overriding a key) is IMMEDIATELY visible at the top of every
+# run. If a value below is not what you set in the property file, check the
+# [CONFIG] line above for WHICH file was loaded, and your OS environment for
+# overriding variables (real env vars win over the file by design).
+print("[CONFIG] ---------- effective settings ----------")
+print(f"[CONFIG] ENTRY_TIME_IST                    = {ENTRY_TIME_IST}")
+print(f"[CONFIG] LAST_ENTRY_TIME_IST               = {LAST_ENTRY_TIME_IST}  (fresh-entry gate)")
+print(f"[CONFIG] EXIT_TIME_IST                     = {EXIT_TIME_IST}  (hard cutoff / TIME_EXIT)")
+print(f"[CONFIG] ALLOWED_DTE                       = {ALLOWED_DTE}")
+print(f"[CONFIG] LOSS_LIMIT_RUPEES_BY_ATTEMPT      = {LOSS_LIMIT_RUPEES_BY_ATTEMPT}")
+print(f"[CONFIG] MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT  = {MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT}")
+print(f"[CONFIG] PROFIT_PROTECT_TRIGGER (pct)      = {PROFIT_PROTECT_TRIGGER_RUPEES}")
+print(f"[CONFIG] MAX_PROFIT_PROTECT_TRIGGER_RUPEES = {MAX_PROFIT_PROTECT_TRIGGER_RUPEES}  (0 = cap off)")
+print(f"[CONFIG] PROFIT_PROTECT_GIVEBACK_RUPEES    = {PROFIT_PROTECT_GIVEBACK_RUPEES}  (0 = give-back = G)")
+print(f"[CONFIG] PROFIT_TARGET_PCT                 = {PROFIT_TARGET_PCT}")
+print(f"[CONFIG] MAX_DAILY_LOSS_RUPEES             = {MAX_DAILY_LOSS_RUPEES}")
+print(f"[CONFIG] MAX_REATTEMPTS                    = {MAX_REATTEMPTS}")
+print(f"[CONFIG] REENTRY_DELAY_BY_ATTEMPT          = {REENTRY_DELAY_BY_ATTEMPT}")
+print("[CONFIG] -----------------------------------------")
 
 def ist_tz():
     if ZoneInfo is not None:
@@ -364,7 +400,34 @@ def ist_tz():
     return "Asia/Kolkata"
 
 def ensure_ist(series_or_scalar) -> Any:
+    """Return the input as timezone-aware IST (Asia/Kolkata), nanosecond unit.
+
+    Robust to every datetime form seen in the option pickles:
+      * naive datetimes / strings  -> localized as IST wall-clock (legacy files)
+      * tz-aware ns                -> converted to IST
+      * tz-aware NON-ns units (e.g. datetime64[s, Asia/Kolkata] written by a
+        newer pandas)              -> converted through a UTC-ns numpy round
+        trip, which avoids the pandas code paths that break on exotic units.
+    """
     tz = ist_tz()
+    # -- Series path -----------------------------------------------------
+    if isinstance(series_or_scalar, pd.Series) and isinstance(
+            series_or_scalar.dtype, pd.DatetimeTZDtype):
+        s = series_or_scalar
+        try:
+            out = s.dt.tz_convert(tz)
+            if getattr(out.dtype, "unit", "ns") != "ns":
+                # Version-proof unit normalisation via UTC ns values.
+                vals = out.dt.tz_convert("UTC").to_numpy(dtype="datetime64[ns]")
+                out = pd.Series(pd.DatetimeIndex(vals, tz="UTC").tz_convert(tz),
+                                index=s.index, name=s.name)
+            return out
+        except Exception:
+            # Last-resort path: rebuild from python Timestamp objects, which
+            # sidesteps any dtype-unit handling entirely (no numpy needed).
+            idx = pd.DatetimeIndex(list(s.astype(object)))
+            idx = idx.tz_convert(tz) if idx.tz is not None else idx.tz_localize(tz)
+            return pd.Series(idx, index=s.index, name=s.name)
     dt = pd.to_datetime(series_or_scalar, errors="coerce")
     if isinstance(dt, pd.Series):
         if dt.dt.tz is None:
@@ -373,6 +436,53 @@ def ensure_ist(series_or_scalar) -> Any:
     if getattr(dt, "tzinfo", None) is None:
         return dt.tz_localize(tz)
     return dt.tz_convert(tz)
+
+
+def _canonicalize_datetimes(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise the datetime columns of a freshly-read option pickle to the
+    canonical dtypes the rest of this script assumes:
+        date   -> datetime64[ns, Asia/Kolkata]
+        expiry -> datetime64[ns] (naive)
+    Newer Dhan downloads (the *_Acompat files) store these with a SECONDS
+    unit (datetime64[s, ...]); several pandas versions mishandle non-ns units
+    in copy/setitem/unpickle paths, so we convert once, right after reading.
+    """
+    if "date" in df.columns:
+        df["date"] = ensure_ist(df["date"])
+    if "expiry" in df.columns:
+        exp = pd.to_datetime(df["expiry"], errors="coerce")
+        if isinstance(exp.dtype, pd.DatetimeTZDtype):
+            exp = exp.dt.tz_convert(ist_tz()).dt.tz_localize(None)
+        try:
+            exp = exp.astype("datetime64[ns]")
+        except Exception:
+            pass
+        df["expiry"] = exp
+    return df
+
+
+def _read_pickle_ist(path: str) -> pd.DataFrame:
+    """pd.read_pickle + datetime canonicalisation, with an ACTIONABLE error.
+
+    If the unpickle itself fails (typical cause: the file was written by a
+    DIFFERENT pandas version and contains a datetime64[s, tz] block that this
+    pandas cannot reconstruct), raise a message that names the fix instead of
+    the raw internals.
+    """
+    try:
+        df = pd.read_pickle(path)
+    except Exception as e:
+        raise RuntimeError(
+            f"could not unpickle {os.path.basename(path)} under pandas "
+            f"{pd.__version__} ({type(e).__name__}: {e}). The file was likely "
+            f"written by a different pandas version using a seconds-unit "
+            f"tz-aware datetime. Fix: upgrade pandas in THIS environment "
+            f"(pip install -U pandas), or run convert_pickles_to_ns.py once "
+            f"in the environment that created the pickles."
+        ) from e
+    if isinstance(df, pd.DataFrame):
+        df = _canonicalize_datetimes(df)
+    return df
 
 def normalize_underlying(name: str) -> Optional[str]:
     if not isinstance(name, str):
@@ -605,7 +715,7 @@ def scan_pickles_pass1(pickle_paths: List[str]) -> Tuple[date, Dict[Tuple[str, d
 
     for p in pickle_paths:
         try:
-            df = pd.read_pickle(p)
+            df = _read_pickle_ist(p)
             if not isinstance(df, pd.DataFrame) or df.empty:
                 continue
 
@@ -732,6 +842,13 @@ def simulate_day_multi_trades(
     configured_exit_cutoff_ts = pd.Timestamp(datetime.combine(dy, EXIT_TIME), tz=ist_tz())
     trade_end_ts = min(session_end_ts, configured_exit_cutoff_ts)
 
+    # Fresh entries/re-entries are additionally gated by LAST_ENTRY_TIME_IST.
+    # The effective entry gate is the EARLIER of the two cutoffs; MONITORING of
+    # an open attempt still runs to trade_end_ts, so a position opened before
+    # the gate continues to its normal exit after it.
+    last_entry_ts = pd.Timestamp(datetime.combine(dy, LAST_ENTRY_TIME), tz=ist_tz())
+    entry_gate_ts = min(trade_end_ts, last_entry_ts)
+
     qty = int(QTY_UNITS[und])
     step = int(STRIKE_STEP[und])
 
@@ -743,18 +860,19 @@ def simulate_day_multi_trades(
     cur_entry_ts = pd.Timestamp(datetime.combine(dy, ENTRY_TIME), tz=ist_tz())
     trade_seq = 1
 
-    # If the configured first entry itself is at/after EXIT_TIME_IST, the day
-    # is skipped cleanly. This is intentional: EXIT_TIME_IST is the hard strategy
-    # time filter, so a trade needs at least one minute of monitoring before it.
-    if cur_entry_ts >= trade_end_ts:
+    # If the configured first entry itself is at/after the ENTRY GATE (the
+    # earlier of LAST_ENTRY_TIME_IST and EXIT_TIME_IST), the day is skipped
+    # cleanly: no fresh entry is allowed past the gate, and a trade needs at
+    # least one minute of monitoring before the hard cutoff anyway.
+    if cur_entry_ts >= entry_gate_ts:
         skipped.append({
             "day": dy,
             "underlying": und,
             "expiry": expiry,
             "trade_seq": trade_seq,
             "reason": (
-                f"No entry: ENTRY_TIME_IST {ENTRY_TIME_IST} is at/after "
-                f"configured EXIT_TIME_IST {EXIT_TIME_IST}"
+                f"No entry: ENTRY_TIME_IST {ENTRY_TIME_IST} is at/after entry gate "
+                f"(LAST_ENTRY {LAST_ENTRY_TIME_IST} / EXIT {EXIT_TIME_IST})"
             ),
         })
         return results, skipped
@@ -764,7 +882,7 @@ def simulate_day_multi_trades(
     daily_realized_pnl = 0.0
     daily_loss_limit_enabled = MAX_DAILY_LOSS_RUPEES > 0
 
-    while cur_entry_ts < trade_end_ts:
+    while cur_entry_ts < entry_gate_ts:
         if daily_loss_limit_enabled and daily_realized_pnl <= -float(MAX_DAILY_LOSS_RUPEES):
             skipped.append({
                 "day": dy,
@@ -1034,10 +1152,10 @@ def simulate_day_multi_trades(
             trade_seq += 1
             cur_entry_ts = pd.Timestamp(exit_ts) + pd.Timedelta(minutes=delay_min)
 
-            # Do not initiate any further trade at or after EXIT_TIME_IST.
-            # Because trade_end_ts is also the monitoring end, this keeps the
-            # output strictly filtered by EXIT_TIME_IST.
-            if cur_entry_ts >= trade_end_ts:
+            # Do not initiate any further trade at or after the ENTRY GATE (the
+            # earlier of LAST_ENTRY_TIME_IST and EXIT_TIME_IST). An attempt that
+            # is already open before the gate still runs to trade_end_ts.
+            if cur_entry_ts >= entry_gate_ts:
                 skipped.append({
                     "day": dy,
                     "underlying": und,
@@ -1045,7 +1163,7 @@ def simulate_day_multi_trades(
                     "trade_seq": trade_seq,
                     "reason": (
                         f"No re-entry: next entry time {pd.Timestamp(cur_entry_ts).strftime('%H:%M')} "
-                        f"is at/after configured EXIT_TIME_IST {EXIT_TIME_IST}"
+                        f"is at/after entry gate (LAST_ENTRY {LAST_ENTRY_TIME_IST} / EXIT {EXIT_TIME_IST})"
                     ),
                 })
                 break
@@ -1075,7 +1193,7 @@ def process_pickles_generate_trades(
 
     for p in pickle_paths:
         try:
-            df = pd.read_pickle(p)
+            df = _read_pickle_ist(p)
             if not isinstance(df, pd.DataFrame) or df.empty:
                 continue
 
@@ -1449,6 +1567,8 @@ def main():
           f"ProfitProtect trigger/giveback %: {_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES)} | "
           f"Re-entry delay min/attempt: {REENTRY_DELAY_BY_ATTEMPT} | Allowed DTE: {ALLOWED_DTE}")
     print(f"[INFO] Entry time: {ENTRY_TIME_IST} | Strategy exit/filter cutoff: {EXIT_TIME_IST}")
+    print(f"[INFO] Last fresh-entry time: {LAST_ENTRY_TIME_IST} "
+          f"(open trades continue to their normal exits after this)")
     print(f"[INFO] Profit-protect cap: Rs {MAX_PROFIT_PROTECT_TRIGGER_RUPEES:,.0f} "
           f"(effective G = min(pct*premium, cap); 0 = no cap)")
     _gb = PROFIT_PROTECT_GIVEBACK_RUPEES

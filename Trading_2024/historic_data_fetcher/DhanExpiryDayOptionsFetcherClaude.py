@@ -40,22 +40,24 @@ backtest needs: a fixed strike series by `instrument`.
 Default behaviour
 -----------------
 - Downloads NIFTY and SENSEX weekly expiry sessions.
-- Keeps the expiry day (DTE 0) AND the day before expiry (DTE 1) by default,
-  so the backtest can trade either. Configure A to match:
+- Keeps the expiry day (DTE 0), the day before expiry (DTE 1), AND two days
+  before expiry (DTE 2) by default, so the backtest can trade any of them.
+  Configure A to match:
 
-      ALLOWED_DTE = [0, 1]
+      ALLOWED_DTE = [0, 1, 2]
 
-- To download the expiry day only (the old behaviour), run with:
+- To download fewer days, restrict the set, e.g.:
 
-      set DHAN_KEEP_DTE=0          (Windows)
+      set DHAN_KEEP_DTE=0          (Windows, expiry only)
+      set DHAN_KEEP_DTE=0,1        (Windows, expiry + day-before)
       export DHAN_KEEP_DTE=0       (Linux/macOS)
 
   NOTE: DTE here is CALENDAR days from the resolved expiry. The straddle-melt
   verification validates ONLY the DTE=0 session, because a straddle melts to
-  intrinsic value at expiry; DTE=1 rows still carry a full day of time value
-  and are intentionally NOT melt-checked. On weeks where the day before
-  expiry is a holiday there is simply no DTE=1 row (consistent with A, which
-  also filters on calendar DTE).
+  intrinsic value at expiry; DTE=1 and DTE=2 rows still carry time value and
+  are intentionally NOT melt-checked. On weeks where a given calendar day
+  before expiry is a holiday there is simply no row for that DTE (consistent
+  with A, which also filters on calendar DTE).
 
 - Writes one A-compatible pickle per symbol-expiry.
 - Also writes an optional coverage CSV per pickle to help detect missing
@@ -107,7 +109,7 @@ import requests
 # generated pickles without code changes.
 OUT_DIR = os.getenv(
     "DHAN_EXPIRED_OUTDIR",
-    r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New_0_1",
+    r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New_0_1_2",
 )
 
 # How many calendar days to go back from today while generating scheduled
@@ -139,9 +141,11 @@ WINDOW_BACK_DAYS = int(os.getenv("DHAN_WINDOW_BACK_DAYS", "7"))
 
 # Rows retained from the fetched window, expressed as calendar DTE versus the
 # resolved expiry date.
-# Default "0,1" keeps the expiry day (DTE 0) AND the day before expiry (DTE 1).
-# IMPORTANT: set ALLOWED_DTE=[0,1] in A as well, otherwise the DTE=1 rows are
-# downloaded but never traded. Use DHAN_KEEP_DTE=0 to revert to expiry-day only.
+# Default "0,1,2" keeps the expiry day (DTE 0), the day before expiry (DTE 1),
+# AND two days before expiry (DTE 2).
+# IMPORTANT: set ALLOWED_DTE=[0,1,2] in A as well, otherwise the DTE 1/2 rows are
+# downloaded but never traded. Restrict with e.g. DHAN_KEEP_DTE=0 (expiry only)
+# or DHAN_KEEP_DTE=0,1 (expiry + day-before).
 def _parse_int_csv(s: str, default: Iterable[int]) -> List[int]:
     try:
         vals = [int(x.strip()) for x in str(s).split(",") if x.strip() != ""]
@@ -150,7 +154,7 @@ def _parse_int_csv(s: str, default: Iterable[int]) -> List[int]:
         return list(default)
 
 
-KEEP_DTE = sorted(set(_parse_int_csv(os.getenv("DHAN_KEEP_DTE", "0,1"), [0, 1])))
+KEEP_DTE = sorted(set(_parse_int_csv(os.getenv("DHAN_KEEP_DTE", "0,1,2"), [0, 1, 2])))
 
 # Fields requested from Dhan. `spot` is needed for expiry-session validation
 # and for debugging ATM selection.
@@ -171,7 +175,7 @@ MELT_MIN_BARS = int(os.getenv("DHAN_MELT_MIN_BARS", "20"))
 MELT_STRICT = os.getenv("DHAN_MELT_STRICT", "0").strip().lower() not in ("0", "false", "no")
 
 # Credentials: environment only. Do not paste tokens into this file.
-ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzgyMTk4NTg5LCJpYXQiOjE3ODIxMTIxODksInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.YGJJ5S60DMTmNcrehY9gyi5YDaeLaHYLiXPWr-_goW5Q3FFF_0Ag3Pqz1jjxh0GXOzOUIUYsghnjn39D4cFfeg").strip()
+ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzgzODU5OTgwLCJpYXQiOjE3ODM3NzM1ODAsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.D1ywHfjFLyrDhjOje16HvriU57ZEELOVJToD8SddCj-i1ch3TXDy3JhAaeYeqj4pcg7rFN0ljQE7TKrAY7Dv2Q").strip()
 CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "1108588932").strip()
 
 
