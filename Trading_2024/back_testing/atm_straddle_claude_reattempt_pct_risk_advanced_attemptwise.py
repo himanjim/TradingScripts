@@ -10,6 +10,16 @@ import pandas as pd
 
 import Trading_2024.OptionTradeUtils as oUtils
 
+# =============================================================================
+# ATTEMPT-WISE PROFIT CONFIGURATION
+# -----------------------------------------------------------------------------
+# PROFIT_PROTECT_TRIGGER_RUPEES and PROFIT_TARGET_PCT are comma-separated
+# percentage schedules. Index 0 applies to the original entry, index 1 to the
+# first re-entry, etc. If a schedule is shorter than the number of possible
+# attempts, its final value is reused. A scalar remains valid and is therefore
+# backward compatible.
+# =============================================================================
+
 try:
     from zoneinfo import ZoneInfo  # py3.9+
 except Exception:
@@ -41,7 +51,7 @@ except Exception:
 def _load_property_file() -> str:
     cfg_path = os.getenv(
         "STRADDLE_CONFIG",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "straddle_config_1.properties"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "straddle_config_advanced.properties"),
     )
     if not os.path.exists(cfg_path):
         print(f"[CONFIG] Property file not found at {cfg_path}; using built-in defaults.")
@@ -74,16 +84,6 @@ ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "11:55")  # "HH:MM"
 # No fresh entry or re-entry is initiated at or after this time. If an attempt is
 # still open at this time, it is closed at the cutoff with exit_reason="TIME_EXIT".
 EXIT_TIME_IST = os.getenv("EXIT_TIME_IST", "15:30")  # "HH:MM"
-
-# Last time (IST) at/after which NO fresh entry or re-entry is initiated.
-# UNLIKE EXIT_TIME_IST (which also force-exits the open attempt at the cutoff),
-# this gate ONLY blocks NEW entries: a trade already open before this time
-# keeps running to its normal exit (STOPLOSS / PROFIT_TARGET / PROFIT_PROTECT /
-# TIME_EXIT / EOD). Data note: fresh entries in the final ~30 minutes were net
-# noise (Rs ~15/trade average) while positions held late retained a median 77%
-# of their peak -- so blocking late ENTRIES while letting open trades run is
-# the combination the data supports. Default 15:30 = no restriction.
-LAST_ENTRY_TIME_IST = os.getenv("LAST_ENTRY_TIME_IST", "15:30")  # "HH:MM"
 
 def _safe_fname_part(s: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in s)
@@ -176,8 +176,39 @@ def _fmt_pct_value(v: float) -> str:
 
 
 def _fmt_pct_list(lst) -> str:
-    """Format a list of decimal percentages for the output filename."""
+    """Format a percentage schedule for logs and human-readable output."""
     return "-".join(_fmt_pct_value(float(v)) for v in lst) if lst else "off"
+
+
+def _fmt_pct_list_compact(lst) -> str:
+    """
+    Format a percentage schedule compactly for a Windows-safe output filename.
+
+    Consecutive repeated values are run-length encoded to avoid excessively long
+    file paths. Examples:
+        [0.3755, 0.40]            -> "37.55-40"
+        [0.3755] * 8             -> "37.55x8"
+        [0.30, 0.30, 0.40, 0.40] -> "30x2-40x2"
+    """
+    if not lst:
+        return "off"
+
+    formatted = [
+        f"{float(v) * 100:.2f}".rstrip("0").rstrip(".")
+        for v in lst
+    ]
+    runs = []
+    current = formatted[0]
+    count = 1
+    for value in formatted[1:]:
+        if value == current:
+            count += 1
+        else:
+            runs.append(current if count == 1 else f"{current}x{count}")
+            current = value
+            count = 1
+    runs.append(current if count == 1 else f"{current}x{count}")
+    return "-".join(runs)
 
 
 def _parse_float_env(env_name: str, default_value: float) -> float:
@@ -218,39 +249,31 @@ def loss_limit_pct_for_attempt(attempt_idx: int) -> float:
 # --- Allowed days-to-expiry to trade: [0,1]=expiry day + day before; [0]=expiry only ---
 ALLOWED_DTE = _parse_int_list(os.getenv("ALLOWED_DTE"), [0])
 
-# --- Profit-protect threshold/giveback as % of premium collected on that attempt ---
-# Default: 30%.
+# --- Per-attempt PROFIT-PROTECT threshold/giveback -------------------------
+# Index 0 = original entry, index 1 = first re-entry, and so on.
+# Attempts beyond the supplied list reuse the LAST value. A value of 0 disables
+# profit-protect for that attempt only.
 #
-# Env examples:
-#     PROFIT_PROTECT_TRIGGER_RUPEES="30"
-#     PROFIT_PROTECT_TRIGGER_RUPEES="0.30"
+# The same rupee amount G is used to:
+#     1. arm profit-protect once peak P&L reaches G; and
+#     2. exit when current P&L falls to peak - G.
 #
-# Current logic uses the same rupee amount for:
-#     1. arming profit-protect once peak P&L reaches G
-#     2. exiting when current P&L falls to peak - G
-PROFIT_PROTECT_TRIGGER_RUPEES = _parse_pct_value(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", 0.254741))
+# Accepted property/environment formats:
+#     PROFIT_PROTECT_TRIGGER_RUPEES=0.30
+#     PROFIT_PROTECT_TRIGGER_RUPEES=0.30,0.35,0.40
+#     PROFIT_PROTECT_TRIGGER_RUPEES=30,35,40
+PROFIT_PROTECT_TRIGGER_RUPEES = _parse_pct_list(
+    os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES"),
+    [0.3755, 0.3755, 0.3755, 0.3755, 0.3755, 0.3755, 0.3755, 0.3755],
+)
 
-# --- Absolute rupee CAP on the %-based profit-protect trigger ---------------
-# Effective arming trigger G = min(PROFIT_PROTECT_% * premium, this cap).
-# Set 0 to disable the cap (pure % behaviour, as before).
-#
-# Why: with a pure percentage, G scales with the premium collected. On
-# high-premium days (rich IV / SENSEX) G reached ~Rs 37k in past results,
-# meaning the trade had to give back Rs 37k from its peak before locking
-# ANY profit -- and often never armed at all despite a Rs 15-18k peak.
-# Capping G bounds both the arming hurdle and the give-back in rupees,
-# exactly mirroring the stop-loss cap pattern used above.
-MAX_PROFIT_PROTECT_TRIGGER_RUPEES = _parse_float_env("MAX_PROFIT_PROTECT_TRIGGER_RUPEES", 0.0)
 
-# --- OPTIONAL decoupled trailing GIVE-BACK (rupees) --------------------------
-# By default a single number (G) does double duty:
-#     ARM   when peak P&L >= G
-#     EXIT  when P&L falls G below the peak (give-back == G)
-# Setting this > 0 keeps ARMING at G but uses THIS rupee amount as the
-# trailing give-back after arming. That lets you arm meaningfully (avoid
-# locking tiny wiggles) while retaining most of the peak once armed.
-# 0 = disabled (give-back = effective G, the original behaviour).
-PROFIT_PROTECT_GIVEBACK_RUPEES = _parse_float_env("PROFIT_PROTECT_GIVEBACK_RUPEES", 0.0)
+def profit_protect_pct_for_attempt(attempt_idx: int) -> float:
+    """Return the protect percentage for a zero-based attempt index."""
+    s = PROFIT_PROTECT_TRIGGER_RUPEES
+    if not s:
+        return 0.0
+    return float(s[attempt_idx]) if attempt_idx < len(s) else float(s[-1])
 
 # --- Absolute daily circuit breaker -------------------------------------------------
 # Once cumulative realized NET P&L for the current underlying/day reaches this
@@ -272,10 +295,28 @@ MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT = _parse_float_env("MAX_LOSS_LIMIT_RUPEES_BY_AT
 
 MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "10"))  # 1 = only one re-entry
 
-# --- Per-DAY profit target as a fraction of premium collected on the CURRENT attempt ---
-# When an attempt's profit reaches PROFIT_TARGET_PCT * (CE+PE)*qty, it exits at the
-# target and NO further trades are taken that day. 0 disables. e.g. 0.70 = 70%.
-PROFIT_TARGET_PCT = float(os.getenv("PROFIT_TARGET_PCT", 0.7))
+# --- Per-attempt PROFIT TARGET ---------------------------------------------
+# Index 0 = original entry, index 1 = first re-entry, and so on.
+# Attempts beyond the supplied list reuse the LAST value. When the ACTIVE
+# attempt reaches its target, the strategy exits and takes no further trade that
+# day. A value of 0 disables the target for that attempt only.
+#
+# Accepted property/environment formats:
+#     PROFIT_TARGET_PCT=0.80
+#     PROFIT_TARGET_PCT=0.80,0.75,0.70
+#     PROFIT_TARGET_PCT=80,75,70
+PROFIT_TARGET_PCT = _parse_pct_list(
+    os.getenv("PROFIT_TARGET_PCT"),
+    [0.8090, 0.8090, 0.8090, 0.8090, 0.8090, 0.8090, 0.8090, 0.8090],
+)
+
+
+def profit_target_pct_for_attempt(attempt_idx: int) -> float:
+    """Return the target percentage for a zero-based attempt index."""
+    s = PROFIT_TARGET_PCT
+    if not s:
+        return 0.0
+    return float(s[attempt_idx]) if attempt_idx < len(s) else float(s[-1])
 # --- Per-attempt RE-ENTRY GAP in minutes (index 0 = gap before 1st re-entry, 1 = before 2nd, ...) ---
 # Attempts beyond the list reuse the LAST value. Override via env comma list, e.g.
 # REENTRY_DELAY_BY_ATTEMPT="10,15,20".
@@ -294,18 +335,13 @@ _DEFAULT_OUT = os.path.join(
     _get_downloads_folder(),
     f"short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}"
     f"_exit{_safe_fname_part(EXIT_TIME_IST)}"
-    + (f"_LE_{_safe_fname_part(LAST_ENTRY_TIME_IST)}" if LAST_ENTRY_TIME_IST != "15:30" else "") +
     # f"_SLpct_{_safe_fname_part(_fmt_pct_list(LOSS_LIMIT_RUPEES_BY_ATTEMPT))}"
     # f"_DTE_{_safe_fname_part('-'.join(str(d) for d in ALLOWED_DTE))}"
-    f"_PPTpct_{_safe_fname_part(_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES))}"
-    + (f"_PPTcap_{_safe_fname_part(_fmt_rupee_value(MAX_PROFIT_PROTECT_TRIGGER_RUPEES))}"
-       if MAX_PROFIT_PROTECT_TRIGGER_RUPEES > 0 else "")
-    + (f"_PPTgb_{_safe_fname_part(_fmt_rupee_value(PROFIT_PROTECT_GIVEBACK_RUPEES))}"
-       if PROFIT_PROTECT_GIVEBACK_RUPEES > 0 else "") +
+    f"_PPTsched_{_safe_fname_part(_fmt_pct_list_compact(PROFIT_PROTECT_TRIGGER_RUPEES))}"
     f"_DailyMaxLoss_{_safe_fname_part(_fmt_rupee_value(MAX_DAILY_LOSS_RUPEES))}"
     f"_StopCap_{_safe_fname_part(_fmt_rupee_value(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT))}"
     f"_MR_{_safe_fname_part(str(MAX_REATTEMPTS))}"
-    # f"_PT_{_safe_fname_part(str(int(round(PROFIT_TARGET_PCT * 100))))}pct"
+    f"_PTsched_{_safe_fname_part(_fmt_pct_list_compact(PROFIT_TARGET_PCT))}"
     f"_RDM_{_safe_fname_part(_fmt_int_list(REENTRY_DELAY_BY_ATTEMPT))}.xlsx"
 )
 
@@ -366,31 +402,6 @@ ENTRY_TIME = parse_hhmm(ENTRY_TIME_IST)
 # Strategy cutoff time. The simulator will not initiate a new attempt at or
 # after this time, and the current attempt will not be monitored beyond it.
 EXIT_TIME = parse_hhmm(EXIT_TIME_IST)
-LAST_ENTRY_TIME = parse_hhmm(LAST_ENTRY_TIME_IST)   # fresh-entry gate only
-
-# ---------------------------------------------------------------------------
-# EFFECTIVE CONFIG DUMP
-# ---------------------------------------------------------------------------
-# Printed once at import so a mis-loaded/renamed property file (or an OS env
-# var silently overriding a key) is IMMEDIATELY visible at the top of every
-# run. If a value below is not what you set in the property file, check the
-# [CONFIG] line above for WHICH file was loaded, and your OS environment for
-# overriding variables (real env vars win over the file by design).
-print("[CONFIG] ---------- effective settings ----------")
-print(f"[CONFIG] ENTRY_TIME_IST                    = {ENTRY_TIME_IST}")
-print(f"[CONFIG] LAST_ENTRY_TIME_IST               = {LAST_ENTRY_TIME_IST}  (fresh-entry gate)")
-print(f"[CONFIG] EXIT_TIME_IST                     = {EXIT_TIME_IST}  (hard cutoff / TIME_EXIT)")
-print(f"[CONFIG] ALLOWED_DTE                       = {ALLOWED_DTE}")
-print(f"[CONFIG] LOSS_LIMIT_RUPEES_BY_ATTEMPT      = {LOSS_LIMIT_RUPEES_BY_ATTEMPT}")
-print(f"[CONFIG] MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT  = {MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT}")
-print(f"[CONFIG] PROFIT_PROTECT_TRIGGER (pct)      = {PROFIT_PROTECT_TRIGGER_RUPEES}")
-print(f"[CONFIG] MAX_PROFIT_PROTECT_TRIGGER_RUPEES = {MAX_PROFIT_PROTECT_TRIGGER_RUPEES}  (0 = cap off)")
-print(f"[CONFIG] PROFIT_PROTECT_GIVEBACK_RUPEES    = {PROFIT_PROTECT_GIVEBACK_RUPEES}  (0 = give-back = G)")
-print(f"[CONFIG] PROFIT_TARGET_PCT                 = {PROFIT_TARGET_PCT}")
-print(f"[CONFIG] MAX_DAILY_LOSS_RUPEES             = {MAX_DAILY_LOSS_RUPEES}")
-print(f"[CONFIG] MAX_REATTEMPTS                    = {MAX_REATTEMPTS}")
-print(f"[CONFIG] REENTRY_DELAY_BY_ATTEMPT          = {REENTRY_DELAY_BY_ATTEMPT}")
-print("[CONFIG] -----------------------------------------")
 
 def ist_tz():
     if ZoneInfo is not None:
@@ -400,34 +411,7 @@ def ist_tz():
     return "Asia/Kolkata"
 
 def ensure_ist(series_or_scalar) -> Any:
-    """Return the input as timezone-aware IST (Asia/Kolkata), nanosecond unit.
-
-    Robust to every datetime form seen in the option pickles:
-      * naive datetimes / strings  -> localized as IST wall-clock (legacy files)
-      * tz-aware ns                -> converted to IST
-      * tz-aware NON-ns units (e.g. datetime64[s, Asia/Kolkata] written by a
-        newer pandas)              -> converted through a UTC-ns numpy round
-        trip, which avoids the pandas code paths that break on exotic units.
-    """
     tz = ist_tz()
-    # -- Series path -----------------------------------------------------
-    if isinstance(series_or_scalar, pd.Series) and isinstance(
-            series_or_scalar.dtype, pd.DatetimeTZDtype):
-        s = series_or_scalar
-        try:
-            out = s.dt.tz_convert(tz)
-            if getattr(out.dtype, "unit", "ns") != "ns":
-                # Version-proof unit normalisation via UTC ns values.
-                vals = out.dt.tz_convert("UTC").to_numpy(dtype="datetime64[ns]")
-                out = pd.Series(pd.DatetimeIndex(vals, tz="UTC").tz_convert(tz),
-                                index=s.index, name=s.name)
-            return out
-        except Exception:
-            # Last-resort path: rebuild from python Timestamp objects, which
-            # sidesteps any dtype-unit handling entirely (no numpy needed).
-            idx = pd.DatetimeIndex(list(s.astype(object)))
-            idx = idx.tz_convert(tz) if idx.tz is not None else idx.tz_localize(tz)
-            return pd.Series(idx, index=s.index, name=s.name)
     dt = pd.to_datetime(series_or_scalar, errors="coerce")
     if isinstance(dt, pd.Series):
         if dt.dt.tz is None:
@@ -436,53 +420,6 @@ def ensure_ist(series_or_scalar) -> Any:
     if getattr(dt, "tzinfo", None) is None:
         return dt.tz_localize(tz)
     return dt.tz_convert(tz)
-
-
-def _canonicalize_datetimes(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise the datetime columns of a freshly-read option pickle to the
-    canonical dtypes the rest of this script assumes:
-        date   -> datetime64[ns, Asia/Kolkata]
-        expiry -> datetime64[ns] (naive)
-    Newer Dhan downloads (the *_Acompat files) store these with a SECONDS
-    unit (datetime64[s, ...]); several pandas versions mishandle non-ns units
-    in copy/setitem/unpickle paths, so we convert once, right after reading.
-    """
-    if "date" in df.columns:
-        df["date"] = ensure_ist(df["date"])
-    if "expiry" in df.columns:
-        exp = pd.to_datetime(df["expiry"], errors="coerce")
-        if isinstance(exp.dtype, pd.DatetimeTZDtype):
-            exp = exp.dt.tz_convert(ist_tz()).dt.tz_localize(None)
-        try:
-            exp = exp.astype("datetime64[ns]")
-        except Exception:
-            pass
-        df["expiry"] = exp
-    return df
-
-
-def _read_pickle_ist(path: str) -> pd.DataFrame:
-    """pd.read_pickle + datetime canonicalisation, with an ACTIONABLE error.
-
-    If the unpickle itself fails (typical cause: the file was written by a
-    DIFFERENT pandas version and contains a datetime64[s, tz] block that this
-    pandas cannot reconstruct), raise a message that names the fix instead of
-    the raw internals.
-    """
-    try:
-        df = pd.read_pickle(path)
-    except Exception as e:
-        raise RuntimeError(
-            f"could not unpickle {os.path.basename(path)} under pandas "
-            f"{pd.__version__} ({type(e).__name__}: {e}). The file was likely "
-            f"written by a different pandas version using a seconds-unit "
-            f"tz-aware datetime. Fix: upgrade pandas in THIS environment "
-            f"(pip install -U pandas), or run convert_pickles_to_ns.py once "
-            f"in the environment that created the pickles."
-        ) from e
-    if isinstance(df, pd.DataFrame):
-        df = _canonicalize_datetimes(df)
-    return df
 
 def normalize_underlying(name: str) -> Optional[str]:
     if not isinstance(name, str):
@@ -695,11 +632,10 @@ class TradeRow:
     uncapped_stop_rupees: float              # percentage-based stop before absolute cap
     stop_cap_rupees: float                   # configured absolute cap; <=0 means cap disabled
     stop_rupees: float                       # effective rupee stop after cap
-    profit_protect_trigger_pct: float         # profit-protect % of entry premium, decimal form; 0.30 = 30%
-    uncapped_profit_protect_rupees: float     # %-based trigger before the absolute cap
-    profit_protect_cap_rupees: float          # configured absolute cap; <=0 means cap disabled
-    profit_protect_trigger_rupees: float      # EFFECTIVE arming trigger G after the cap
-    profit_protect_giveback_rupees: float     # trailing give-back used after arming (== G unless decoupled)
+    profit_protect_trigger_pct: float         # protect % used for this attempt; 0.30 = 30%
+    profit_protect_trigger_rupees: float      # computed rupee protect trigger/giveback
+    profit_target_pct: float                  # target % used for this attempt; 0 disables
+    profit_target_rupees: float               # computed target rupees; 0 when disabled
     daily_realized_pnl_after_trade: float     # cumulative net P&L after this attempt
     daily_loss_limit_rupees: float            # configured daily loss circuit breaker
     daily_loss_limit_hit: bool                # True means no further trades for that day
@@ -715,7 +651,7 @@ def scan_pickles_pass1(pickle_paths: List[str]) -> Tuple[date, Dict[Tuple[str, d
 
     for p in pickle_paths:
         try:
-            df = _read_pickle_ist(p)
+            df = pd.read_pickle(p)
             if not isinstance(df, pd.DataFrame) or df.empty:
                 continue
 
@@ -842,37 +778,27 @@ def simulate_day_multi_trades(
     configured_exit_cutoff_ts = pd.Timestamp(datetime.combine(dy, EXIT_TIME), tz=ist_tz())
     trade_end_ts = min(session_end_ts, configured_exit_cutoff_ts)
 
-    # Fresh entries/re-entries are additionally gated by LAST_ENTRY_TIME_IST.
-    # The effective entry gate is the EARLIER of the two cutoffs; MONITORING of
-    # an open attempt still runs to trade_end_ts, so a position opened before
-    # the gate continues to its normal exit after it.
-    last_entry_ts = pd.Timestamp(datetime.combine(dy, LAST_ENTRY_TIME), tz=ist_tz())
-    entry_gate_ts = min(trade_end_ts, last_entry_ts)
-
     qty = int(QTY_UNITS[und])
     step = int(STRIKE_STEP[und])
 
-    # Profit-protect is now percentage-based, so the actual rupee value is not
-    # known until CE/PE entry prices are available for the current attempt.
-    profit_protect_pct = float(PROFIT_PROTECT_TRIGGER_RUPEES)
-    profit_protect_enabled = profit_protect_pct > 0.0
+    # Profit-protect and profit-target percentages are selected separately for
+    # every attempt after the attempt number and entry premium are known.
 
     cur_entry_ts = pd.Timestamp(datetime.combine(dy, ENTRY_TIME), tz=ist_tz())
     trade_seq = 1
 
-    # If the configured first entry itself is at/after the ENTRY GATE (the
-    # earlier of LAST_ENTRY_TIME_IST and EXIT_TIME_IST), the day is skipped
-    # cleanly: no fresh entry is allowed past the gate, and a trade needs at
-    # least one minute of monitoring before the hard cutoff anyway.
-    if cur_entry_ts >= entry_gate_ts:
+    # If the configured first entry itself is at/after EXIT_TIME_IST, the day
+    # is skipped cleanly. This is intentional: EXIT_TIME_IST is the hard strategy
+    # time filter, so a trade needs at least one minute of monitoring before it.
+    if cur_entry_ts >= trade_end_ts:
         skipped.append({
             "day": dy,
             "underlying": und,
             "expiry": expiry,
             "trade_seq": trade_seq,
             "reason": (
-                f"No entry: ENTRY_TIME_IST {ENTRY_TIME_IST} is at/after entry gate "
-                f"(LAST_ENTRY {LAST_ENTRY_TIME_IST} / EXIT {EXIT_TIME_IST})"
+                f"No entry: ENTRY_TIME_IST {ENTRY_TIME_IST} is at/after "
+                f"configured EXIT_TIME_IST {EXIT_TIME_IST}"
             ),
         })
         return results, skipped
@@ -882,7 +808,7 @@ def simulate_day_multi_trades(
     daily_realized_pnl = 0.0
     daily_loss_limit_enabled = MAX_DAILY_LOSS_RUPEES > 0
 
-    while cur_entry_ts < entry_gate_ts:
+    while cur_entry_ts < trade_end_ts:
         if daily_loss_limit_enabled and daily_realized_pnl <= -float(MAX_DAILY_LOSS_RUPEES):
             skipped.append({
                 "day": dy,
@@ -957,7 +883,14 @@ def simulate_day_multi_trades(
         # ---------------------------------------------------------------------
         entry_premium_sum = (float(ce_entry) + float(pe_entry)) * qty
 
-        loss_limit_pct = loss_limit_pct_for_attempt(trade_seq - 1)
+        # trade_seq is one-based in the report, while all configuration arrays
+        # are zero-based: trade_seq 1 -> index 0, trade_seq 2 -> index 1.
+        attempt_idx = trade_seq - 1
+        loss_limit_pct = loss_limit_pct_for_attempt(attempt_idx)
+        profit_protect_pct = profit_protect_pct_for_attempt(attempt_idx)
+        profit_target_pct = profit_target_pct_for_attempt(attempt_idx)
+        profit_protect_enabled = profit_protect_pct > 0.0
+
         uncapped_loss_limit_rupees = float(loss_limit_pct * entry_premium_sum)
 
         # Absolute cap on the percentage-based stop-loss.
@@ -969,23 +902,10 @@ def simulate_day_multi_trades(
         else:
             loss_limit_rupees = float(uncapped_loss_limit_rupees)
 
-        # G is the ARMING trigger of the profit-protect logic:
-        #   - profit-protect arms when peak P&L >= G
-        #   - after arming, it exits when P&L falls the GIVE-BACK below the peak
-        # Effective G = min(% of premium, absolute rupee cap), mirroring the
-        # stop-loss cap just above: on high-premium days the pure % made G huge
-        # (up to ~Rs 37k), forcing an equally huge give-back before locking
-        # profit -- or never arming at all.
-        uncapped_G = float(profit_protect_pct * entry_premium_sum)
-        protect_cap_rupees = float(MAX_PROFIT_PROTECT_TRIGGER_RUPEES)
-        if protect_cap_rupees > 0:
-            G = float(min(uncapped_G, protect_cap_rupees))
-        else:
-            G = uncapped_G
-
-        # Trailing give-back after arming: the decoupled rupee value if
-        # configured, else G itself (the original single-number behaviour).
-        giveback_rupees = float(PROFIT_PROTECT_GIVEBACK_RUPEES) if PROFIT_PROTECT_GIVEBACK_RUPEES > 0 else G
+        # G is calculated from THIS attempt's configured array element:
+        #   - profit-protect arms when peak P&L >= G; and
+        #   - exits when current P&L <= peak - G.
+        G = float(profit_protect_pct * entry_premium_sum)
 
         # Close-based PnL (same as before)
         pnl_close_all = (float(ce_entry) - ce_close) * qty + (float(pe_entry) - pe_close) * qty
@@ -1026,8 +946,8 @@ def simulate_day_multi_trades(
         protect_ts = None
         if profit_protect_enabled:
             peak = pnl.cummax()
-            armed = peak >= G                      # arm at the (capped) trigger
-            trail = peak - giveback_rupees         # exit on the give-back from the peak
+            armed = peak >= G
+            trail = peak - G
             protect_hit = armed & (pnl <= trail)
             protect_ts = pnl.index[protect_hit.to_numpy().argmax()] if protect_hit.any() else None
 
@@ -1036,8 +956,8 @@ def simulate_day_multi_trades(
         # taken for the day (PROFIT_TARGET is excluded from the re-entry rule below).
         target_ts = None
         target_rupees = None
-        if PROFIT_TARGET_PCT > 0.0:
-            target_rupees = PROFIT_TARGET_PCT * entry_premium_sum
+        if profit_target_pct > 0.0:
+            target_rupees = profit_target_pct * entry_premium_sum
             # best-case (favourable) intrabar profit: both legs bought back at their lows
             pnl_best_all = (float(ce_entry) - ce_low) * qty + (float(pe_entry) - pe_low) * qty
             pnl_tp = pd.concat([pnl_close_all, pnl_best_all], axis=1).max(axis=1)
@@ -1123,10 +1043,9 @@ def simulate_day_multi_trades(
                 stop_cap_rupees=float(stop_cap_rupees),
                 stop_rupees=float(loss_limit_rupees),
                 profit_protect_trigger_pct=float(profit_protect_pct),
-                uncapped_profit_protect_rupees=float(uncapped_G),
-                profit_protect_cap_rupees=float(protect_cap_rupees),
                 profit_protect_trigger_rupees=float(G),
-                profit_protect_giveback_rupees=float(giveback_rupees),
+                profit_target_pct=float(profit_target_pct),
+                profit_target_rupees=float(target_rupees) if target_rupees is not None else 0.0,
                 daily_realized_pnl_after_trade=float(daily_realized_pnl),
                 daily_loss_limit_rupees=float(MAX_DAILY_LOSS_RUPEES),
                 daily_loss_limit_hit=bool(daily_loss_limit_hit),
@@ -1152,10 +1071,10 @@ def simulate_day_multi_trades(
             trade_seq += 1
             cur_entry_ts = pd.Timestamp(exit_ts) + pd.Timedelta(minutes=delay_min)
 
-            # Do not initiate any further trade at or after the ENTRY GATE (the
-            # earlier of LAST_ENTRY_TIME_IST and EXIT_TIME_IST). An attempt that
-            # is already open before the gate still runs to trade_end_ts.
-            if cur_entry_ts >= entry_gate_ts:
+            # Do not initiate any further trade at or after EXIT_TIME_IST.
+            # Because trade_end_ts is also the monitoring end, this keeps the
+            # output strictly filtered by EXIT_TIME_IST.
+            if cur_entry_ts >= trade_end_ts:
                 skipped.append({
                     "day": dy,
                     "underlying": und,
@@ -1163,7 +1082,7 @@ def simulate_day_multi_trades(
                     "trade_seq": trade_seq,
                     "reason": (
                         f"No re-entry: next entry time {pd.Timestamp(cur_entry_ts).strftime('%H:%M')} "
-                        f"is at/after entry gate (LAST_ENTRY {LAST_ENTRY_TIME_IST} / EXIT {EXIT_TIME_IST})"
+                        f"is at/after configured EXIT_TIME_IST {EXIT_TIME_IST}"
                     ),
                 })
                 break
@@ -1193,7 +1112,7 @@ def process_pickles_generate_trades(
 
     for p in pickle_paths:
         try:
-            df = _read_pickle_ist(p)
+            df = pd.read_pickle(p)
             if not isinstance(df, pd.DataFrame) or df.empty:
                 continue
 
@@ -1564,17 +1483,24 @@ def main():
     print(f"[INFO] Stoploss %/attempt: {_fmt_pct_list(LOSS_LIMIT_RUPEES_BY_ATTEMPT)} | "
           f"Per-attempt stop cap: Rs {_fmt_rupee_value(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT)} | "
           f"Daily max loss: Rs {_fmt_rupee_value(MAX_DAILY_LOSS_RUPEES)} | "
-          f"ProfitProtect trigger/giveback %: {_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES)} | "
           f"Re-entry delay min/attempt: {REENTRY_DELAY_BY_ATTEMPT} | Allowed DTE: {ALLOWED_DTE}")
-    print(f"[INFO] Entry time: {ENTRY_TIME_IST} | Strategy exit/filter cutoff: {EXIT_TIME_IST}")
-    print(f"[INFO] Last fresh-entry time: {LAST_ENTRY_TIME_IST} "
-          f"(open trades continue to their normal exits after this)")
-    print(f"[INFO] Profit-protect cap: Rs {MAX_PROFIT_PROTECT_TRIGGER_RUPEES:,.0f} "
-          f"(effective G = min(pct*premium, cap); 0 = no cap)")
-    _gb = PROFIT_PROTECT_GIVEBACK_RUPEES
-    print(f"[INFO] Profit-protect give-back: "
-          + (f"Rs {_gb:,.0f} (decoupled from arming trigger)" if _gb > 0 else "= G (coupled, original behaviour)"))
-    print(f"[INFO] Day profit target: {PROFIT_TARGET_PCT:.0%} of premium (0 = disabled)")
+    print(f"[INFO] ProfitProtect %/attempt: {_fmt_pct_list(PROFIT_PROTECT_TRIGGER_RUPEES)}")
+    print(f"[INFO] ProfitTarget %/attempt: {_fmt_pct_list(PROFIT_TARGET_PCT)} (0 = disabled per attempt)")
+    print(f"[INFO] Entry time: {ENTRY_TIME_IST} | Forced strategy square-off: {EXIT_TIME_IST}")
+
+    total_attempts = MAX_REATTEMPTS + 1
+    print("[INFO] Effective attempt-wise configuration:")
+    for attempt_idx in range(total_attempts):
+        print(
+            f"       attempt {attempt_idx + 1}: "
+            f"SL={loss_limit_pct_for_attempt(attempt_idx):.2%}, "
+            f"protect={profit_protect_pct_for_attempt(attempt_idx):.2%}, "
+            f"target={profit_target_pct_for_attempt(attempt_idx):.2%}"
+            + (
+                f", re-entry delay after exit={reentry_delay_for_attempt(attempt_idx)} min"
+                if attempt_idx < MAX_REATTEMPTS else ""
+            )
+        )
     print(f"[INFO] Tradeables: {sorted(TRADEABLE)}")
     print(f"[INFO] Output: {OUTPUT_XLSX}")
 
