@@ -1,6 +1,18 @@
+"""Run NIFTY and SENSEX straddle backtests with independent configurations.
+
+The coordinator starts one isolated worker process per properties file.  That
+isolation is important because the strategy settings are module-level values:
+each worker can safely load a different entry time, stop schedule, target, and
+re-entry schedule.  Workers return their raw tables to the coordinator, which
+recomputes every combined summary and writes one Excel workbook.
+"""
+
 import os
 from pathlib import Path
 import glob
+import subprocess
+import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, date, time as dtime, timedelta
@@ -9,16 +21,6 @@ from typing import Dict, List, Tuple, Optional, Any
 import pandas as pd
 
 import Trading_2024.OptionTradeUtils as oUtils
-
-# =============================================================================
-# ATTEMPT-WISE PROFIT CONFIGURATION
-# -----------------------------------------------------------------------------
-# PROFIT_PROTECT_TRIGGER_RUPEES and PROFIT_TARGET_PCT are comma-separated
-# percentage schedules. Index 0 applies to the original entry, index 1 to the
-# first re-entry, etc. If a schedule is shorter than the number of possible
-# attempts, its final value is reused. A scalar remains valid and is therefore
-# backward compatible.
-# =============================================================================
 
 try:
     from zoneinfo import ZoneInfo  # py3.9+
@@ -42,20 +44,28 @@ except Exception:
 # ---------------------------------------------------------------------------
 # CONFIGURATION SOURCE: external property file
 # ---------------------------------------------------------------------------
-# Every tunable setting lives in a simple KEY=VALUE property file so it can be
-# changed WITHOUT editing this script. Path defaults to
-# "straddle_config.properties" next to this file; override with the
-# STRADDLE_CONFIG environment variable. Values are pushed into the process
-# environment so all the os.getenv(...) reads below pick them up. A real
-# environment variable that is already set takes precedence over the file.
+# Every worker loads one KEY=VALUE property file.  The coordinator itself does
+# not load a strategy property file; this prevents one underlying's values from
+# leaking into the other worker through inherited environment variables.
+WORKER_DIR_ENV = "STRADDLE_WORKER_DIR"
+CONFIG_FILES_ENV = "STRADDLE_CONFIG_FILES"
+
+
+def _is_worker_process() -> bool:
+    """Return True only for a subprocess launched by the coordinator."""
+    return bool(os.getenv(WORKER_DIR_ENV, "").strip())
+
+
 def _load_property_file() -> str:
-    cfg_path = os.getenv(
-        "STRADDLE_CONFIG",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "straddle_config_advanced.properties"),
-    )
+    # Only workers should import property values into their environment.
+    if not _is_worker_process():
+        return ""
+
+    cfg_path = os.getenv("STRADDLE_CONFIG", "").strip()
+    if not cfg_path:
+        raise ValueError("A worker requires STRADDLE_CONFIG to name its properties file.")
     if not os.path.exists(cfg_path):
-        print(f"[CONFIG] Property file not found at {cfg_path}; using built-in defaults.")
-        return cfg_path
+        raise FileNotFoundError(f"Worker property file not found: {cfg_path}")
     loaded = 0
     with open(cfg_path, "r", encoding="utf-8") as fh:
         for raw in fh:
@@ -176,39 +186,8 @@ def _fmt_pct_value(v: float) -> str:
 
 
 def _fmt_pct_list(lst) -> str:
-    """Format a percentage schedule for logs and human-readable output."""
+    """Format a list of decimal percentages for the output filename."""
     return "-".join(_fmt_pct_value(float(v)) for v in lst) if lst else "off"
-
-
-def _fmt_pct_list_compact(lst) -> str:
-    """
-    Format a percentage schedule compactly for a Windows-safe output filename.
-
-    Consecutive repeated values are run-length encoded to avoid excessively long
-    file paths. Examples:
-        [0.3755, 0.40]            -> "37.55-40"
-        [0.3755] * 8             -> "37.55x8"
-        [0.30, 0.30, 0.40, 0.40] -> "30x2-40x2"
-    """
-    if not lst:
-        return "off"
-
-    formatted = [
-        f"{float(v) * 100:.2f}".rstrip("0").rstrip(".")
-        for v in lst
-    ]
-    runs = []
-    current = formatted[0]
-    count = 1
-    for value in formatted[1:]:
-        if value == current:
-            count += 1
-        else:
-            runs.append(current if count == 1 else f"{current}x{count}")
-            current = value
-            count = 1
-    runs.append(current if count == 1 else f"{current}x{count}")
-    return "-".join(runs)
 
 
 def _parse_float_env(env_name: str, default_value: float) -> float:
@@ -249,31 +228,17 @@ def loss_limit_pct_for_attempt(attempt_idx: int) -> float:
 # --- Allowed days-to-expiry to trade: [0,1]=expiry day + day before; [0]=expiry only ---
 ALLOWED_DTE = _parse_int_list(os.getenv("ALLOWED_DTE"), [0])
 
-# --- Per-attempt PROFIT-PROTECT threshold/giveback -------------------------
-# Index 0 = original entry, index 1 = first re-entry, and so on.
-# Attempts beyond the supplied list reuse the LAST value. A value of 0 disables
-# profit-protect for that attempt only.
+# --- Profit-protect threshold/giveback as % of premium collected on that attempt ---
+# Default: 30%.
 #
-# The same rupee amount G is used to:
-#     1. arm profit-protect once peak P&L reaches G; and
-#     2. exit when current P&L falls to peak - G.
+# Env examples:
+#     PROFIT_PROTECT_TRIGGER_RUPEES="30"
+#     PROFIT_PROTECT_TRIGGER_RUPEES="0.30"
 #
-# Accepted property/environment formats:
-#     PROFIT_PROTECT_TRIGGER_RUPEES=0.30
-#     PROFIT_PROTECT_TRIGGER_RUPEES=0.30,0.35,0.40
-#     PROFIT_PROTECT_TRIGGER_RUPEES=30,35,40
-PROFIT_PROTECT_TRIGGER_RUPEES = _parse_pct_list(
-    os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES"),
-    [0.3755, 0.3755, 0.3755, 0.3755, 0.3755, 0.3755, 0.3755, 0.3755],
-)
-
-
-def profit_protect_pct_for_attempt(attempt_idx: int) -> float:
-    """Return the protect percentage for a zero-based attempt index."""
-    s = PROFIT_PROTECT_TRIGGER_RUPEES
-    if not s:
-        return 0.0
-    return float(s[attempt_idx]) if attempt_idx < len(s) else float(s[-1])
+# Current logic uses the same rupee amount for:
+#     1. arming profit-protect once peak P&L reaches G
+#     2. exiting when current P&L falls to peak - G
+PROFIT_PROTECT_TRIGGER_RUPEES = _parse_pct_value(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", 0.254741))
 
 # --- Absolute daily circuit breaker -------------------------------------------------
 # Once cumulative realized NET P&L for the current underlying/day reaches this
@@ -295,28 +260,10 @@ MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT = _parse_float_env("MAX_LOSS_LIMIT_RUPEES_BY_AT
 
 MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "10"))  # 1 = only one re-entry
 
-# --- Per-attempt PROFIT TARGET ---------------------------------------------
-# Index 0 = original entry, index 1 = first re-entry, and so on.
-# Attempts beyond the supplied list reuse the LAST value. When the ACTIVE
-# attempt reaches its target, the strategy exits and takes no further trade that
-# day. A value of 0 disables the target for that attempt only.
-#
-# Accepted property/environment formats:
-#     PROFIT_TARGET_PCT=0.80
-#     PROFIT_TARGET_PCT=0.80,0.75,0.70
-#     PROFIT_TARGET_PCT=80,75,70
-PROFIT_TARGET_PCT = _parse_pct_list(
-    os.getenv("PROFIT_TARGET_PCT"),
-    [0.8090, 0.8090, 0.8090, 0.8090, 0.8090, 0.8090, 0.8090, 0.8090],
-)
-
-
-def profit_target_pct_for_attempt(attempt_idx: int) -> float:
-    """Return the target percentage for a zero-based attempt index."""
-    s = PROFIT_TARGET_PCT
-    if not s:
-        return 0.0
-    return float(s[attempt_idx]) if attempt_idx < len(s) else float(s[-1])
+# --- Per-DAY profit target as a fraction of premium collected on the CURRENT attempt ---
+# When an attempt's profit reaches PROFIT_TARGET_PCT * (CE+PE)*qty, it exits at the
+# target and NO further trades are taken that day. 0 disables. e.g. 0.70 = 70%.
+PROFIT_TARGET_PCT = float(os.getenv("PROFIT_TARGET_PCT", 0.7))
 # --- Per-attempt RE-ENTRY GAP in minutes (index 0 = gap before 1st re-entry, 1 = before 2nd, ...) ---
 # Attempts beyond the list reuse the LAST value. Override via env comma list, e.g.
 # REENTRY_DELAY_BY_ATTEMPT="10,15,20".
@@ -337,15 +284,21 @@ _DEFAULT_OUT = os.path.join(
     f"_exit{_safe_fname_part(EXIT_TIME_IST)}"
     # f"_SLpct_{_safe_fname_part(_fmt_pct_list(LOSS_LIMIT_RUPEES_BY_ATTEMPT))}"
     # f"_DTE_{_safe_fname_part('-'.join(str(d) for d in ALLOWED_DTE))}"
-    f"_PPTsched_{_safe_fname_part(_fmt_pct_list_compact(PROFIT_PROTECT_TRIGGER_RUPEES))}"
+    f"_PPTpct_{_safe_fname_part(_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES))}"
     f"_DailyMaxLoss_{_safe_fname_part(_fmt_rupee_value(MAX_DAILY_LOSS_RUPEES))}"
     f"_StopCap_{_safe_fname_part(_fmt_rupee_value(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT))}"
     f"_MR_{_safe_fname_part(str(MAX_REATTEMPTS))}"
-    f"_PTsched_{_safe_fname_part(_fmt_pct_list_compact(PROFIT_TARGET_PCT))}"
+    # f"_PT_{_safe_fname_part(str(int(round(PROFIT_TARGET_PCT * 100))))}pct"
     f"_RDM_{_safe_fname_part(_fmt_int_list(REENTRY_DELAY_BY_ATTEMPT))}.xlsx"
 )
 
-OUTPUT_XLSX = os.getenv("OUTPUT_XLSX", _DEFAULT_OUT)
+# OUTPUT_XLSX in an individual strategy file is intentionally ignored by the
+# coordinator.  Use COMBINED_OUTPUT_XLSX once to choose the final common file.
+_DEFAULT_COMBINED_OUT = os.path.join(
+    _get_downloads_folder(),
+    "short_straddle_NIFTY_SENSEX_multi_config.xlsx",
+)
+OUTPUT_XLSX = os.getenv("COMBINED_OUTPUT_XLSX", _DEFAULT_COMBINED_OUT)
 
 FAIL_ON_PICKLE_ERROR = os.getenv("FAIL_ON_PICKLE_ERROR", "0").strip() == "1"
 
@@ -363,7 +316,16 @@ else:
     LOOKBACK_MONTHS = int(float(LOOKBACK_MONTHS_RAW))
 
 QTY_UNITS = {"NIFTY": 325, "SENSEX": 100}
-TRADEABLE = set(QTY_UNITS.keys())
+# Each worker receives exactly one target from its own property file.  Keeping
+# the all-underlyings fallback is useful when importing helpers interactively,
+# but coordinator-launched workers validate that TARGET_UNDERLYING is present.
+TARGET_UNDERLYING = os.getenv("TARGET_UNDERLYING", "").strip().upper()
+if TARGET_UNDERLYING and TARGET_UNDERLYING not in QTY_UNITS:
+    raise ValueError(
+        f"Unsupported TARGET_UNDERLYING={TARGET_UNDERLYING!r}; "
+        f"expected one of {sorted(QTY_UNITS)}"
+    )
+TRADEABLE = {TARGET_UNDERLYING} if TARGET_UNDERLYING else set(QTY_UNITS.keys())
 
 STRIKE_STEP = {"NIFTY": 50, "SENSEX": 100}
 
@@ -632,10 +594,8 @@ class TradeRow:
     uncapped_stop_rupees: float              # percentage-based stop before absolute cap
     stop_cap_rupees: float                   # configured absolute cap; <=0 means cap disabled
     stop_rupees: float                       # effective rupee stop after cap
-    profit_protect_trigger_pct: float         # protect % used for this attempt; 0.30 = 30%
-    profit_protect_trigger_rupees: float      # computed rupee protect trigger/giveback
-    profit_target_pct: float                  # target % used for this attempt; 0 disables
-    profit_target_rupees: float               # computed target rupees; 0 when disabled
+    profit_protect_trigger_pct: float         # profit-protect % of entry premium, decimal form; 0.30 = 30%
+    profit_protect_trigger_rupees: float      # computed rupee profit-protect trigger/giveback
     daily_realized_pnl_after_trade: float     # cumulative net P&L after this attempt
     daily_loss_limit_rupees: float            # configured daily loss circuit breaker
     daily_loss_limit_hit: bool                # True means no further trades for that day
@@ -709,7 +669,10 @@ def download_underlyings(kite, day_start: date, day_end: date) -> Dict[str, pd.D
     to_dt = datetime.combine(day_end, SESSION_END_IST)
 
     out: Dict[str, pd.DataFrame] = {}
+    # Download only the underlying requested by this worker/configuration.
     for und, meta in UNDERLYING_KITE.items():
+        if und not in TRADEABLE:
+            continue
         token = get_instrument_token(kite, meta["exchange"], meta["tradingsymbol"], cache)
         rows = fetch_history_minute(kite, token, from_dt, to_dt, label=f"{meta['exchange']}:{meta['tradingsymbol']}")
         df = rows_to_df(rows)
@@ -781,8 +744,10 @@ def simulate_day_multi_trades(
     qty = int(QTY_UNITS[und])
     step = int(STRIKE_STEP[und])
 
-    # Profit-protect and profit-target percentages are selected separately for
-    # every attempt after the attempt number and entry premium are known.
+    # Profit-protect is now percentage-based, so the actual rupee value is not
+    # known until CE/PE entry prices are available for the current attempt.
+    profit_protect_pct = float(PROFIT_PROTECT_TRIGGER_RUPEES)
+    profit_protect_enabled = profit_protect_pct > 0.0
 
     cur_entry_ts = pd.Timestamp(datetime.combine(dy, ENTRY_TIME), tz=ist_tz())
     trade_seq = 1
@@ -883,14 +848,7 @@ def simulate_day_multi_trades(
         # ---------------------------------------------------------------------
         entry_premium_sum = (float(ce_entry) + float(pe_entry)) * qty
 
-        # trade_seq is one-based in the report, while all configuration arrays
-        # are zero-based: trade_seq 1 -> index 0, trade_seq 2 -> index 1.
-        attempt_idx = trade_seq - 1
-        loss_limit_pct = loss_limit_pct_for_attempt(attempt_idx)
-        profit_protect_pct = profit_protect_pct_for_attempt(attempt_idx)
-        profit_target_pct = profit_target_pct_for_attempt(attempt_idx)
-        profit_protect_enabled = profit_protect_pct > 0.0
-
+        loss_limit_pct = loss_limit_pct_for_attempt(trade_seq - 1)
         uncapped_loss_limit_rupees = float(loss_limit_pct * entry_premium_sum)
 
         # Absolute cap on the percentage-based stop-loss.
@@ -902,9 +860,9 @@ def simulate_day_multi_trades(
         else:
             loss_limit_rupees = float(uncapped_loss_limit_rupees)
 
-        # G is calculated from THIS attempt's configured array element:
-        #   - profit-protect arms when peak P&L >= G; and
-        #   - exits when current P&L <= peak - G.
+        # G is the same variable used by the existing profit-protect logic:
+        #   - profit-protect arms when peak P&L >= G
+        #   - profit-protect exits when current P&L <= peak - G
         G = float(profit_protect_pct * entry_premium_sum)
 
         # Close-based PnL (same as before)
@@ -956,8 +914,8 @@ def simulate_day_multi_trades(
         # taken for the day (PROFIT_TARGET is excluded from the re-entry rule below).
         target_ts = None
         target_rupees = None
-        if profit_target_pct > 0.0:
-            target_rupees = profit_target_pct * entry_premium_sum
+        if PROFIT_TARGET_PCT > 0.0:
+            target_rupees = PROFIT_TARGET_PCT * entry_premium_sum
             # best-case (favourable) intrabar profit: both legs bought back at their lows
             pnl_best_all = (float(ce_entry) - ce_low) * qty + (float(pe_entry) - pe_low) * qty
             pnl_tp = pd.concat([pnl_close_all, pnl_best_all], axis=1).max(axis=1)
@@ -1044,8 +1002,6 @@ def simulate_day_multi_trades(
                 stop_rupees=float(loss_limit_rupees),
                 profit_protect_trigger_pct=float(profit_protect_pct),
                 profit_protect_trigger_rupees=float(G),
-                profit_target_pct=float(profit_target_pct),
-                profit_target_rupees=float(target_rupees) if target_rupees is not None else 0.0,
                 daily_realized_pnl_after_trade=float(daily_realized_pnl),
                 daily_loss_limit_rupees=float(MAX_DAILY_LOSS_RUPEES),
                 daily_loss_limit_hit=bool(daily_loss_limit_hit),
@@ -1464,13 +1420,28 @@ def write_excel(all_trades_df: pd.DataFrame, actual_trades_df: pd.DataFrame, ski
 
 
 # =============================================================================
-# MAIN
+# SINGLE-CONFIG WORKER AND MULTI-CONFIG COORDINATOR
 # =============================================================================
-def main():
+def _run_single_config_worker() -> None:
+    """Run the original strategy once using the worker's property file.
+
+    The three raw DataFrames are serialized for the coordinator.  Excel is not
+    written here because summaries such as monthly totals must be recomputed
+    after NIFTY and SENSEX rows have been combined.
+    """
+    if not TARGET_UNDERLYING:
+        raise ValueError("TARGET_UNDERLYING is required in every properties file.")
+
+    worker_dir = os.getenv(WORKER_DIR_ENV, "").strip()
+    if not worker_dir:
+        raise ValueError(f"{WORKER_DIR_ENV} is required in worker mode.")
+
     paths = sorted(glob.glob(os.path.join(PICKLES_DIR, "*.pkl")) + glob.glob(os.path.join(PICKLES_DIR, "*.pickle")))
     if not paths:
         raise FileNotFoundError(f"No .pkl/.pickle files found in: {PICKLES_DIR}")
 
+    print(f"[INFO] Worker target: {TARGET_UNDERLYING}")
+    print(f"[INFO] Worker config: {PROPERTY_FILE_PATH}")
     print(f"[INFO] Pickles found: {len(paths)}")
 
     end_day, min_expiry_map, min_day_seen = scan_pickles_pass1(paths)
@@ -1483,27 +1454,11 @@ def main():
     print(f"[INFO] Stoploss %/attempt: {_fmt_pct_list(LOSS_LIMIT_RUPEES_BY_ATTEMPT)} | "
           f"Per-attempt stop cap: Rs {_fmt_rupee_value(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT)} | "
           f"Daily max loss: Rs {_fmt_rupee_value(MAX_DAILY_LOSS_RUPEES)} | "
+          f"ProfitProtect trigger/giveback %: {_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES)} | "
           f"Re-entry delay min/attempt: {REENTRY_DELAY_BY_ATTEMPT} | Allowed DTE: {ALLOWED_DTE}")
-    print(f"[INFO] ProfitProtect %/attempt: {_fmt_pct_list(PROFIT_PROTECT_TRIGGER_RUPEES)}")
-    print(f"[INFO] ProfitTarget %/attempt: {_fmt_pct_list(PROFIT_TARGET_PCT)} (0 = disabled per attempt)")
-    print(f"[INFO] Entry time: {ENTRY_TIME_IST} | Forced strategy square-off: {EXIT_TIME_IST}")
-
-    total_attempts = MAX_REATTEMPTS + 1
-    print("[INFO] Effective attempt-wise configuration:")
-    for attempt_idx in range(total_attempts):
-        print(
-            f"       attempt {attempt_idx + 1}: "
-            f"SL={loss_limit_pct_for_attempt(attempt_idx):.2%}, "
-            f"protect={profit_protect_pct_for_attempt(attempt_idx):.2%}, "
-            f"target={profit_target_pct_for_attempt(attempt_idx):.2%}"
-            + (
-                f", re-entry delay after exit={reentry_delay_for_attempt(attempt_idx)} min"
-                if attempt_idx < MAX_REATTEMPTS else ""
-            )
-        )
+    print(f"[INFO] Entry time: {ENTRY_TIME_IST} | Strategy exit/filter cutoff: {EXIT_TIME_IST}")
+    print(f"[INFO] Day profit target: {PROFIT_TARGET_PCT:.0%} of premium (0 = disabled)")
     print(f"[INFO] Tradeables: {sorted(TRADEABLE)}")
-    print(f"[INFO] Output: {OUTPUT_XLSX}")
-
     print("[STEP] Initializing Kite ...")
     kite = oUtils.intialize_kite_api()
     print("[OK] Kite ready.")
@@ -1516,12 +1471,149 @@ def main():
 
     actual_trades_df = build_actual_trades_df(all_trades_df, min_expiry_map)
 
-    write_excel(all_trades_df, actual_trades_df, skipped_df)
+    # Use pandas pickle serialization to preserve date/time and nullable dtypes.
+    os.makedirs(worker_dir, exist_ok=True)
+    all_trades_df.to_pickle(os.path.join(worker_dir, "all_trades.pkl"))
+    actual_trades_df.to_pickle(os.path.join(worker_dir, "actual_trades.pkl"))
+    skipped_df.to_pickle(os.path.join(worker_dir, "skipped.pkl"))
 
     if not all_trades_df.empty:
         print(all_trades_df.groupby("underlying")[["exit_pnl"]].describe())
     else:
         print("[WARN] No completed trades. Check 'skipped' sheet for reasons.")
+
+
+def _read_property_values(path: str) -> Dict[str, str]:
+    """Read a property file without mutating the coordinator environment."""
+    values: Dict[str, str] = {}
+    with open(path, "r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#") or line.startswith(";") or "=" not in line:
+                continue
+            key, value = (part.strip() for part in line.split("=", 1))
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            if key:
+                values[key] = value
+    return values
+
+
+def _configured_property_files() -> List[str]:
+    """Return the coordinator's property files in deterministic order.
+
+    By default the two newly supplied files next to this script are used.
+    STRADDLE_CONFIG_FILES may override them with an os.pathsep-separated list
+    (semicolon-separated on Windows).
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    raw = os.getenv(CONFIG_FILES_ENV, "").strip()
+    names = (
+        [item.strip() for item in raw.split(os.pathsep) if item.strip()]
+        if raw
+        else ["straddle_config_nifty.properties", "straddle_config_sensex.properties"]
+    )
+
+    paths: List[str] = []
+    for name in names:
+        path = name if os.path.isabs(name) else os.path.join(script_dir, name)
+        path = os.path.abspath(path)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Configured property file not found: {path}")
+        paths.append(path)
+    return paths
+
+
+def _load_worker_result(worker_dir: str, filename: str) -> pd.DataFrame:
+    """Load one worker result and fail clearly if the worker produced none."""
+    path = os.path.join(worker_dir, filename)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Worker result missing: {path}")
+    result = pd.read_pickle(path)
+    if not isinstance(result, pd.DataFrame):
+        raise TypeError(f"Worker result is not a DataFrame: {path}")
+    return result
+
+
+def _concat_frames(frames: List[pd.DataFrame], sort_columns: List[str]) -> pd.DataFrame:
+    """Concatenate worker frames and apply stable sorting when possible."""
+    nonempty = [frame for frame in frames if frame is not None and not frame.empty]
+    if not nonempty:
+        # Preserve a worker's empty schema where one is available.
+        return frames[0].copy() if frames else pd.DataFrame()
+    combined = pd.concat(nonempty, ignore_index=True, sort=False)
+    usable_sort_columns = [column for column in sort_columns if column in combined.columns]
+    if usable_sort_columns:
+        combined = combined.sort_values(usable_sort_columns, kind="stable", na_position="last")
+        combined = combined.reset_index(drop=True)
+    return combined
+
+
+def _run_multi_config_coordinator() -> None:
+    """Run every requested properties file and write one combined workbook."""
+    config_paths = _configured_property_files()
+
+    # Validate the target labels before starting expensive API/data work.
+    targets: List[str] = []
+    for path in config_paths:
+        target = _read_property_values(path).get("TARGET_UNDERLYING", "").strip().upper()
+        if target not in QTY_UNITS:
+            raise ValueError(
+                f"{path} must contain TARGET_UNDERLYING=NIFTY or TARGET_UNDERLYING=SENSEX"
+            )
+        targets.append(target)
+
+    if len(set(targets)) != len(targets):
+        raise ValueError(f"Each properties file must target a different underlying; got {targets}")
+    if set(targets) != set(QTY_UNITS):
+        raise ValueError(
+            f"This combined run requires one NIFTY and one SENSEX config; got {targets}"
+        )
+
+    all_frames: List[pd.DataFrame] = []
+    actual_frames: List[pd.DataFrame] = []
+    skipped_frames: List[pd.DataFrame] = []
+
+    # Temporary worker payloads are deleted automatically after Excel is built.
+    with tempfile.TemporaryDirectory(prefix="straddle_multi_config_") as temp_root:
+        for index, (config_path, target) in enumerate(zip(config_paths, targets), start=1):
+            worker_dir = os.path.join(temp_root, f"{index:02d}_{target.lower()}")
+            os.makedirs(worker_dir, exist_ok=True)
+
+            worker_env = os.environ.copy()
+            worker_env["STRADDLE_CONFIG"] = config_path
+            worker_env[WORKER_DIR_ENV] = worker_dir
+
+            print(f"[COORDINATOR] Running {target} with {config_path}")
+            subprocess.run(
+                [sys.executable, os.path.abspath(__file__)],
+                env=worker_env,
+                check=True,
+            )
+
+            all_frames.append(_load_worker_result(worker_dir, "all_trades.pkl"))
+            actual_frames.append(_load_worker_result(worker_dir, "actual_trades.pkl"))
+            skipped_frames.append(_load_worker_result(worker_dir, "skipped.pkl"))
+
+    all_trades_df = _concat_frames(all_frames, ["day", "underlying", "trade_seq"])
+    actual_trades_df = _concat_frames(actual_frames, ["day", "underlying", "trade_seq"])
+    skipped_df = _concat_frames(skipped_frames, ["day", "underlying"])
+
+    print(f"[COORDINATOR] Building common workbook for {', '.join(sorted(targets))}")
+    write_excel(all_trades_df, actual_trades_df, skipped_df)
+
+    if not all_trades_df.empty:
+        print(all_trades_df.groupby("underlying")[["exit_pnl"]].describe())
+    else:
+        print("[WARN] No completed trades from either worker. Check the 'skipped' sheet.")
+
+
+def main() -> None:
+    """Dispatch to worker mode or the normal two-config coordinator mode."""
+    if _is_worker_process():
+        _run_single_config_worker()
+    else:
+        _run_multi_config_coordinator()
 
 
 if __name__ == "__main__":

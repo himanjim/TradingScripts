@@ -1,6 +1,6 @@
 """
-ATM short-straddle backtester + robustness optimizer (NIFTY / SENSEX, DTE=0/1).
-================================================================================
+Underlying-specific ATM short-straddle backtester + robustness optimizer.
+============================================================================
 
 This file does two things, selected by the RUN_MODE setting in the RUN CONTROL
 block at the top (no command line -- just edit and press Run in PyCharm):
@@ -10,16 +10,23 @@ block at the top (no command line -- just edit and press Run in PyCharm):
      multi-sheet Excel report. Identical to the original workflow.
 
   2. ROBUSTNESS OPTIMIZER -> RUN_MODE = "optimize"
-     Searches the strategy parameters with Optuna (TPE), maximizing the selected
-     objective. PROFIT_PROTECT_TRIGGER_RUPEES and PROFIT_TARGET_PCT are optimized
-     as independent PER-ATTEMPT arrays, so attempt 1, attempt 2, and later
-     re-entries can use different percentages. Option data is loaded ONCE and
-     re-simulated per trial. EVERY tested config and result is flushed to CSV.
+     Searches the six tunables with Optuna (TPE), maximizing ROBUSTNESS = the
+     total net profit (profit only) for exactly one TARGET_UNDERLYING. Loads the
+     selected index's option data ONCE and re-simulates per trial. EVERY
+     tested config + its results is saved to a CSV in OPT_OUTPUT_DIR (flushed per
+     trial, so an interrupted run keeps everything). Set OPT_SAVE_DB = True to
+     also persist a resumable Optuna SQLite study.
+
+Select the instrument in RUN CONTROL:
+     TARGET_UNDERLYING = "NIFTY"       # or "SENSEX"
+
+The selector is applied during the first pickle scan, underlying download,
+day-group build, actual-trade selection, Optuna scoring, and output naming.
+NIFTY and SENSEX observations therefore cannot be mixed in one optimization.
 
 Optimized parameters:
-     ENTRY_TIME_IST, LOSS_LIMIT_RUPEES_BY_ATTEMPT,
-     PROFIT_PROTECT_TRIGGER_RUPEES_BY_ATTEMPT, MAX_REATTEMPTS,
-     PROFIT_TARGET_PCT_BY_ATTEMPT, REENTRY_DELAY_BY_ATTEMPT
+     ENTRY_TIME_IST, LOSS_LIMIT_RUPEES_BY_ATTEMPT, PROFIT_PROTECT_TRIGGER_RUPEES,
+     MAX_REATTEMPTS, PROFIT_TARGET_PCT, REENTRY_DELAY_BY_ATTEMPT
 
 --------------------------------------------------------------------------------
 QUICK SMALL-SAMPLE RUN (do this first to confirm everything works end-to-end):
@@ -31,16 +38,14 @@ In the RUN CONTROL block at the top, set:
                                  # Kite underlying download)
      SAMPLE_MAX_DAYS    = 20     # simulate only the 20 most recent day-groups
      OPT_PROGRESS_EVERY = 1      # print after every trial
-     OPT_UNIFORM_CONTROL_TRIALS = 5
 ...then press Run. It should finish in a minute or two and print load progress,
 all five trial lines, and a BEST CONFIG block.
 
 For the real search, set:
-     OPT_TRIALS = 1000 or more   # attempt-wise arrays enlarge the search space
-     OPT_CV_FOLDS = 1            # exact maximum-total-profit objective
+     OPT_TRIALS = 300
+     OPT_CV_FOLDS = 5
      SAMPLE_MAX_PICKLES = None
      SAMPLE_MAX_DAYS = None
-     OPT_UNIFORM_CONTROL_TRIALS = 100
 
 Dependencies: pandas, openpyxl, optuna  (pip install optuna).
 """
@@ -78,45 +83,41 @@ except Exception:
 # =============================================================================
 # What to do when you run this file:
 #   "backtest" -> one backtest with the params below + Excel report (original flow)
-#   "optimize" -> Optuna search with per-attempt profit-protect/target arrays
+#   "optimize" -> Optuna robustness search over the six tunables
 RUN_MODE = "optimize"
 
+# Optimize/backtest exactly ONE underlying. Supported values are deliberately
+# strict so a typo cannot silently create an empty or mixed optimization.
+# You may also override this with the TARGET_UNDERLYING environment variable.
+SUPPORTED_UNDERLYINGS = ("NIFTY", "SENSEX")
+TARGET_UNDERLYING = os.getenv("TARGET_UNDERLYING", "NIFTY").strip().upper()
+if TARGET_UNDERLYING not in SUPPORTED_UNDERLYINGS:
+    raise ValueError(
+        f"TARGET_UNDERLYING must be one of {SUPPORTED_UNDERLYINGS}; "
+        f"received {TARGET_UNDERLYING!r}"
+    )
+
 # --- Optimizer settings (used only when RUN_MODE == "optimize") ---
-# The attempt-wise schedules add many dimensions. Five trials are enough only for
-# a smoke test; a serious search normally needs at least 1,000 trials.
-OPT_TRIALS = 1000            # increase to 1000+ for the final attempt-wise search
-
-# 1 = maximize total net profit over the complete sample, exactly as requested.
-# >1 = optional contiguous-month CV score (mean fold profit - variability penalty).
-OPT_CV_FOLDS = 1
-OPT_PROGRESS_EVERY = 5      # retained for compatibility; every trial is printed
-OPT_SEED = 42               # RNG seed for reproducible searches
-
-# Highest number of re-entries that Optuna may test. Total active attempts are
-# OPT_MAX_REATTEMPTS + 1 because attempt 1 is the original entry.
-OPT_MAX_REATTEMPTS = int(os.getenv("OPT_MAX_REATTEMPTS", "7"))
-
-# Search bounds for EACH attempt's independent profit rules. Values are decimal
-# percentages of that attempt's collected premium. Set OPT_PROFIT_PCT_STEP to 0
-# for a continuous search; 0.025 means a 2.5-percentage-point grid and generally
-# learns faster in this high-dimensional problem.
-OPT_PROFIT_PROTECT_MIN_PCT = 0.00
-OPT_PROFIT_PROTECT_MAX_PCT = 0.80
-OPT_PROFIT_TARGET_MIN_PCT = 0.00  # 0 lets Optuna disable the target on an attempt
-OPT_PROFIT_TARGET_MAX_PCT = 0.95
-OPT_PROFIT_PCT_STEP = 0.025
-
-# Controlled hypothesis check after the main optimization. It holds the winning
-# entry time, stop schedule, re-entry count, and delays fixed, then optimizes ONE
-# shared protect percentage and ONE shared target percentage. The resulting P/L
-# is compared with the attempt-wise winner. Set 0 to skip this extra benchmark.
-OPT_UNIFORM_CONTROL_TRIALS = int(os.getenv("OPT_UNIFORM_CONTROL_TRIALS", "100"))
+OPT_TRIALS = 300            # number of optimization trials
+OPT_CV_FOLDS = 5            # 1 = score on full sample; >1 = walk-forward block robustness
+OPT_PROGRESS_EVERY = 5      # (retained for compatibility) per-trial stats now print EVERY trial
+OPT_SEED = 42              # RNG seed for reproducible searches
 
 # --- Where to SAVE every tested config + its results ---
 # A CSV row is written (and flushed) after EVERY trial, so an interrupted run
 # still keeps everything tested so far. A timestamped file is created per run.
 OPT_OUTPUT_DIR = r"G:\My Drive\Trading\optimizer_runs"
-OPT_STUDY_NAME = "atm_straddle_attemptwise_profit_rules"
+# The underlying suffix is essential when OPT_SAVE_DB=True: it prevents a
+# SENSEX run from resuming a NIFTY study (or vice versa).
+_OPT_STUDY_BASE_NAME = os.getenv("OPT_STUDY_NAME", "atm_straddle_robust").strip()
+if not _OPT_STUDY_BASE_NAME:
+    _OPT_STUDY_BASE_NAME = "atm_straddle_robust"
+_target_suffix = f"_{TARGET_UNDERLYING.lower()}"
+OPT_STUDY_NAME = (
+    _OPT_STUDY_BASE_NAME
+    if _OPT_STUDY_BASE_NAME.lower().endswith(_target_suffix)
+    else f"{_OPT_STUDY_BASE_NAME}{_target_suffix}"
+)
 # Set True to ALSO persist the Optuna study to a SQLite DB in OPT_OUTPUT_DIR.
 # That makes the study RESUMABLE: re-running appends more trials to the same
 # study (TPE keeps learning) instead of starting over. False = in-memory only.
@@ -135,8 +136,8 @@ SAMPLE_MAX_DAYS = None      # e.g. 20 -> simulate only the most recent N day-gro
 # =============================================================================
 # USER CONFIG
 # =============================================================================
-# PICKLES_DIR = r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New_0_1_2"
-PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
+PICKLES_DIR = r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New_0_1_2"
+# PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
 ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "10:00")  # "HH:MM"
 
 def _safe_fname_part(s: str) -> str:
@@ -230,26 +231,8 @@ def _fmt_pct_value(v: float) -> str:
 
 
 def _fmt_pct_list(lst) -> str:
-    """Format a full list of decimal percentages for logs and reports."""
+    """Format a list of decimal percentages for the output filename."""
     return "-".join(_fmt_pct_value(float(v)) for v in lst) if lst else "off"
-
-
-def _fmt_pct_list_compact(lst) -> str:
-    """
-    Compact list label for Windows-safe output filenames.
-
-    Full attempt-wise schedules can make a filename exceed Windows path limits.
-    Logs, CSVs, and Excel trade rows still retain the complete values.
-    """
-    if not lst:
-        return "off"
-    vals = [float(v) for v in lst]
-    if len(vals) <= 3:
-        return _fmt_pct_list(vals)
-    return (
-        f"{_fmt_pct_value(vals[0])}-to-{_fmt_pct_value(vals[-1])}"
-        f"-{len(vals)}vals"
-    )
 
 
 def _parse_float_env(env_name: str, default_value: float) -> float:
@@ -324,34 +307,17 @@ def loss_limit_pct_for_attempt(attempt_idx: int) -> float:
 # --- Allowed days-to-expiry to trade: [0,1]=expiry day + day before; [0]=expiry only ---
 ALLOWED_DTE = _parse_int_list(os.getenv("ALLOWED_DTE"), [1])
 
-# --- Per-attempt PROFIT-PROTECT threshold/giveback -------------------------------
-# Index 0 = original entry, index 1 = first re-entry, etc.
-# Attempts beyond the list reuse the LAST value. A value of 0 disables
-# profit-protect for that attempt only.
+# --- Profit-protect threshold/giveback as % of premium collected on that attempt ---
+# Default: 30%.
 #
-# The same computed rupee amount G is used to:
-#     1. arm profit-protect once peak P&L reaches G; and
-#     2. exit when current P&L falls to peak - G.
-#
-# Environment examples:
+# Env examples:
 #     PROFIT_PROTECT_TRIGGER_RUPEES="30"
-#     PROFIT_PROTECT_TRIGGER_RUPEES="30,35,40,45"
-#     PROFIT_PROTECT_TRIGGER_RUPEES="0.30,0.35,0.40,0.45"
+#     PROFIT_PROTECT_TRIGGER_RUPEES="0.30"
 #
-# The repeated default preserves the old scalar behaviour until an optimized
-# schedule is pasted here or supplied through the environment.
-PROFIT_PROTECT_TRIGGER_RUPEES = _parse_pct_list(
-    os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES"),
-    [0.3755, 0.3755, 0.3755, 0.3755, 0.3755, 0.3755, 0.3755, 0.3755],
-)
-
-
-def profit_protect_pct_for_attempt(attempt_idx: int) -> float:
-    """Return the profit-protect percentage for a zero-based attempt index."""
-    s = PROFIT_PROTECT_TRIGGER_RUPEES
-    if not s:
-        return 0.0
-    return float(s[attempt_idx]) if attempt_idx < len(s) else float(s[-1])
+# Current logic uses the same rupee amount for:
+#     1. arming profit-protect once peak P&L reaches G
+#     2. exiting when current P&L falls to peak - G
+PROFIT_PROTECT_TRIGGER_RUPEES = _parse_pct_value(os.getenv("PROFIT_PROTECT_TRIGGER_RUPEES", "0.3755"))
 
 # --- Absolute daily circuit breaker -------------------------------------------------
 # Once cumulative realized NET P&L for the current underlying/day reaches this
@@ -373,30 +339,10 @@ MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT = _parse_float_env("MAX_LOSS_LIMIT_RUPEES_BY_AT
 
 MAX_REATTEMPTS = int(os.getenv("MAX_REATTEMPTS", "7"))  # 1 = only one re-entry
 
-# --- Per-attempt PROFIT TARGET -----------------------------------------------------
-# Index 0 = original entry, index 1 = first re-entry, etc. Attempts beyond the
-# list reuse the LAST value. When the active attempt reaches its target, the
-# strategy exits and takes no further trade that day. A value of 0 disables the
-# target for that attempt only.
-#
-# Environment examples:
-#     PROFIT_TARGET_PCT="80"
-#     PROFIT_TARGET_PCT="80,75,70,65"
-#     PROFIT_TARGET_PCT="0.80,0.75,0.70,0.65"
-#
-# The repeated default preserves the old scalar behaviour for a normal backtest.
-PROFIT_TARGET_PCT = _parse_pct_list(
-    os.getenv("PROFIT_TARGET_PCT"),
-    [0.8090, 0.8090, 0.8090, 0.8090, 0.8090, 0.8090, 0.8090, 0.8090],
-)
-
-
-def profit_target_pct_for_attempt(attempt_idx: int) -> float:
-    """Return the profit-target percentage for a zero-based attempt index."""
-    s = PROFIT_TARGET_PCT
-    if not s:
-        return 0.0
-    return float(s[attempt_idx]) if attempt_idx < len(s) else float(s[-1])
+# --- Per-DAY profit target as a fraction of premium collected on the CURRENT attempt ---
+# When an attempt's profit reaches PROFIT_TARGET_PCT * (CE+PE)*qty, it exits at the
+# target and NO further trades are taken that day. 0 disables. e.g. 0.70 = 70%.
+PROFIT_TARGET_PCT = float(os.getenv("PROFIT_TARGET_PCT", "0.8090"))
 # --- Per-attempt RE-ENTRY GAP in minutes (index 0 = gap before 1st re-entry, 1 = before 2nd, ...) ---
 # Attempts beyond the list reuse the LAST value. Override via env comma list, e.g.
 # REENTRY_DELAY_BY_ATTEMPT="10,15,20".
@@ -413,14 +359,14 @@ def reentry_delay_for_attempt(attempt_idx: int) -> int:
 
 _DEFAULT_OUT = os.path.join(
     _get_downloads_folder(),
-    f"short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}"
+    f"short_straddle_{TARGET_UNDERLYING.lower()}_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}"
     f"_SLpct_{_safe_fname_part(_fmt_pct_list(LOSS_LIMIT_RUPEES_BY_ATTEMPT))}"
     f"_DTE_{_safe_fname_part('-'.join(str(d) for d in ALLOWED_DTE))}"
-    f"_PPTpct_{_safe_fname_part(_fmt_pct_list_compact(PROFIT_PROTECT_TRIGGER_RUPEES))}"
+    f"_PPTpct_{_safe_fname_part(_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES))}"
     f"_DailyMaxLoss_{_safe_fname_part(_fmt_rupee_value(MAX_DAILY_LOSS_RUPEES))}"
     f"_StopCap_{_safe_fname_part(_fmt_rupee_value(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT))}"
     f"_MR_{_safe_fname_part(str(MAX_REATTEMPTS))}"
-    f"_PTpct_{_safe_fname_part(_fmt_pct_list_compact(PROFIT_TARGET_PCT))}"
+    f"_PT_{_safe_fname_part(str(int(round(PROFIT_TARGET_PCT * 100))))}pct"
     f"_RDM_{_safe_fname_part(_fmt_int_list(REENTRY_DELAY_BY_ATTEMPT))}.xlsx"
 )
 
@@ -441,8 +387,10 @@ if LOOKBACK_MONTHS_RAW.upper() in ("", "AUTO", "ALL", "MAX", "FULL"):
 else:
     LOOKBACK_MONTHS = int(float(LOOKBACK_MONTHS_RAW))
 
+# Quantity and strike specifications stay underlying-specific. Update these when
+# exchange lot sizes change; TARGET_UNDERLYING determines which row is used.
 QTY_UNITS = {"NIFTY": 325, "SENSEX": 100}
-TRADEABLE = set(QTY_UNITS.keys())
+TRADEABLE = {TARGET_UNDERLYING}
 
 STRIKE_STEP = {"NIFTY": 50, "SENSEX": 100}
 
@@ -453,7 +401,13 @@ STRIKE_STEP = {"NIFTY": 50, "SENSEX": 100}
 BROKERAGE_PER_ORDER       = 20.0       # ₹20 flat per executed order
 ORDERS_PER_TRADE          = 4          # sell CE + sell PE + buy CE + buy PE
 STT_SELL_PCT              = 0.001      # 0.1% on sell-side premium
-EXCHANGE_TXN_PCT          = 0.0003553  # 0.03553% on premium (NSE options)
+# NSE NIFTY and BSE SENSEX options have different exchange transaction rates.
+# Defaults below match Zerodha's published rates at the time this version was
+# prepared. Both remain environment-overridable because exchange charges change.
+EXCHANGE_TXN_PCT_BY_UNDERLYING = {
+    "NIFTY": _parse_float_env("NIFTY_EXCHANGE_TXN_PCT", 0.0003553),
+    "SENSEX": _parse_float_env("SENSEX_EXCHANGE_TXN_PCT", 0.0003250),
+}
 SEBI_PER_CRORE            = 10.0       # ₹10 per crore of turnover
 STAMP_BUY_PCT             = 0.00003    # 0.003% on buy-side premium
 IPFT_PER_CRORE            = 0.010      # ₹0.01 per crore (on premium)
@@ -558,12 +512,16 @@ def determine_backtest_window_start(min_day_seen: date, end_day: date) -> date:
 # TRANSACTION COST CALCULATOR
 # =============================================================================
 def compute_trade_charges(
+    underlying: str,
     entry_ce: float, entry_pe: float,
     exit_ce: float, exit_pe: float,
     qty: int,
 ) -> float:
     """
     Compute total Zerodha transaction charges for one short-straddle attempt.
+
+    ``underlying`` selects the correct NSE/BSE exchange transaction rate. Other
+    taxes remain governed by the common constants above.
 
     Entry = SELL CE + SELL PE  (2 orders, sell side)
     Exit  = BUY  CE + BUY  PE (2 orders, buy side)
@@ -584,8 +542,13 @@ def compute_trade_charges(
     # 2. STT: 0.1% on sell-side premium only (entry for short straddle)
     stt = entry_turnover * STT_SELL_PCT
 
-    # 3. Exchange transaction charges: 0.03553% on both sides
-    txn_charges = total_turnover * EXCHANGE_TXN_PCT
+    # 3. Exchange transaction charges on both sides. This differs for NIFTY
+    # (NSE) and SENSEX (BSE), so never use a single global rate here.
+    try:
+        exchange_txn_pct = EXCHANGE_TXN_PCT_BY_UNDERLYING[underlying]
+    except KeyError as exc:
+        raise ValueError(f"No exchange transaction rate configured for {underlying!r}") from exc
+    txn_charges = total_turnover * exchange_txn_pct
 
     # 4. SEBI charges: ₹10 per crore on total turnover
     sebi = total_turnover * SEBI_PER_CRORE / 1_00_00_000
@@ -593,11 +556,17 @@ def compute_trade_charges(
     # 5. Stamp duty: 0.003% on buy side only (exit for short straddle)
     stamp = exit_turnover * STAMP_BUY_PCT
 
-    # 6. IPFT: ₹0.01 per crore on premium (both sides)
-    ipft = total_turnover * IPFT_PER_CRORE / 1_00_00_000
+    # 6. IPFT: ₹0.01 per crore on NSE option premium turnover (both sides).
+    # IPFT is an NSE levy; it must not be applied to BSE/SENSEX trades.
+    ipft = (
+        total_turnover * IPFT_PER_CRORE / 1_00_00_000
+        if underlying == "NIFTY"
+        else 0.0
+    )
 
-    # 7. GST: 18% on (brokerage + transaction charges + SEBI charges)
-    gst = (brokerage + txn_charges + sebi) * GST_PCT
+    # 7. GST on brokerage, exchange/SEBI charges, and NSE IPFT when present.
+    # IPFT attracts GST when it applies.
+    gst = (brokerage + txn_charges + sebi + ipft) * GST_PCT
 
     total_charges = brokerage + stt + txn_charges + sebi + stamp + ipft + gst
     return round(total_charges, 2)
@@ -708,10 +677,8 @@ class TradeRow:
     uncapped_stop_rupees: float              # percentage-based stop before absolute cap
     stop_cap_rupees: float                   # configured absolute cap; <=0 means cap disabled
     stop_rupees: float                       # effective rupee stop after cap
-    profit_protect_trigger_pct: float         # active attempt's protect %, decimal form
-    profit_protect_trigger_rupees: float      # active attempt's rupee trigger/giveback
-    profit_target_pct: float                  # active attempt's target %, decimal form
-    profit_target_rupees: float               # active attempt's target rupees; 0 when disabled
+    profit_protect_trigger_pct: float         # profit-protect % of entry premium, decimal form; 0.30 = 30%
+    profit_protect_trigger_rupees: float      # computed rupee profit-protect trigger/giveback
     daily_realized_pnl_after_trade: float     # cumulative net P&L after this attempt
     daily_loss_limit_rupees: float            # configured daily loss circuit breaker
     daily_loss_limit_hit: bool                # True means no further trades for that day
@@ -720,7 +687,13 @@ class TradeRow:
 # =============================================================================
 # PASS-1: nearest expiry per (underlying, day)
 # =============================================================================
-def scan_pickles_pass1(pickle_paths: List[str]) -> Tuple[date, Dict[Tuple[str, date], date], date]:
+def scan_pickles_pass1(
+    pickle_paths: List[str],
+    target_underlying: str = TARGET_UNDERLYING,
+) -> Tuple[date, Dict[Tuple[str, date], date], date]:
+    """Scan only the selected index and find its nearest expiry for each day."""
+    if target_underlying not in SUPPORTED_UNDERLYINGS:
+        raise ValueError(f"Unsupported target underlying: {target_underlying!r}")
     max_day_seen: Optional[date] = None
     min_day_seen: Optional[date] = None
     min_expiry_map: Dict[Tuple[str, date], date] = {}
@@ -746,7 +719,9 @@ def scan_pickles_pass1(pickle_paths: List[str]) -> Tuple[date, Dict[Tuple[str, d
             d2["expiry_date"] = pd.to_datetime(d2["expiry"], errors="coerce").dt.date
             d2 = d2.dropna(subset=["underlying", "day", "expiry_date"])
 
-            d2 = d2[d2["underlying"].isin(TRADEABLE)]
+            # Filter at the earliest possible point. This reduces memory/I/O in
+            # later phases and guarantees the expiry map contains one index only.
+            d2 = d2[d2["underlying"].eq(target_underlying)]
             d2 = d2[d2["expiry_date"] >= d2["day"]]
             if d2.empty:
                 continue
@@ -771,7 +746,9 @@ def scan_pickles_pass1(pickle_paths: List[str]) -> Tuple[date, Dict[Tuple[str, d
             print(msg)
 
     if max_day_seen is None or min_day_seen is None:
-        raise RuntimeError("No usable option data found in pickles (PASS1) for tradeable underlyings.")
+        raise RuntimeError(
+            f"No usable {target_underlying} option data found in pickles (PASS1)."
+        )
 
     return max_day_seen, min_expiry_map, min_day_seen
 
@@ -779,13 +756,24 @@ def scan_pickles_pass1(pickle_paths: List[str]) -> Tuple[date, Dict[Tuple[str, d
 # =============================================================================
 # Underlying download
 # =============================================================================
-def download_underlyings(kite, day_start: date, day_end: date) -> Dict[str, pd.DataFrame]:
+def download_underlyings(
+    kite,
+    day_start: date,
+    day_end: date,
+    target_underlying: str = TARGET_UNDERLYING,
+) -> Dict[str, pd.DataFrame]:
+    """Download spot candles only for the selected index."""
+    if target_underlying not in UNDERLYING_KITE:
+        raise ValueError(f"No Kite metadata configured for {target_underlying!r}")
     cache: Dict[str, List[Dict]] = {}
     from_dt = datetime.combine(day_start, SESSION_START_IST)
     to_dt = datetime.combine(day_end, SESSION_END_IST)
 
     out: Dict[str, pd.DataFrame] = {}
-    for und, meta in UNDERLYING_KITE.items():
+    # A one-item loop preserves the original return shape (dict of DataFrames)
+    # while avoiding an unnecessary API download for the other index.
+    for und in (target_underlying,):
+        meta = UNDERLYING_KITE[und]
         token = get_instrument_token(kite, meta["exchange"], meta["tradingsymbol"], cache)
         rows = fetch_history_minute(kite, token, from_dt, to_dt, label=f"{meta['exchange']}:{meta['tradingsymbol']}")
         df = rows_to_df(rows)
@@ -875,12 +863,12 @@ def _leg_from_book(book, idx_all, strike: int, opt_type: str, price_col: str) ->
 # =============================================================================
 @dataclass
 class Params:
-    entry_time: dtime                              # ENTRY_TIME_IST
-    loss_limit_pct_by_attempt: List[float]         # stop-loss schedule
-    profit_protect_pct_by_attempt: List[float]     # protect schedule
-    max_reattempts: int                            # MAX_REATTEMPTS
-    profit_target_pct_by_attempt: List[float]      # target schedule
-    reentry_delay_by_attempt: List[int]            # delay schedule (minutes)
+    entry_time: dtime                       # ENTRY_TIME_IST, as a datetime.time
+    loss_limit_pct_by_attempt: List[float]  # LOSS_LIMIT_RUPEES_BY_ATTEMPT (decimals)
+    profit_protect_pct: float               # PROFIT_PROTECT_TRIGGER_RUPEES (decimal)
+    max_reattempts: int                     # MAX_REATTEMPTS
+    profit_target_pct: float                # PROFIT_TARGET_PCT (decimal)
+    reentry_delay_by_attempt: List[int]     # REENTRY_DELAY_BY_ATTEMPT (minutes)
     # not optimized here, but consumed by the sim -- kept on Params so the sim
     # never reaches back into globals:
     max_daily_loss_rupees: float
@@ -888,20 +876,6 @@ class Params:
 
     def loss_limit_pct_for_attempt(self, attempt_idx: int) -> float:
         s = self.loss_limit_pct_by_attempt
-        if not s:
-            return 0.0
-        return float(s[attempt_idx]) if attempt_idx < len(s) else float(s[-1])
-
-    def profit_protect_pct_for_attempt(self, attempt_idx: int) -> float:
-        """Return this Params object's protect percentage for one attempt."""
-        s = self.profit_protect_pct_by_attempt
-        if not s:
-            return 0.0
-        return float(s[attempt_idx]) if attempt_idx < len(s) else float(s[-1])
-
-    def profit_target_pct_for_attempt(self, attempt_idx: int) -> float:
-        """Return this Params object's target percentage for one attempt."""
-        s = self.profit_target_pct_by_attempt
         if not s:
             return 0.0
         return float(s[attempt_idx]) if attempt_idx < len(s) else float(s[-1])
@@ -918,9 +892,9 @@ def default_params() -> "Params":
     return Params(
         entry_time=ENTRY_TIME,
         loss_limit_pct_by_attempt=list(LOSS_LIMIT_RUPEES_BY_ATTEMPT),
-        profit_protect_pct_by_attempt=list(PROFIT_PROTECT_TRIGGER_RUPEES),
+        profit_protect_pct=float(PROFIT_PROTECT_TRIGGER_RUPEES),
         max_reattempts=int(MAX_REATTEMPTS),
-        profit_target_pct_by_attempt=list(PROFIT_TARGET_PCT),
+        profit_target_pct=float(PROFIT_TARGET_PCT),
         reentry_delay_by_attempt=list(REENTRY_DELAY_BY_ATTEMPT),
         max_daily_loss_rupees=float(MAX_DAILY_LOSS_RUPEES),
         max_loss_limit_cap_rupees=float(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT),
@@ -956,8 +930,10 @@ def simulate_day_multi_trades(
     qty = int(QTY_UNITS[und])
     step = int(STRIKE_STEP[und])
 
-    # Protect and target percentages are selected inside the attempt loop,
-    # because each entry/re-entry may now use a different array element.
+    # Profit-protect is now percentage-based, so the actual rupee value is not
+    # known until CE/PE entry prices are available for the current attempt.
+    profit_protect_pct = float(params.profit_protect_pct)
+    profit_protect_enabled = profit_protect_pct > 0.0
 
     cur_entry_ts = pd.Timestamp(datetime.combine(dy, params.entry_time), tz=ist_tz())
     trade_seq = 1
@@ -1042,13 +1018,7 @@ def simulate_day_multi_trades(
         # ---------------------------------------------------------------------
         entry_premium_sum = (float(ce_entry) + float(pe_entry)) * qty
 
-        # Zero-based array index: trade_seq 1 -> index 0, trade_seq 2 -> index 1.
-        attempt_idx = trade_seq - 1
-        loss_limit_pct = params.loss_limit_pct_for_attempt(attempt_idx)
-        profit_protect_pct = params.profit_protect_pct_for_attempt(attempt_idx)
-        profit_target_pct = params.profit_target_pct_for_attempt(attempt_idx)
-        profit_protect_enabled = profit_protect_pct > 0.0
-
+        loss_limit_pct = params.loss_limit_pct_for_attempt(trade_seq - 1)
         uncapped_loss_limit_rupees = float(loss_limit_pct * entry_premium_sum)
 
         # Absolute cap on the percentage-based stop-loss.
@@ -1060,8 +1030,8 @@ def simulate_day_multi_trades(
         else:
             loss_limit_rupees = float(uncapped_loss_limit_rupees)
 
-        # G is calculated from THIS attempt's array element and is the same
-        # rupee amount used by the existing profit-protect logic:
+        # G is
+        # the same variable used by the existing profit-protect logic:
         #   - profit-protect arms when peak P&L >= G
         #   - profit-protect exits when current P&L <= peak - G
         G = float(profit_protect_pct * entry_premium_sum)
@@ -1109,8 +1079,8 @@ def simulate_day_multi_trades(
         # taken for the day (PROFIT_TARGET is excluded from the re-entry rule below).
         target_ts = None
         target_rupees = None
-        if profit_target_pct > 0.0:
-            target_rupees = profit_target_pct * entry_premium_sum
+        if params.profit_target_pct > 0.0:
+            target_rupees = params.profit_target_pct * entry_premium_sum
             # best-case (favourable) intrabar profit: both legs bought back at their lows
             pnl_best_all = (float(ce_entry) - ce_low) * qty + (float(pe_entry) - pe_low) * qty
             pnl_tp = pd.concat([pnl_close_all, pnl_best_all], axis=1).max(axis=1)
@@ -1148,6 +1118,7 @@ def simulate_day_multi_trades(
         exit_pe = float(pe_close.loc[exit_ts]) if pd.notna(pe_close.loc[exit_ts]) else float("nan")
 
         txn_charges = compute_trade_charges(
+            underlying=und,
             entry_ce=float(ce_entry), entry_pe=float(pe_entry),
             exit_ce=exit_ce if not pd.isna(exit_ce) else 0.0,
             exit_pe=exit_pe if not pd.isna(exit_pe) else 0.0,
@@ -1197,8 +1168,6 @@ def simulate_day_multi_trades(
                 stop_rupees=float(loss_limit_rupees),
                 profit_protect_trigger_pct=float(profit_protect_pct),
                 profit_protect_trigger_rupees=float(G),
-                profit_target_pct=float(profit_target_pct),
-                profit_target_rupees=float(target_rupees or 0.0),
                 daily_realized_pnl_after_trade=float(daily_realized_pnl),
                 daily_loss_limit_rupees=float(params.max_daily_loss_rupees),
                 daily_loss_limit_hit=bool(daily_loss_limit_hit),
@@ -1259,6 +1228,7 @@ def build_day_groups(
     window_end: date,
     max_pickles: Optional[int] = None,   # small-sample: only read this many files
     max_days: Optional[int] = None,      # small-sample: keep only the most recent N day-groups
+    target_underlying: str = TARGET_UNDERLYING,
 ) -> Tuple[List[DayGroup], List[Dict[str, Any]]]:
     """
     Parse pickles and slice them into per-day groups. This is the EXPENSIVE part
@@ -1270,6 +1240,9 @@ def build_day_groups(
     only the most recent N day-groups after loading. Both are for quick smoke
     tests and should be left as None for a real run.
     """
+    if target_underlying not in SUPPORTED_UNDERLYINGS:
+        raise ValueError(f"Unsupported target underlying: {target_underlying!r}")
+
     groups: List[DayGroup] = []
     skipped_rows: List[Dict[str, Any]] = []
     processed_day_keys: set = set()  # prevent double-count of the same (und,day,expiry) across files
@@ -1300,7 +1273,9 @@ def build_day_groups(
             d2["date"] = ensure_ist(d2["date"])
             d2["day"] = d2["date"].dt.date
             d2["underlying"] = d2["name"].astype(str).map(normalize_underlying)
-            d2 = d2[d2["underlying"].isin(TRADEABLE)]
+            # Re-apply the selector in PASS-2. Never rely only on PASS-1's map:
+            # this makes the invariant local and protects future refactors.
+            d2 = d2[d2["underlying"].eq(target_underlying)]
             if d2.empty:
                 continue
 
@@ -1357,6 +1332,15 @@ def build_day_groups(
     # Deterministic order so re-simulation is reproducible across trials.
     groups.sort(key=lambda gr: (gr.dy, gr.und))
 
+    # Defensive assertion: an optimizer must never receive a mixed-index group
+    # list, even if an upstream pickle format or normalization rule changes.
+    unexpected = sorted({gr.und for gr in groups if gr.und != target_underlying})
+    if unexpected:
+        raise RuntimeError(
+            f"Mixed underlying data reached day-group cache: {unexpected}; "
+            f"expected only {target_underlying}"
+        )
+
     # Small-sample shortcut: keep only the most recent N day-groups.
     if max_days is not None and max_days > 0 and len(groups) > max_days:
         groups = groups[-max_days:]
@@ -1409,9 +1393,17 @@ def process_pickles_generate_trades(
     underlying_data: Dict[str, pd.DataFrame],
     window_start: date,
     window_end: date,
+    target_underlying: str = TARGET_UNDERLYING,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Single-run path used by main(): build groups, then simulate once."""
-    groups, parse_skips = build_day_groups(pickle_paths, min_expiry_map, underlying_data, window_start, window_end)
+    groups, parse_skips = build_day_groups(
+        pickle_paths,
+        min_expiry_map,
+        underlying_data,
+        window_start,
+        window_end,
+        target_underlying=target_underlying,
+    )
     all_df, sim_skips = simulate_groups(params, groups)
 
     skip_df = pd.concat([pd.DataFrame(parse_skips), sim_skips], ignore_index=True) \
@@ -1427,32 +1419,40 @@ def process_pickles_generate_trades(
 
 
 # =============================================================================
-# Actual trades: one underlying per day (nearest expiry), include all re-entries for that underlying/day
+# Actual trades: selected underlying only, nearest expiry, including re-entries
 # =============================================================================
-def pick_actual_underlying_by_day(min_expiry_map: Dict[Tuple[str, date], date]) -> Dict[date, str]:
-    by_day: Dict[date, List[Tuple[date, str]]] = {}
-    for (und, dy), ex in min_expiry_map.items():
-        if und not in TRADEABLE:
-            continue
+def pick_actual_underlying_by_day(
+    min_expiry_map: Dict[Tuple[str, date], date],
+    target_underlying: str = TARGET_UNDERLYING,
+) -> Dict[date, str]:
+    """Return eligible days for exactly ``target_underlying``.
 
-        dte = int((ex - dy).days)
-        if dte not in ALLOWED_DTE:
-            continue
-
-        by_day.setdefault(dy, []).append((ex, und))
-
+    The previous implementation compared NIFTY and SENSEX expiries and chose one
+    index per date. That is inappropriate for instrument-specific optimization:
+    it changes the sample depending on the other index's expiry calendar.
+    """
     out: Dict[date, str] = {}
-    for dy, lst in by_day.items():
-        # nearest expiry first; if tied, prefer NIFTY
-        lst_sorted = sorted(lst, key=lambda t: (t[0], 0 if t[1] == "NIFTY" else 1))
-        out[dy] = lst_sorted[0][1]
+    for (und, dy), ex in min_expiry_map.items():
+        if und != target_underlying:
+            continue
+        dte = int((ex - dy).days)
+        if dte in ALLOWED_DTE:
+            out[dy] = target_underlying
     return out
 
-def build_actual_trades_df(all_trades_df: pd.DataFrame, min_expiry_map: Dict[Tuple[str, date], date]) -> pd.DataFrame:
+def build_actual_trades_df(
+    all_trades_df: pd.DataFrame,
+    min_expiry_map: Dict[Tuple[str, date], date],
+    target_underlying: str = TARGET_UNDERLYING,
+) -> pd.DataFrame:
+    """Build the scored trade book for one index only."""
     if all_trades_df.empty:
         return pd.DataFrame()
 
-    actual_underlying = pick_actual_underlying_by_day(min_expiry_map)
+    actual_underlying = pick_actual_underlying_by_day(
+        min_expiry_map,
+        target_underlying=target_underlying,
+    )
 
     m = all_trades_df.copy()
     m["actual_underlying_for_day"] = m["day"].map(actual_underlying)
@@ -1460,11 +1460,14 @@ def build_actual_trades_df(all_trades_df: pd.DataFrame, min_expiry_map: Dict[Tup
     # keep only days for which a 0/1-DTE actual underlying exists
     m = m[m["actual_underlying_for_day"].notna()]
 
-    # keep only the selected underlying for that day
-    m = m[m["underlying"] == m["actual_underlying_for_day"]]
+    # Both predicates are intentional: the mapped value validates date
+    # eligibility; the explicit equality is a hard guard against mixed data.
+    m = m[
+        (m["underlying"] == m["actual_underlying_for_day"])
+        & (m["underlying"] == target_underlying)
+    ]
 
-    # keep only 0- and 1-DTE rows
-    # keep only 0- and 1-DTE rows
+    # Keep only the configured DTE values.
     m = m[m["days_to_expiry"].isin(ALLOWED_DTE)]
 
     # keep all reattempts for the one selected underlying on that day
@@ -1653,7 +1656,10 @@ def main():
 
     print(f"[INFO] Pickles found: {len(paths)}")
 
-    end_day, min_expiry_map, min_day_seen = scan_pickles_pass1(paths)
+    end_day, min_expiry_map, min_day_seen = scan_pickles_pass1(
+        paths,
+        target_underlying=TARGET_UNDERLYING,
+    )
     window_start = determine_backtest_window_start(min_day_seen, end_day)
 
     lookback_label = "AUTO/full pickle range" if LOOKBACK_MONTHS is None else f"{LOOKBACK_MONTHS} months cap"
@@ -1663,23 +1669,38 @@ def main():
     print(f"[INFO] Stoploss %/attempt: {_fmt_pct_list(LOSS_LIMIT_RUPEES_BY_ATTEMPT)} | "
           f"Per-attempt stop cap: Rs {_fmt_rupee_value(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT)} | "
           f"Daily max loss: Rs {_fmt_rupee_value(MAX_DAILY_LOSS_RUPEES)} | "
-          f"ProfitProtect %/attempt: {_fmt_pct_list(PROFIT_PROTECT_TRIGGER_RUPEES)} | "
+          f"ProfitProtect trigger/giveback %: {_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES)} | "
           f"Re-entry delay min/attempt: {REENTRY_DELAY_BY_ATTEMPT} | Allowed DTE: {ALLOWED_DTE}")
-    print(f"[INFO] Profit target %/attempt: {_fmt_pct_list(PROFIT_TARGET_PCT)} (0 = disabled)")
-    print(f"[INFO] Tradeables: {sorted(TRADEABLE)}")
+    print(f"[INFO] Day profit target: {PROFIT_TARGET_PCT:.0%} of premium (0 = disabled)")
+    print(f"[INFO] Target underlying: {TARGET_UNDERLYING}")
     print(f"[INFO] Output: {OUTPUT_XLSX}")
 
     print("[STEP] Initializing Kite ...")
     kite = oUtils.intialize_kite_api()
     print("[OK] Kite ready.")
 
-    underlying_data = download_underlyings(kite, window_start, end_day)
-
-    all_trades_df, skipped_df = process_pickles_generate_trades(
-        default_params(), paths, min_expiry_map, underlying_data, window_start, end_day
+    underlying_data = download_underlyings(
+        kite,
+        window_start,
+        end_day,
+        target_underlying=TARGET_UNDERLYING,
     )
 
-    actual_trades_df = build_actual_trades_df(all_trades_df, min_expiry_map)
+    all_trades_df, skipped_df = process_pickles_generate_trades(
+        default_params(),
+        paths,
+        min_expiry_map,
+        underlying_data,
+        window_start,
+        end_day,
+        target_underlying=TARGET_UNDERLYING,
+    )
+
+    actual_trades_df = build_actual_trades_df(
+        all_trades_df,
+        min_expiry_map,
+        target_underlying=TARGET_UNDERLYING,
+    )
 
     write_excel(all_trades_df, actual_trades_df, skipped_df)
 
@@ -1697,17 +1718,15 @@ def main():
 # worst month and worst day are computed and printed as diagnostics but do NOT
 # affect the score. (See the honest caveat next to OPT_* config below.)
 #
-# Tunables exposed to the optimizer:
+# Tunables exposed to the optimizer (the 6 requested), with the variable-length
+# per-attempt lists parameterized compactly as (base, step) so the search space
+# stays low-dimensional and the per-attempt schedule stays monotone/sensible:
 #   ENTRY_TIME_IST                -> minutes-from-open (discrete grid)
-#   LOSS_LIMIT_RUPEES_BY_ATTEMPT  -> sl_base_pct + n*sl_step_pct
-#   PROFIT_PROTECT_TRIGGER_RUPEES -> independent value for every active attempt
-#   MAX_REATTEMPTS                -> int, capped by OPT_MAX_REATTEMPTS
-#   PROFIT_TARGET_PCT             -> independent value for every active attempt
+#   LOSS_LIMIT_RUPEES_BY_ATTEMPT  -> sl_base_pct + n*sl_step_pct  (rising stops)
+#   PROFIT_PROTECT_TRIGGER_RUPEES -> single pct (0 disables)
+#   MAX_REATTEMPTS                -> int
+#   PROFIT_TARGET_PCT             -> single pct (0 disables)
 #   REENTRY_DELAY_BY_ATTEMPT      -> delay_base + n*delay_step (minutes)
-#
-# Independent attempt-wise profit rules directly test the user's hypothesis.
-# They are intentionally NOT forced to rise or fall monotonically because the
-# profitable relationship may be non-linear across re-entries.
 # =============================================================================
 
 # ---- OBJECTIVE: maximize TOTAL NET PROFIT, and profit only ----
@@ -1729,9 +1748,8 @@ _OPT_DISQUALIFY = -1.0e12   # score for data-guard failures (far below any real 
 
 # Stable column order for the per-trial results CSV.
 _TRIAL_COLUMNS = [
-    "run_index", "trial_number", "state", "score",
-    "entry_time", "max_reattempts",
-    "profit_protect_schedule", "profit_target_schedule",
+    "target_underlying", "run_index", "trial_number", "state", "score",
+    "entry_time", "max_reattempts", "profit_protect_pct", "profit_target_pct",
     "sl_base_pct", "sl_step_pct", "loss_limit_schedule",
     "reentry_delay_base_min", "reentry_delay_step_min", "reentry_delay_schedule",
     "net_pnl", "mean_month", "median_month", "worst_month",
@@ -1740,7 +1758,13 @@ _TRIAL_COLUMNS = [
 ]
 
 
-def _trial_record(trial_, base, run_index: int, elapsed: float) -> Dict[str, Any]:
+def _trial_record(
+    trial_,
+    base,
+    run_index: int,
+    elapsed: float,
+    target_underlying: str,
+) -> Dict[str, Any]:
     """Flatten one finished trial (suggested params + derived schedules + result
     metrics) into a single CSV row. `base` supplies the non-optimized fields so we
     reconstruct the full Params via the same mapping the objective used."""
@@ -1748,18 +1772,15 @@ def _trial_record(trial_, base, run_index: int, elapsed: float) -> Dict[str, Any
     bp = _params_from_trial(_FrozenTrialView(trial_), base)
     ua = trial_.user_attrs
     return {
+        "target_underlying": target_underlying,
         "run_index": run_index,                  # 1..n_trials within THIS run
         "trial_number": trial_.number,           # global index within the study
         "state": str(getattr(trial_, "state", "")),
         "score": trial_.value,
         "entry_time": bp.entry_time.strftime("%H:%M"),
         "max_reattempts": bp.max_reattempts,
-        "profit_protect_schedule": ";".join(
-            str(round(x, 4)) for x in bp.profit_protect_pct_by_attempt
-        ),
-        "profit_target_schedule": ";".join(
-            str(round(x, 4)) for x in bp.profit_target_pct_by_attempt
-        ),
+        "profit_protect_pct": round(bp.profit_protect_pct, 6),
+        "profit_target_pct": round(bp.profit_target_pct, 6),
         "sl_base_pct": p.get("sl_base_pct"),
         "sl_step_pct": p.get("sl_step_pct"),
         "loss_limit_schedule": ";".join(str(round(x, 4)) for x in bp.loss_limit_pct_by_attempt),
@@ -1876,182 +1897,39 @@ def _cv_score(actual_df: pd.DataFrame, folds: int) -> float:
     return float(s.mean() - OPT_CV_PENALTY * s.std(ddof=0))
 
 
-def _suggest_attempt_pct(trial, name: str, low: float, high: float) -> float:
-    """Suggest one percentage, optionally on a configured discrete grid."""
-    kwargs: Dict[str, Any] = {}
-    if OPT_PROFIT_PCT_STEP and OPT_PROFIT_PCT_STEP > 0:
-        kwargs["step"] = float(OPT_PROFIT_PCT_STEP)
-    return float(trial.suggest_float(name, float(low), float(high), **kwargs))
-
-
 def _params_from_trial(trial, base: "Params") -> "Params":
-    """
-    Map one Optuna trial to a concrete Params object.
-
-    The protect and target arrays are genuinely attempt-specific: each active
-    attempt receives an independent Optuna parameter. If max_reattempts is 3,
-    the trial contains four values for each array (attempts 1 through 4).
-    """
-    # ENTRY_TIME: discrete grid 09:20..13:30 in 5-minute steps.
+    """Map an Optuna trial to a Params object. Lists are built from (base, step)."""
+    # ENTRY_TIME: discrete grid 09:20..13:30 in 5-min steps
     entry_min = trial.suggest_int("entry_minute_from_0920", 0, 250, step=5)
     eh, em = divmod(9 * 60 + 20 + entry_min, 60)
     entry_time = dtime(eh, em)
 
-    # Rising per-attempt stop-loss schedule retained from the supplied optimizer.
+    # rising per-attempt stop-loss schedule
     sl_base = trial.suggest_float("sl_base_pct", 0.05, 0.40)
     sl_step = trial.suggest_float("sl_step_pct", 0.0, 0.10)
 
-    if OPT_MAX_REATTEMPTS < 0:
-        raise ValueError("OPT_MAX_REATTEMPTS cannot be negative")
-    max_reattempts = trial.suggest_int("max_reattempts", 0, OPT_MAX_REATTEMPTS)
-    n_slots = max_reattempts + 1
+    max_reattempts = trial.suggest_int("max_reattempts", 0, 10)
+    profit_protect = trial.suggest_float("profit_protect_pct", 0.0, 0.80)
+    profit_target = trial.suggest_float("profit_target_pct", 0.20, 0.95)
 
-    # Independent schedules. No monotonic constraint is imposed, specifically so
-    # the optimization can discover whether later attempts need tighter, looser,
-    # disabled, or otherwise non-linear profit rules.
-    profit_protect_list = [
-        round(
-            _suggest_attempt_pct(
-                trial,
-                f"profit_protect_pct_attempt_{i + 1}",
-                OPT_PROFIT_PROTECT_MIN_PCT,
-                OPT_PROFIT_PROTECT_MAX_PCT,
-            ),
-            4,
-        )
-        for i in range(n_slots)
-    ]
-    profit_target_list = [
-        round(
-            _suggest_attempt_pct(
-                trial,
-                f"profit_target_pct_attempt_{i + 1}",
-                OPT_PROFIT_TARGET_MIN_PCT,
-                OPT_PROFIT_TARGET_MAX_PCT,
-            ),
-            4,
-        )
-        for i in range(n_slots)
-    ]
-
-    # Rising per-attempt re-entry delay schedule retained from the supplied code.
+    # rising per-attempt re-entry delay schedule (minutes)
     delay_base = trial.suggest_int("reentry_delay_base_min", 1, 20)
     delay_step = trial.suggest_int("reentry_delay_step_min", 0, 10)
 
+    n_slots = max_reattempts + 1
     sl_list = [round(min(0.95, sl_base + i * sl_step), 4) for i in range(n_slots)]
     delay_list = [int(delay_base + i * delay_step) for i in range(n_slots)]
 
     return Params(
         entry_time=entry_time,
         loss_limit_pct_by_attempt=sl_list,
-        profit_protect_pct_by_attempt=profit_protect_list,
+        profit_protect_pct=float(profit_protect),
         max_reattempts=int(max_reattempts),
-        profit_target_pct_by_attempt=profit_target_list,
+        profit_target_pct=float(profit_target),
         reentry_delay_by_attempt=delay_list,
         max_daily_loss_rupees=base.max_daily_loss_rupees,
         max_loss_limit_cap_rupees=base.max_loss_limit_cap_rupees,
     )
-
-
-def _run_uniform_profit_rule_control(
-    *,
-    groups: List[DayGroup],
-    min_expiry_map: Dict[Tuple[str, date], date],
-    fixed_params: "Params",
-    n_trials: int,
-    cv_folds: int,
-    seed: int,
-) -> Tuple[Any, "Params", Dict[str, Any]]:
-    """
-    Optimize a SHARED protect percentage and a SHARED target percentage while
-    holding every other field at the attempt-wise winner.
-
-    This is a controlled in-sample benchmark, not a second full global search.
-    It isolates the incremental value of making the two profit rules different
-    across attempts.
-    """
-    import optuna
-    import datetime as _dt
-
-    if n_trials <= 0:
-        raise ValueError("n_trials must be positive for the uniform control")
-
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-    n_slots = fixed_params.max_reattempts + 1
-
-    def control_params_from_trial(trial) -> "Params":
-        shared_protect = round(
-            _suggest_attempt_pct(
-                trial,
-                "shared_profit_protect_pct",
-                OPT_PROFIT_PROTECT_MIN_PCT,
-                OPT_PROFIT_PROTECT_MAX_PCT,
-            ),
-            4,
-        )
-        shared_target = round(
-            _suggest_attempt_pct(
-                trial,
-                "shared_profit_target_pct",
-                OPT_PROFIT_TARGET_MIN_PCT,
-                OPT_PROFIT_TARGET_MAX_PCT,
-            ),
-            4,
-        )
-        return Params(
-            entry_time=fixed_params.entry_time,
-            loss_limit_pct_by_attempt=list(fixed_params.loss_limit_pct_by_attempt),
-            profit_protect_pct_by_attempt=[shared_protect] * n_slots,
-            max_reattempts=fixed_params.max_reattempts,
-            profit_target_pct_by_attempt=[shared_target] * n_slots,
-            reentry_delay_by_attempt=list(fixed_params.reentry_delay_by_attempt),
-            max_daily_loss_rupees=fixed_params.max_daily_loss_rupees,
-            max_loss_limit_cap_rupees=fixed_params.max_loss_limit_cap_rupees,
-        )
-
-    def objective(trial):
-        params = control_params_from_trial(trial)
-        all_df, _ = simulate_groups(params, groups)
-        actual_df = build_actual_trades_df(all_df, min_expiry_map)
-        m = robustness_metrics(actual_df)
-        for k in (
-            "n_days", "n_months", "prof_day_ratio", "prof_month_ratio",
-            "total_pnl", "mean_month", "median_month", "worst_day", "worst_month",
-        ):
-            trial.set_user_attr(k, m[k])
-        if cv_folds and cv_folds > 1:
-            return _cv_score(actual_df, cv_folds)
-        return _score_from_metrics(m)
-
-    study = optuna.create_study(
-        direction="maximize",
-        sampler=optuna.samplers.TPESampler(seed=seed + 10_000),
-    )
-    print(
-        f"[CONTROL] optimizing shared profit rules for {n_trials} trials "
-        f"with all other winner settings fixed ...",
-        flush=True,
-    )
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-
-    best_params = control_params_from_trial(_FrozenTrialView(study.best_trial))
-    all_df, _ = simulate_groups(best_params, groups)
-    actual_df = build_actual_trades_df(all_df, min_expiry_map)
-    metrics = robustness_metrics(actual_df)
-
-    try:
-        os.makedirs(OPT_OUTPUT_DIR, exist_ok=True)
-        ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(
-            OPT_OUTPUT_DIR,
-            f"{OPT_STUDY_NAME}_{ts}_uniform_control.csv",
-        )
-        study.trials_dataframe().to_csv(path, index=False)
-        print(f"[CONTROL] trials saved to: {path}", flush=True)
-    except Exception as e:
-        print(f"[CONTROL WARN] could not save control trials: {e}", flush=True)
-
-    return study, best_params, metrics
 
 
 def optimize(
@@ -2061,11 +1939,12 @@ def optimize(
     cv_folds: int = 1,
     seed: int = 42,
     progress_every: int = 5,   # print a progress line every this many trials
+    target_underlying: str = TARGET_UNDERLYING,
 ):
     """
     Run the Optuna study over pre-built groups.
 
-    cv_folds <= 1 : maximize total net profit on the full sample.
+    cv_folds <= 1 : score on the full sample (profitable-month-first).
     cv_folds  > 1 : contiguous-block walk-forward robustness score.
 
     Progress: a callback prints after every `progress_every` trials, showing this
@@ -2077,6 +1956,15 @@ def optimize(
     import csv as _csv
     import datetime as _dt
     optuna.logging.set_verbosity(optuna.logging.WARNING)  # we do our own printing
+
+    if target_underlying not in SUPPORTED_UNDERLYINGS:
+        raise ValueError(f"Unsupported target underlying: {target_underlying!r}")
+    group_underlyings = {gr.und for gr in groups}
+    if group_underlyings != {target_underlying}:
+        raise RuntimeError(
+            f"Optimizer expected only {target_underlying}, got "
+            f"{sorted(group_underlyings) if group_underlyings else 'no groups'}"
+        )
 
     base = default_params()  # supplies the non-optimized fields (daily cap, stop cap)
 
@@ -2096,7 +1984,11 @@ def optimize(
         # 2) re-simulate all cached day-groups for this parameter set (the cheap part)
         all_df, _ = simulate_groups(params, groups)
         # 3) reduce to the actually-traded book and measure robustness
-        actual_df = build_actual_trades_df(all_df, min_expiry_map)
+        actual_df = build_actual_trades_df(
+            all_df,
+            min_expiry_map,
+            target_underlying=target_underlying,
+        )
         m = robustness_metrics(actual_df)
         # 4) stash SCALAR diagnostics so the progress callback can print them
         #    (Optuna user_attrs must be JSON-serializable -> no pandas objects).
@@ -2105,6 +1997,7 @@ def optimize(
             trial.set_user_attr(k, m[k])
         # month -> P/L as a plain dict so we can print a month-wise breakdown
         trial.set_user_attr("monthly_pnl", {str(p): float(v) for p, v in m["monthly"].items()})
+        trial.set_user_attr("target_underlying", target_underlying)
         # 5) the score Optuna maximizes
         if cv_folds and cv_folds > 1:
             return _cv_score(actual_df, cv_folds)
@@ -2148,7 +2041,15 @@ def optimize(
 
         # ---- persist this tested config + its results (flush so nothing is lost) ----
         try:
-            csv_writer.writerow(_trial_record(trial_, base, n_done, elapsed))
+            csv_writer.writerow(
+                _trial_record(
+                    trial_,
+                    base,
+                    n_done,
+                    elapsed,
+                    target_underlying=target_underlying,
+                )
+            )
             csv_file.flush()
         except Exception as e:
             print(f"[OPT WARN] could not write trial {trial_.number} to CSV: {e}", flush=True)
@@ -2169,17 +2070,6 @@ def optimize(
 
         # New best -> print the month-wise P/L breakdown of the best config.
         if trial_.number == best_num:
-            try:
-                best_params_now = _params_from_trial(_FrozenTrialView(trial_), base)
-                print(
-                    "   >>> attempt-wise protect="
-                    f"{[round(x, 4) for x in best_params_now.profit_protect_pct_by_attempt]} "
-                    "target="
-                    f"{[round(x, 4) for x in best_params_now.profit_target_pct_by_attempt]}",
-                    flush=True,
-                )
-            except Exception as e:
-                print(f"   >>> could not reconstruct best schedules: {e}", flush=True)
             mp = ua.get("monthly_pnl", {})
             if mp:
                 cells = [f"{k}:{_inr(v)}" for k, v in sorted(mp.items())]
@@ -2188,8 +2078,8 @@ def optimize(
                 for i in range(0, len(cells), 4):
                     print("       " + "   ".join(cells[i:i + 4]), flush=True)
 
-    print(f"[OPT] starting {n_trials} trials over {len(groups)} day-groups "
-          f"(cv_folds={cv_folds}) ...", flush=True)
+    print(f"[OPT] starting {n_trials} {target_underlying} trials over "
+          f"{len(groups)} day-groups (cv_folds={cv_folds}) ...", flush=True)
     try:
         study.optimize(objective, n_trials=n_trials, callbacks=[_progress], show_progress_bar=False)
     finally:
@@ -2209,13 +2099,14 @@ def optimize(
 
     best = study.best_trial
     print("\n================ BEST CONFIG ================")
+    print(f"TARGET_UNDERLYING           = {target_underlying!r}")
     print(f"MAX PROFIT (objective) = {_inr(best.value)}  (cv_folds={cv_folds})")
     bp = _params_from_trial(_FrozenTrialView(best), base)
     print(f"ENTRY_TIME_IST              = {bp.entry_time.strftime('%H:%M')}")
     print(f"LOSS_LIMIT_RUPEES_BY_ATTEMPT= {[round(x,4) for x in bp.loss_limit_pct_by_attempt]}")
-    print(f"PROFIT_PROTECT_TRIGGER_RUPEES= {[round(x,4) for x in bp.profit_protect_pct_by_attempt]}")
-    print(f"MAX_REATTEMPTS               = {bp.max_reattempts}")
-    print(f"PROFIT_TARGET_PCT            = {[round(x,4) for x in bp.profit_target_pct_by_attempt]}")
+    print(f"PROFIT_PROTECT_TRIGGER      = {bp.profit_protect_pct:.4f}")
+    print(f"MAX_REATTEMPTS              = {bp.max_reattempts}")
+    print(f"PROFIT_TARGET_PCT           = {bp.profit_target_pct:.4f}")
     print(f"REENTRY_DELAY_BY_ATTEMPT    = {bp.reentry_delay_by_attempt}")
     print("---- robustness of best (full sample) ----")
     ba = best.user_attrs
@@ -2237,54 +2128,13 @@ def optimize(
     # Ready-to-paste config block so you can drop the winner straight into
     # the RUN CONTROL / param section for a confirmation backtest.
     print("\n---- paste into your single-run params to verify ----")
+    print(f'TARGET_UNDERLYING = "{target_underlying}"')
     print(f"ENTRY_TIME_IST = \"{bp.entry_time.strftime('%H:%M')}\"")
     print(f"# LOSS_LIMIT schedule (per attempt): {[round(x,4) for x in bp.loss_limit_pct_by_attempt]}")
-    print(f"# PROFIT_PROTECT_TRIGGER_RUPEES schedule: {[round(x,4) for x in bp.profit_protect_pct_by_attempt]}")
+    print(f"# PROFIT_PROTECT_TRIGGER_RUPEES (pct): {bp.profit_protect_pct:.4f}")
     print(f"# MAX_REATTEMPTS: {bp.max_reattempts}")
-    print(f"# PROFIT_TARGET_PCT schedule: {[round(x,4) for x in bp.profit_target_pct_by_attempt]}")
-    print("# Environment-variable form:")
-    print('#   PROFIT_PROTECT_TRIGGER_RUPEES="' + ",".join(f"{x:.4f}" for x in bp.profit_protect_pct_by_attempt) + '"')
-    print('#   PROFIT_TARGET_PCT="' + ",".join(f"{x:.4f}" for x in bp.profit_target_pct_by_attempt) + '"')
+    print(f"# PROFIT_TARGET_PCT: {bp.profit_target_pct:.4f}")
     print(f"# REENTRY_DELAY_BY_ATTEMPT (min): {bp.reentry_delay_by_attempt}")
-
-    # -------------------------------------------------------------------------
-    # Controlled hypothesis check: attempt-wise arrays versus one shared pair.
-    # -------------------------------------------------------------------------
-    if OPT_UNIFORM_CONTROL_TRIALS > 0:
-        _, control_params, control_metrics = _run_uniform_profit_rule_control(
-            groups=groups,
-            min_expiry_map=min_expiry_map,
-            fixed_params=bp,
-            n_trials=OPT_UNIFORM_CONTROL_TRIALS,
-            cv_folds=cv_folds,
-            seed=seed,
-        )
-        attemptwise_pnl = float(best.user_attrs.get("total_pnl", 0.0))
-        uniform_pnl = float(control_metrics.get("total_pnl", 0.0))
-        delta = attemptwise_pnl - uniform_pnl
-        verdict = (
-            "SUPPORTED in this controlled in-sample comparison"
-            if delta > 0
-            else "NOT SUPPORTED in this controlled in-sample comparison"
-        )
-        print("\n========== ATTEMPT-WISE HYPOTHESIS CHECK ==========")
-        print(
-            "Best shared protect schedule = "
-            f"{[round(x,4) for x in control_params.profit_protect_pct_by_attempt]}"
-        )
-        print(
-            "Best shared target schedule  = "
-            f"{[round(x,4) for x in control_params.profit_target_pct_by_attempt]}"
-        )
-        print(f"Attempt-wise winner net P/L = {_inr(attemptwise_pnl)}")
-        print(f"Shared-rule control net P/L = {_inr(uniform_pnl)}")
-        print(f"Incremental attempt-wise P/L= {_inr(delta)}")
-        print(f"Hypothesis verdict           = {verdict}")
-        print(
-            "Note: this control fixes the other parameters at the attempt-wise "
-            "winner; it is not a separate full global shared-rule optimization."
-        )
-
     return study, bp
 
 
@@ -2294,19 +2144,9 @@ class _FrozenTrialView:
         self._p = dict(trial.params)
 
     def suggest_int(self, name, *a, **k):
-        if name not in self._p:
-            raise KeyError(
-                f"Finished trial does not contain parameter {name!r}. "
-                "Use the new OPT_STUDY_NAME or delete an incompatible old DB."
-            )
         return int(self._p[name])
 
     def suggest_float(self, name, *a, **k):
-        if name not in self._p:
-            raise KeyError(
-                f"Finished trial does not contain parameter {name!r}. "
-                "Use the new OPT_STUDY_NAME or delete an incompatible old DB."
-            )
         return float(self._p[name])
 
 
@@ -2314,7 +2154,8 @@ def run_optimizer(n_trials: int, cv_folds: int,
                   max_pickles: Optional[int] = None,
                   max_days: Optional[int] = None,
                   progress_every: int = 5,
-                  seed: int = 42):
+                  seed: int = 42,
+                  target_underlying: str = TARGET_UNDERLYING):
     """
     End-to-end optimizer entrypoint: load data ONCE (pickles + Kite underlyings),
     cache the day-groups, then run the Optuna search over them.
@@ -2323,6 +2164,7 @@ def run_optimizer(n_trials: int, cv_folds: int,
         [PHASE 1] scan pickles      [PHASE 2] download underlyings
         [PHASE 3] build day-groups  [PHASE 4] optimize
     """
+    print(f"[CONFIG] TARGET_UNDERLYING={target_underlying}", flush=True)
     print("[PHASE 1] Scanning pickles for date range and nearest expiries ...", flush=True)
     paths = sorted(glob.glob(os.path.join(PICKLES_DIR, "*.pkl")) + glob.glob(os.path.join(PICKLES_DIR, "*.pickle")))
     if not paths:
@@ -2332,24 +2174,34 @@ def run_optimizer(n_trials: int, cv_folds: int,
         paths = paths[:max_pickles]
     print(f"[PHASE 1] {len(paths)} pickle file(s) in scope", flush=True)
 
-    end_day, min_expiry_map, min_day_seen = scan_pickles_pass1(paths)
+    end_day, min_expiry_map, min_day_seen = scan_pickles_pass1(
+        paths,
+        target_underlying=target_underlying,
+    )
     window_start = determine_backtest_window_start(min_day_seen, end_day)
     print(f"[PHASE 1] window: {window_start} -> {end_day}", flush=True)
 
     print("[PHASE 2] Initializing Kite and downloading underlyings ...", flush=True)
     kite = oUtils.intialize_kite_api()
-    underlying_data = download_underlyings(kite, window_start, end_day)
+    underlying_data = download_underlyings(
+        kite,
+        window_start,
+        end_day,
+        target_underlying=target_underlying,
+    )
 
     print("[PHASE 3] Building (and caching) day-groups ...", flush=True)
     groups, _ = build_day_groups(paths, min_expiry_map, underlying_data,
                                  window_start, end_day,
-                                 max_pickles=max_pickles, max_days=max_days)
+                                 max_pickles=max_pickles, max_days=max_days,
+                                 target_underlying=target_underlying)
     if not groups:
         raise RuntimeError("No day-groups built; nothing to optimize. Check window / pickles.")
 
     print(f"[PHASE 4] Optimizing: {n_trials} trials, cv_folds={cv_folds} ...", flush=True)
     return optimize(groups, min_expiry_map, n_trials=n_trials, cv_folds=cv_folds,
-                    progress_every=progress_every, seed=seed)
+                    progress_every=progress_every, seed=seed,
+                    target_underlying=target_underlying)
 
 
 # =============================================================================
@@ -2368,6 +2220,7 @@ if __name__ == "__main__":
             max_days=SAMPLE_MAX_DAYS,
             progress_every=OPT_PROGRESS_EVERY,
             seed=OPT_SEED,
+            target_underlying=TARGET_UNDERLYING,
         )
     elif RUN_MODE == "backtest":
         main()
