@@ -8,8 +8,6 @@ from typing import Dict, List, Tuple, Optional, Any
 
 import pandas as pd
 
-import Trading_2024.OptionTradeUtils as oUtils
-
 try:
     from zoneinfo import ZoneInfo  # py3.9+
 except Exception:
@@ -34,14 +32,17 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Every tunable setting lives in a simple KEY=VALUE property file so it can be
 # changed WITHOUT editing this script. Path defaults to
-# "straddle_config.properties" next to this file; override with the
-# STRADDLE_CONFIG environment variable. Values are pushed into the process
+# "straddle_config_expiry1_underlying_profiles.properties" next to this file;
+# override with the STRADDLE_CONFIG environment variable. Values are pushed into the process
 # environment so all the os.getenv(...) reads below pick them up. A real
 # environment variable that is already set takes precedence over the file.
 def _load_property_file() -> str:
     cfg_path = os.getenv(
         "STRADDLE_CONFIG",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "straddle_config_DTE_1.properties"),
+        os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "straddle_config_expiry1_underlying_profiles.properties",
+        ),
     )
     if not os.path.exists(cfg_path):
         print(f"[CONFIG] Property file not found at {cfg_path}; using built-in defaults.")
@@ -67,8 +68,11 @@ def _load_property_file() -> str:
 
 PROPERTY_FILE_PATH = _load_property_file()
 
-# PICKLES_DIR = r"G:\My Drive\Trading\Historical_Options_Data"
-PICKLES_DIR = os.getenv("PICKLES_DIR", r"G:\My Drive\Trading\Dhan_Historical_Options_Data_New")
+# The loader auto-detects both:
+#   1. legacy/Kite-compatible pickles with dedicated UNDERLYING rows; and
+#   2. Dhan A-compatible pickles with the index level repeated in `spot`.
+# Select the archive through PICKLES_DIR in the property file.
+PICKLES_DIR = os.getenv("PICKLES_DIR", r"G:\My Drive\Trading\Historical_Options_Data")
 ENTRY_TIME_IST = os.getenv("ENTRY_TIME_IST", "11:55")  # "HH:MM"
 # EXIT_TIME_IST is the strategy time filter / square-off cutoff.
 # No fresh entry or re-entry is initiated at or after this time. If an attempt is
@@ -260,16 +264,7 @@ def reentry_delay_for_attempt(attempt_idx: int) -> int:
 
 _DEFAULT_OUT = os.path.join(
     _get_downloads_folder(),
-    f"short_straddle_backtest_reattempt{_safe_fname_part(ENTRY_TIME_IST)}"
-    f"_exit{_safe_fname_part(EXIT_TIME_IST)}"
-    # f"_SLpct_{_safe_fname_part(_fmt_pct_list(LOSS_LIMIT_RUPEES_BY_ATTEMPT))}"
-    # f"_DTE_{_safe_fname_part('-'.join(str(d) for d in ALLOWED_DTE))}"
-    f"_PPTpct_{_safe_fname_part(_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES))}"
-    f"_DailyMaxLoss_{_safe_fname_part(_fmt_rupee_value(MAX_DAILY_LOSS_RUPEES))}"
-    f"_StopCap_{_safe_fname_part(_fmt_rupee_value(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT))}"
-    f"_MR_{_safe_fname_part(str(MAX_REATTEMPTS))}"
-    # f"_PT_{_safe_fname_part(str(int(round(PROFIT_TARGET_PCT * 100))))}pct"
-    f"_RDM_{_safe_fname_part(_fmt_int_list(REENTRY_DELAY_BY_ATTEMPT))}.xlsx"
+    "short_straddle_expiry1_underlying_profiles.xlsx",
 )
 
 OUTPUT_XLSX = os.getenv("OUTPUT_XLSX", _DEFAULT_OUT)
@@ -288,6 +283,19 @@ if LOOKBACK_MONTHS_RAW.upper() in ("", "AUTO", "ALL", "MAX", "FULL"):
     LOOKBACK_MONTHS = None
 else:
     LOOKBACK_MONTHS = int(float(LOOKBACK_MONTHS_RAW))
+
+BACKTEST_START_DATE_RAW = os.getenv("BACKTEST_START_DATE", "").strip()
+BACKTEST_END_DATE_RAW = os.getenv("BACKTEST_END_DATE", "").strip()
+BACKTEST_START_DATE: Optional[date] = (
+    pd.Timestamp(BACKTEST_START_DATE_RAW).date()
+    if BACKTEST_START_DATE_RAW
+    else None
+)
+BACKTEST_END_DATE: Optional[date] = (
+    pd.Timestamp(BACKTEST_END_DATE_RAW).date()
+    if BACKTEST_END_DATE_RAW
+    else None
+)
 
 QTY_UNITS = {"NIFTY": 325, "SENSEX": 100}
 TRADEABLE = set(QTY_UNITS.keys())
@@ -329,6 +337,172 @@ ENTRY_TIME = parse_hhmm(ENTRY_TIME_IST)
 # Strategy cutoff time. The simulator will not initiate a new attempt at or
 # after this time, and the current attempt will not be monitored beyond it.
 EXIT_TIME = parse_hhmm(EXIT_TIME_IST)
+
+
+@dataclass(frozen=True)
+class DteStrategySettings:
+    """Execution and risk settings selected by calendar days-to-expiry."""
+
+    entry_time_ist: str
+    exit_time_ist: str
+    reentry_cutoff_time_ist: str
+    entry_time: dtime
+    exit_time: dtime
+    reentry_cutoff_time: dtime
+    loss_limit_pct_by_attempt: Tuple[float, ...]
+    stop_cap_rupees: float
+    profit_protect_pct: float
+    profit_target_pct: float
+    max_daily_loss_rupees: float
+    max_reattempts: int
+    reentry_delay_by_attempt: Tuple[int, ...]
+
+    def loss_pct_for_attempt(self, attempt_idx: int) -> float:
+        values = self.loss_limit_pct_by_attempt
+        return float(values[min(attempt_idx, len(values) - 1)]) if values else 0.0
+
+    def reentry_delay_for_attempt(self, attempt_idx: int) -> int:
+        values = self.reentry_delay_by_attempt
+        return int(values[min(attempt_idx, len(values) - 1)]) if values else 0
+
+
+_generic_reentry_cutoff_ist = os.getenv("REENTRY_CUTOFF_TIME_IST", EXIT_TIME_IST)
+DTE0_SETTINGS = DteStrategySettings(
+    entry_time_ist=ENTRY_TIME_IST,
+    exit_time_ist=EXIT_TIME_IST,
+    reentry_cutoff_time_ist=_generic_reentry_cutoff_ist,
+    entry_time=ENTRY_TIME,
+    exit_time=EXIT_TIME,
+    reentry_cutoff_time=parse_hhmm(_generic_reentry_cutoff_ist),
+    loss_limit_pct_by_attempt=tuple(LOSS_LIMIT_RUPEES_BY_ATTEMPT),
+    stop_cap_rupees=float(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT),
+    profit_protect_pct=float(PROFIT_PROTECT_TRIGGER_RUPEES),
+    profit_target_pct=float(PROFIT_TARGET_PCT),
+    max_daily_loss_rupees=float(MAX_DAILY_LOSS_RUPEES),
+    max_reattempts=int(MAX_REATTEMPTS),
+    reentry_delay_by_attempt=tuple(REENTRY_DELAY_BY_ATTEMPT),
+)
+
+_dte1_entry_ist = os.getenv("DTE1_ENTRY_TIME_IST", ENTRY_TIME_IST)
+_dte1_exit_ist = os.getenv("DTE1_EXIT_TIME_IST", EXIT_TIME_IST)
+_dte1_reentry_cutoff_ist = os.getenv(
+    "DTE1_REENTRY_CUTOFF_TIME_IST",
+    _dte1_exit_ist,
+)
+DTE1_SETTINGS = DteStrategySettings(
+    entry_time_ist=_dte1_entry_ist,
+    exit_time_ist=_dte1_exit_ist,
+    reentry_cutoff_time_ist=_dte1_reentry_cutoff_ist,
+    entry_time=parse_hhmm(_dte1_entry_ist),
+    exit_time=parse_hhmm(_dte1_exit_ist),
+    reentry_cutoff_time=parse_hhmm(_dte1_reentry_cutoff_ist),
+    loss_limit_pct_by_attempt=tuple(
+        _parse_pct_list(
+            os.getenv("DTE1_LOSS_LIMIT_RUPEES_BY_ATTEMPT"),
+            LOSS_LIMIT_RUPEES_BY_ATTEMPT,
+        )
+    ),
+    stop_cap_rupees=_parse_float_env(
+        "DTE1_MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT",
+        MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT,
+    ),
+    profit_protect_pct=_parse_pct_value(
+        os.getenv("DTE1_PROFIT_PROTECT_TRIGGER_RUPEES", PROFIT_PROTECT_TRIGGER_RUPEES)
+    ),
+    profit_target_pct=_parse_pct_value(
+        os.getenv("DTE1_PROFIT_TARGET_PCT", PROFIT_TARGET_PCT)
+    ),
+    max_daily_loss_rupees=_parse_float_env(
+        "DTE1_MAX_DAILY_LOSS_RUPEES",
+        MAX_DAILY_LOSS_RUPEES,
+    ),
+    max_reattempts=int(os.getenv("DTE1_MAX_REATTEMPTS", str(MAX_REATTEMPTS))),
+    reentry_delay_by_attempt=tuple(
+        _parse_int_list(
+            os.getenv("DTE1_REENTRY_DELAY_BY_ATTEMPT"),
+            REENTRY_DELAY_BY_ATTEMPT,
+        )
+    ),
+)
+
+
+def _underlying_dte1_settings(
+    underlying: str,
+    fallback: DteStrategySettings,
+) -> DteStrategySettings:
+    """
+    Build an optional per-underlying DTE-1 profile.
+
+    Any missing NIFTY_DTE1_* or SENSEX_DTE1_* key falls back to the generic
+    DTE1_* value, so existing configurations remain valid.
+    """
+    prefix = f"{underlying.upper()}_DTE1_"
+    entry_ist = os.getenv(f"{prefix}ENTRY_TIME_IST", fallback.entry_time_ist)
+    exit_ist = os.getenv(f"{prefix}EXIT_TIME_IST", fallback.exit_time_ist)
+    reentry_cutoff_ist = os.getenv(
+        f"{prefix}REENTRY_CUTOFF_TIME_IST",
+        fallback.reentry_cutoff_time_ist,
+    )
+    return DteStrategySettings(
+        entry_time_ist=entry_ist,
+        exit_time_ist=exit_ist,
+        reentry_cutoff_time_ist=reentry_cutoff_ist,
+        entry_time=parse_hhmm(entry_ist),
+        exit_time=parse_hhmm(exit_ist),
+        reentry_cutoff_time=parse_hhmm(reentry_cutoff_ist),
+        loss_limit_pct_by_attempt=tuple(
+            _parse_pct_list(
+                os.getenv(f"{prefix}LOSS_LIMIT_RUPEES_BY_ATTEMPT"),
+                fallback.loss_limit_pct_by_attempt,
+            )
+        ),
+        stop_cap_rupees=_parse_float_env(
+            f"{prefix}MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT",
+            fallback.stop_cap_rupees,
+        ),
+        profit_protect_pct=_parse_pct_value(
+            os.getenv(
+                f"{prefix}PROFIT_PROTECT_TRIGGER_RUPEES",
+                fallback.profit_protect_pct,
+            )
+        ),
+        profit_target_pct=_parse_pct_value(
+            os.getenv(f"{prefix}PROFIT_TARGET_PCT", fallback.profit_target_pct)
+        ),
+        max_daily_loss_rupees=_parse_float_env(
+            f"{prefix}MAX_DAILY_LOSS_RUPEES",
+            fallback.max_daily_loss_rupees,
+        ),
+        max_reattempts=int(
+            os.getenv(f"{prefix}MAX_REATTEMPTS", str(fallback.max_reattempts))
+        ),
+        reentry_delay_by_attempt=tuple(
+            _parse_int_list(
+                os.getenv(f"{prefix}REENTRY_DELAY_BY_ATTEMPT"),
+                fallback.reentry_delay_by_attempt,
+            )
+        ),
+    )
+
+
+DTE1_SETTINGS_BY_UNDERLYING = {
+    underlying: _underlying_dte1_settings(underlying, DTE1_SETTINGS)
+    for underlying in sorted(TRADEABLE)
+}
+
+
+def strategy_settings_for_trade(
+    underlying: str,
+    days_to_expiry: int,
+) -> DteStrategySettings:
+    if int(days_to_expiry) == 1:
+        return DTE1_SETTINGS_BY_UNDERLYING.get(underlying, DTE1_SETTINGS)
+    return DTE0_SETTINGS
+
+
+def strategy_settings_for_dte(days_to_expiry: int) -> DteStrategySettings:
+    """Backward-compatible generic lookup retained for external callers."""
+    return DTE1_SETTINGS if int(days_to_expiry) == 1 else DTE0_SETTINGS
 
 def ist_tz():
     if ZoneInfo is not None:
@@ -399,11 +573,12 @@ def determine_backtest_window_start(min_day_seen: date, end_day: date) -> date:
         2. end_day - LOOKBACK_MONTHS
     so the script never requests data before the pickles actually start.
     """
-    if LOOKBACK_MONTHS is None:
-        return min_day_seen
-
-    capped_start = compute_window_start(end_day, LOOKBACK_MONTHS)
-    return max(min_day_seen, capped_start)
+    window_start = min_day_seen
+    if LOOKBACK_MONTHS is not None:
+        window_start = max(window_start, compute_window_start(end_day, LOOKBACK_MONTHS))
+    if BACKTEST_START_DATE is not None:
+        window_start = max(window_start, BACKTEST_START_DATE)
+    return window_start
 
 # =============================================================================
 # TRANSACTION COST CALCULATOR
@@ -584,7 +759,9 @@ def scan_pickles_pass1(pickle_paths: List[str]) -> Tuple[date, Dict[Tuple[str, d
                 if c not in df.columns:
                     raise ValueError(f"Missing column '{c}' in {p}")
 
-            d2 = df[df["type"].astype(str).str.upper().eq("OPTION")]
+            d2 = df[
+                df["type"].astype(str).str.strip().str.upper().eq("OPTION")
+            ]
             if d2.empty:
                 continue
 
@@ -644,6 +821,148 @@ def download_underlyings(kite, day_start: date, day_end: date) -> Dict[str, pd.D
     return out
 
 
+def load_underlyings_from_pickles(
+    pickle_paths: List[str],
+    day_start: date,
+    day_end: date,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Load or reconstruct minute underlying candles from either supported schema.
+
+    Preferred legacy/Kite-compatible schema:
+        dedicated rows where type == UNDERLYING, with OHLC[V] columns.
+
+    Dhan A-compatible schema:
+        OPTION rows only, with the synchronized index price repeated in `spot`.
+        One deterministic underlying candle is reconstructed per minute using
+        the median spot across option rows. The simulator uses only `close` for
+        ATM selection, so synthetic open/high/low are set to that same value and
+        volume is set to zero.
+
+    Source detection is automatic and happens independently for every pickle,
+    so a directory may contain either format without a configuration switch.
+    """
+    chunks: Dict[str, List[pd.DataFrame]] = {und: [] for und in TRADEABLE}
+    source_counts: Dict[str, Dict[str, int]] = {
+        und: {"UNDERLYING rows": 0, "DHAN spot fallback": 0}
+        for und in TRADEABLE
+    }
+
+    for p in pickle_paths:
+        try:
+            df = pd.read_pickle(p)
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                continue
+
+            if not {"date", "name"}.issubset(df.columns):
+                continue
+
+            if "type" in df.columns:
+                type_normalized = (
+                    df["type"].astype(str).str.strip().str.upper()
+                )
+            else:
+                type_normalized = pd.Series("", index=df.index, dtype="object")
+
+            # Preferred path: preserve real embedded underlying candles.
+            underlying_mask = type_normalized.eq("UNDERLYING")
+            underlying_price_cols = {"open", "high", "low", "close"}
+            if underlying_mask.any() and underlying_price_cols.issubset(df.columns):
+                selected_cols = ["date", "name", "open", "high", "low", "close"]
+                if "volume" in df.columns:
+                    selected_cols.append("volume")
+                u = df.loc[underlying_mask, selected_cols].copy()
+                if "volume" not in u.columns:
+                    u["volume"] = 0
+                source_label = "UNDERLYING rows"
+
+            # Dhan A-compatible path: option candles repeat the synchronized
+            # underlying/index value in `spot`.
+            elif "spot" in df.columns:
+                spot_numeric = pd.to_numeric(df["spot"], errors="coerce")
+                option_mask = type_normalized.eq("OPTION")
+                eligible_mask = spot_numeric.notna()
+                if option_mask.any():
+                    eligible_mask &= option_mask
+
+                u = df.loc[eligible_mask, ["date", "name"]].copy()
+                u["close"] = spot_numeric.loc[eligible_mask].astype(float)
+
+                # Early Dhan files can carry conflicting spot values on
+                # different strikes at the same timestamp. Median aggregation
+                # prevents row ordering or an isolated stale value from
+                # changing the selected ATM strike.
+                u = (
+                    u.dropna(subset=["date", "name", "close"])
+                    .groupby(["date", "name"], as_index=False, sort=False)["close"]
+                    .median()
+                )
+                u["open"] = u["close"]
+                u["high"] = u["close"]
+                u["low"] = u["close"]
+                u["volume"] = 0
+                u = u[
+                    ["date", "name", "open", "high", "low", "close", "volume"]
+                ]
+                source_label = "DHAN spot fallback"
+            else:
+                continue
+
+            if u.empty:
+                continue
+
+            u["date"] = ensure_ist(u["date"])
+            u["day"] = u["date"].dt.date
+            u["underlying"] = u["name"].astype(str).map(normalize_underlying)
+            u = u[
+                u["underlying"].isin(TRADEABLE)
+                & u["day"].between(day_start, day_end)
+            ]
+
+            for und, group in u.groupby("underlying", sort=False):
+                und_key = str(und)
+                minute_rows = (
+                    group.drop(columns=["name", "underlying"])
+                    .dropna(subset=["date", "close"])
+                    .drop_duplicates(subset=["date"], keep="last")
+                )
+                if minute_rows.empty:
+                    continue
+                chunks[und_key].append(minute_rows)
+                source_counts[und_key][source_label] += len(minute_rows)
+
+        except Exception as exc:
+            msg = f"[UNDERLYING WARN] {os.path.basename(p)} failed: {exc}"
+            if FAIL_ON_PICKLE_ERROR:
+                raise RuntimeError(msg) from exc
+            print(msg)
+
+    out: Dict[str, pd.DataFrame] = {}
+    for und in sorted(TRADEABLE):
+        if not chunks[und]:
+            out[und] = pd.DataFrame(
+                columns=["date", "open", "high", "low", "close", "volume", "day"]
+            )
+            continue
+        frame = pd.concat(chunks[und], ignore_index=True)
+        frame = (
+            frame.drop_duplicates(subset=["date"], keep="last")
+            .sort_values("date")
+            .reset_index(drop=True)
+        )
+        out[und] = frame
+        used_sources = ", ".join(
+            f"{label}={count}"
+            for label, count in source_counts[und].items()
+            if count > 0
+        )
+        print(
+            f"[UNDERLYING PICKLE OK] {und}: candles={len(frame)} "
+            f"days={frame['day'].nunique()} sources[{used_sources}]"
+        )
+    return out
+
+
 # =============================================================================
 # Simulation helpers
 # =============================================================================
@@ -686,6 +1005,8 @@ def simulate_day_multi_trades(
 
     idx_all = build_minute_index(dy, SESSION_START_IST, SESSION_END_IST)
     session_end_ts = idx_all[-1]
+    dte = int((expiry - dy).days)
+    settings = strategy_settings_for_trade(und, dte)
 
     # EXIT_TIME_IST is the strategy time filter.
     #
@@ -700,18 +1021,28 @@ def simulate_day_multi_trades(
     #
     # Therefore, when EXIT_TIME_IST is earlier than 15:30, the trade exits at the
     # cutoff if STOPLOSS / PROFIT_TARGET / PROFIT_PROTECT has not already fired.
-    configured_exit_cutoff_ts = pd.Timestamp(datetime.combine(dy, EXIT_TIME), tz=ist_tz())
+    configured_exit_cutoff_ts = pd.Timestamp(
+        datetime.combine(dy, settings.exit_time),
+        tz=ist_tz(),
+    )
     trade_end_ts = min(session_end_ts, configured_exit_cutoff_ts)
+    reentry_cutoff_ts = min(
+        trade_end_ts,
+        pd.Timestamp(
+            datetime.combine(dy, settings.reentry_cutoff_time),
+            tz=ist_tz(),
+        ),
+    )
 
     qty = int(QTY_UNITS[und])
     step = int(STRIKE_STEP[und])
 
     # Profit-protect is now percentage-based, so the actual rupee value is not
     # known until CE/PE entry prices are available for the current attempt.
-    profit_protect_pct = float(PROFIT_PROTECT_TRIGGER_RUPEES)
+    profit_protect_pct = float(settings.profit_protect_pct)
     profit_protect_enabled = profit_protect_pct > 0.0
 
-    cur_entry_ts = pd.Timestamp(datetime.combine(dy, ENTRY_TIME), tz=ist_tz())
+    cur_entry_ts = pd.Timestamp(datetime.combine(dy, settings.entry_time), tz=ist_tz())
     trade_seq = 1
 
     # If the configured first entry itself is at/after EXIT_TIME_IST, the day
@@ -724,8 +1055,8 @@ def simulate_day_multi_trades(
             "expiry": expiry,
             "trade_seq": trade_seq,
             "reason": (
-                f"No entry: ENTRY_TIME_IST {ENTRY_TIME_IST} is at/after "
-                f"configured EXIT_TIME_IST {EXIT_TIME_IST}"
+                f"No entry: entry {settings.entry_time_ist} is at/after "
+                f"configured exit {settings.exit_time_ist} for DTE={dte}"
             ),
         })
         return results, skipped
@@ -733,10 +1064,13 @@ def simulate_day_multi_trades(
     # Cumulative realized NET P&L for this underlying/day. Used for the daily
     # loss circuit breaker. Charges are included through exit_pnl.
     daily_realized_pnl = 0.0
-    daily_loss_limit_enabled = MAX_DAILY_LOSS_RUPEES > 0
+    daily_loss_limit_enabled = settings.max_daily_loss_rupees > 0
 
     while cur_entry_ts < trade_end_ts:
-        if daily_loss_limit_enabled and daily_realized_pnl <= -float(MAX_DAILY_LOSS_RUPEES):
+        if (
+            daily_loss_limit_enabled
+            and daily_realized_pnl <= -float(settings.max_daily_loss_rupees)
+        ):
             skipped.append({
                 "day": dy,
                 "underlying": und,
@@ -745,7 +1079,7 @@ def simulate_day_multi_trades(
                 "reason": (
                     f"Daily loss limit hit before next entry: "
                     f"realized_pnl={daily_realized_pnl:.2f}, "
-                    f"limit={MAX_DAILY_LOSS_RUPEES:.2f}"
+                    f"limit={settings.max_daily_loss_rupees:.2f}"
                 ),
             })
             break
@@ -810,13 +1144,13 @@ def simulate_day_multi_trades(
         # ---------------------------------------------------------------------
         entry_premium_sum = (float(ce_entry) + float(pe_entry)) * qty
 
-        loss_limit_pct = loss_limit_pct_for_attempt(trade_seq - 1)
+        loss_limit_pct = settings.loss_pct_for_attempt(trade_seq - 1)
         uncapped_loss_limit_rupees = float(loss_limit_pct * entry_premium_sum)
 
         # Absolute cap on the percentage-based stop-loss.
         # Example: 10% of premium may be Rs. 4,500, but with a Rs. 3,000 cap
         # the effective stop used by the simulator is Rs. 3,000.
-        stop_cap_rupees = float(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT)
+        stop_cap_rupees = float(settings.stop_cap_rupees)
         if stop_cap_rupees > 0:
             loss_limit_rupees = float(min(uncapped_loss_limit_rupees, stop_cap_rupees))
         else:
@@ -876,8 +1210,8 @@ def simulate_day_multi_trades(
         # taken for the day (PROFIT_TARGET is excluded from the re-entry rule below).
         target_ts = None
         target_rupees = None
-        if PROFIT_TARGET_PCT > 0.0:
-            target_rupees = PROFIT_TARGET_PCT * entry_premium_sum
+        if settings.profit_target_pct > 0.0:
+            target_rupees = settings.profit_target_pct * entry_premium_sum
             # best-case (favourable) intrabar profit: both legs bought back at their lows
             pnl_best_all = (float(ce_entry) - ce_low) * qty + (float(pe_entry) - pe_low) * qty
             pnl_tp = pd.concat([pnl_close_all, pnl_best_all], axis=1).max(axis=1)
@@ -926,10 +1260,9 @@ def simulate_day_multi_trades(
         # before allowing any further re-entry.
         daily_realized_pnl += float(exit_pnl)
         daily_loss_limit_hit = bool(
-            daily_loss_limit_enabled and daily_realized_pnl <= -float(MAX_DAILY_LOSS_RUPEES)
+            daily_loss_limit_enabled
+            and daily_realized_pnl <= -float(settings.max_daily_loss_rupees)
         )
-
-        dte = int((expiry - dy).days)
 
         results.append(
             TradeRow(
@@ -965,7 +1298,7 @@ def simulate_day_multi_trades(
                 profit_protect_trigger_pct=float(profit_protect_pct),
                 profit_protect_trigger_rupees=float(G),
                 daily_realized_pnl_after_trade=float(daily_realized_pnl),
-                daily_loss_limit_rupees=float(MAX_DAILY_LOSS_RUPEES),
+                daily_loss_limit_rupees=float(settings.max_daily_loss_rupees),
                 daily_loss_limit_hit=bool(daily_loss_limit_hit),
             )
         )
@@ -979,20 +1312,23 @@ def simulate_day_multi_trades(
                 "reason": (
                     f"No re-entry: daily loss limit hit after trade_seq={trade_seq}; "
                     f"realized_pnl={daily_realized_pnl:.2f}, "
-                    f"limit={MAX_DAILY_LOSS_RUPEES:.2f}"
+                    f"limit={settings.max_daily_loss_rupees:.2f}"
                 ),
             })
             break
 
-        if exit_reason in ("STOPLOSS", "PROFIT_PROTECT") and (trade_seq - 1) < MAX_REATTEMPTS:
-            delay_min = reentry_delay_for_attempt(trade_seq - 1)  # gap before this re-entry
+        if (
+            exit_reason in ("STOPLOSS", "PROFIT_PROTECT")
+            and (trade_seq - 1) < settings.max_reattempts
+        ):
+            delay_min = settings.reentry_delay_for_attempt(trade_seq - 1)
             trade_seq += 1
             cur_entry_ts = pd.Timestamp(exit_ts) + pd.Timedelta(minutes=delay_min)
 
-            # Do not initiate any further trade at or after EXIT_TIME_IST.
-            # Because trade_end_ts is also the monitoring end, this keeps the
-            # output strictly filtered by EXIT_TIME_IST.
-            if cur_entry_ts >= trade_end_ts:
+            # The re-entry cutoff is independent of the hard exit. This lets an
+            # existing attempt continue to its normal risk/exit logic while
+            # preventing a late-day fresh short-volatility position.
+            if cur_entry_ts >= reentry_cutoff_ts:
                 skipped.append({
                     "day": dy,
                     "underlying": und,
@@ -1000,7 +1336,8 @@ def simulate_day_multi_trades(
                     "trade_seq": trade_seq,
                     "reason": (
                         f"No re-entry: next entry time {pd.Timestamp(cur_entry_ts).strftime('%H:%M')} "
-                        f"is at/after configured EXIT_TIME_IST {EXIT_TIME_IST}"
+                        f"is at/after configured {und} DTE={dte} re-entry cutoff "
+                        f"{settings.reentry_cutoff_time_ist}"
                     ),
                 })
                 break
@@ -1039,7 +1376,9 @@ def process_pickles_generate_trades(
             if missing:
                 raise ValueError(f"Missing columns {missing} in {p}")
 
-            d2 = df[df["type"].astype(str).str.upper().eq("OPTION")][needed_cols].copy()
+            d2 = df[
+                df["type"].astype(str).str.strip().str.upper().eq("OPTION")
+            ][needed_cols].copy()
             if d2.empty:
                 continue
 
@@ -1053,7 +1392,9 @@ def process_pickles_generate_trades(
             d2["expiry_date"] = pd.to_datetime(d2["expiry"], errors="coerce").dt.date
             d2["strike_num"] = pd.to_numeric(d2["strike"], errors="coerce")
             d2["strike_int"] = d2["strike_num"].round().astype("Int64")  # safer than truncation
-            d2["option_type"] = d2["option_type"].astype(str).str.upper()
+            d2["option_type"] = (
+                d2["option_type"].astype(str).str.strip().str.upper()
+            )
 
             d2 = d2.dropna(subset=["day", "underlying", "expiry_date", "strike_int", "close"])
             d2["strike_int"] = d2["strike_int"].astype(int)
@@ -1391,28 +1732,54 @@ def main():
 
     print(f"[INFO] Pickles found: {len(paths)}")
 
-    end_day, min_expiry_map, min_day_seen = scan_pickles_pass1(paths)
+    data_end_day, min_expiry_map, min_day_seen = scan_pickles_pass1(paths)
+    end_day = (
+        min(data_end_day, BACKTEST_END_DATE)
+        if BACKTEST_END_DATE is not None
+        else data_end_day
+    )
+    if end_day < min_day_seen:
+        raise ValueError(
+            f"Configured BACKTEST_END_DATE {end_day} precedes available data "
+            f"start {min_day_seen}"
+        )
     window_start = determine_backtest_window_start(min_day_seen, end_day)
+    if window_start > end_day:
+        raise ValueError(
+            f"Configured backtest window is empty: {window_start} -> {end_day}"
+        )
 
     lookback_label = "AUTO/full pickle range" if LOOKBACK_MONTHS is None else f"{LOOKBACK_MONTHS} months cap"
 
-    print(f"[INFO] Data day-range seen: {min_day_seen} -> {end_day}")
+    print(f"[INFO] Data day-range seen: {min_day_seen} -> {data_end_day}")
     print(f"[INFO] Backtest window: {window_start} -> {end_day} ({lookback_label})")
-    print(f"[INFO] Stoploss %/attempt: {_fmt_pct_list(LOSS_LIMIT_RUPEES_BY_ATTEMPT)} | "
-          f"Per-attempt stop cap: Rs {_fmt_rupee_value(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT)} | "
-          f"Daily max loss: Rs {_fmt_rupee_value(MAX_DAILY_LOSS_RUPEES)} | "
-          f"ProfitProtect trigger/giveback %: {_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES)} | "
-          f"Re-entry delay min/attempt: {REENTRY_DELAY_BY_ATTEMPT} | Allowed DTE: {ALLOWED_DTE}")
-    print(f"[INFO] Entry time: {ENTRY_TIME_IST} | Strategy exit/filter cutoff: {EXIT_TIME_IST}")
-    print(f"[INFO] Day profit target: {PROFIT_TARGET_PCT:.0%} of premium (0 = disabled)")
+    _profiles = [("DTE-0 generic", DTE0_SETTINGS)]
+    _profiles.extend(
+        (
+            f"{_underlying} DTE-1",
+            DTE1_SETTINGS_BY_UNDERLYING[_underlying],
+        )
+        for _underlying in sorted(DTE1_SETTINGS_BY_UNDERLYING)
+    )
+    for _profile_name, _settings in _profiles:
+        print(
+            f"[INFO] {_profile_name} profile | entry {_settings.entry_time_ist} | "
+            f"exit {_settings.exit_time_ist} | re-entry cutoff "
+            f"{_settings.reentry_cutoff_time_ist} | stops "
+            f"{_fmt_pct_list(_settings.loss_limit_pct_by_attempt)} | "
+            f"stop cap Rs {_fmt_rupee_value(_settings.stop_cap_rupees)} | "
+            f"daily max loss Rs {_fmt_rupee_value(_settings.max_daily_loss_rupees)} | "
+            f"profit protect {_fmt_pct_value(_settings.profit_protect_pct)} | "
+            f"profit target {_settings.profit_target_pct:.2%} | "
+            f"max re-entries {_settings.max_reattempts} | "
+            f"delays {list(_settings.reentry_delay_by_attempt)}"
+        )
+    print(f"[INFO] Allowed DTE: {ALLOWED_DTE}")
     print(f"[INFO] Tradeables: {sorted(TRADEABLE)}")
     print(f"[INFO] Output: {OUTPUT_XLSX}")
 
-    print("[STEP] Initializing Kite ...")
-    kite = oUtils.intialize_kite_api()
-    print("[OK] Kite ready.")
-
-    underlying_data = download_underlyings(kite, window_start, end_day)
+    print("[STEP] Loading embedded underlying candles from the same pickles ...")
+    underlying_data = load_underlyings_from_pickles(paths, window_start, end_day)
 
     all_trades_df, skipped_df = process_pickles_generate_trades(
         paths, min_expiry_map, underlying_data, window_start, end_day

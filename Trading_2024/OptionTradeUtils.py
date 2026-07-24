@@ -6,7 +6,7 @@ KITE_API_KEY = '453dipfh64qcl484'
 KITE_API_SECRET = 'cnt30fp12ftbzk7s0a84ieqv8wbquer4'
 
 
-KITE_ACCESS_CODE = 'a5MwfgodIn9viGlLnhCJNCu4Cex9FghC'
+KITE_ACCESS_CODE = 'Uuf03auxCJ65dP0MxOojROJs6YIbsQ72'
 
 
 def get_instruments(kite_):
@@ -23,7 +23,7 @@ def get_instruments(kite_):
         # PART_SYMBOL = ':NIFTY26FEB'
         # PART_SYMBOL = ':NIFTY26519'
         # PART_SYMBOL = ':NIFTY26MAY'
-        PART_SYMBOL = ':NIFTY26623'
+        PART_SYMBOL = ':NIFTY26728'
         NO_OF_LOTS = 325
         STRIKE_MULTIPLE = 50
         STOPLOSS_POINTS = 10
