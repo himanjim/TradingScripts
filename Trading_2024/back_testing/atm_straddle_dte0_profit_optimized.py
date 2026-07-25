@@ -42,7 +42,7 @@ def _load_property_file() -> str:
         "STRADDLE_CONFIG",
         os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "straddle_config_dte0_profit_max.properties",
+            "configs/straddle_config_dte0_profit_max.properties",
         ),
     )
     if not os.path.exists(cfg_path):
