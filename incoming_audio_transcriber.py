@@ -340,8 +340,8 @@ class TranscriptWriter:
             if self.copy_final_to_clipboard:
                 copied = copy_to_windows_clipboard(text)
 
-            clipboard_note = " [copied to clipboard]" if copied else ""
-            print(f"Final: {text}{clipboard_note}", flush=True)
+            clipboard_note = " " if copied else ""
+            print(f"{text}{clipboard_note}", flush=True)
 
         self.previous_partial = []
         self.committed = 0
