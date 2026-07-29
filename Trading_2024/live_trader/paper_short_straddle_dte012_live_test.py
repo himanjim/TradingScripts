@@ -103,7 +103,7 @@ def _load_property_file() -> str:
 
 PROPERTY_FILE_PATH = _load_property_file()
 IST = pytz.timezone("Asia/Kolkata")
-BUILD_ID = "paper-dte012-depth-validator-v1.1-20260724"
+BUILD_ID = "paper-dte012-depth-validator-v1.2-20260728"
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -195,6 +195,62 @@ TRADE_PRIORITY = tuple(
 )
 LATE_START_MODE = os.getenv("LATE_START_MODE", "SKIP").strip().upper()
 
+# DTE can be counted as remaining trading sessions (recommended) or raw
+# calendar days. TRADING_SESSIONS counts valid market days in (today, expiry],
+# so Friday before a Tuesday expiry is DTE-2 rather than calendar DTE-4.
+DTE_MODE = os.getenv("DTE_MODE", "TRADING_SESSIONS").strip().upper()
+if DTE_MODE not in {"TRADING_SESSIONS", "CALENDAR_DAYS"}:
+    raise ValueError("DTE_MODE must be TRADING_SESSIONS or CALENDAR_DAYS")
+
+
+def _parse_holiday_dates(raw: Optional[str]) -> frozenset[date]:
+    dates: set[date] = set()
+    if raw:
+        for item in raw.replace(";", ",").split(","):
+            item = item.strip()
+            if not item:
+                continue
+            try:
+                dates.add(date.fromisoformat(item))
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid MARKET_HOLIDAYS date '{item}'. Use YYYY-MM-DD."
+                ) from exc
+    return frozenset(dates)
+
+
+MARKET_HOLIDAYS = _parse_holiday_dates(os.getenv("MARKET_HOLIDAYS", ""))
+
+
+def strategy_dte(today: date, expiry: date) -> int:
+    """Return configured DTE for a listed expiry.
+
+    TRADING_SESSIONS:
+        Number of valid market sessions after today through expiry.
+        Expiry day itself is DTE-0.
+    CALENDAR_DAYS:
+        Raw date subtraction, retained only for compatibility.
+    """
+    if expiry < today:
+        return -1
+    if DTE_MODE == "CALENDAR_DAYS":
+        return int((expiry - today).days)
+    if expiry == today:
+        return 0
+    count = 0
+    cursor = today + timedelta(days=1)
+    while cursor <= expiry:
+        if cursor.weekday() < 5 and cursor not in MARKET_HOLIDAYS:
+            count += 1
+        cursor += timedelta(days=1)
+    return count
+
+
+def is_market_session_date(day: date) -> bool:
+    """Basic local market-calendar gate used before starting the feed."""
+    return day.weekday() < 5 and day not in MARKET_HOLIDAYS
+
+
 OUTPUT_ROOT = Path(
     os.getenv(
         "OUTPUT_ROOT",
@@ -214,6 +270,27 @@ STATE_SAVE_SECONDS = _env_float("STATE_SAVE_SECONDS", 5.0)
 QUOTE_WAIT_SECONDS = _env_float("QUOTE_WAIT_SECONDS", 15.0)
 MAX_QUOTE_AGE_SECONDS = _env_float("MAX_QUOTE_AGE_SECONDS", 2.5)
 MAX_LEG_QUOTE_SKEW_MS = _env_float("MAX_LEG_QUOTE_SKEW_MS", 1500.0)
+
+# FULL-mode WebSocket ticks can initially arrive without market depth while the
+# mode change is propagating. Never abandon the day on that transient packet.
+WEBSOCKET_DEPTH_WAIT_SECONDS = _env_float("WEBSOCKET_DEPTH_WAIT_SECONDS", 4.0)
+REAPPLY_FULL_MODE_SECONDS = _env_float("REAPPLY_FULL_MODE_SECONDS", 1.0)
+ENTRY_QUOTE_RETRY_WINDOW_SECONDS = _env_float(
+    "ENTRY_QUOTE_RETRY_WINDOW_SECONDS", 60.0
+)
+ENTRY_QUOTE_RETRY_INTERVAL_SECONDS = _env_float(
+    "ENTRY_QUOTE_RETRY_INTERVAL_SECONDS", 1.0
+)
+ENTRY_FAILURE_BACKOFF_SECONDS = _env_float("ENTRY_FAILURE_BACKOFF_SECONDS", 5.0)
+REST_QUOTE_FALLBACK = _env_bool("REST_QUOTE_FALLBACK", True)
+REST_QUOTE_MIN_INTERVAL_SECONDS = _env_float(
+    "REST_QUOTE_MIN_INTERVAL_SECONDS", 0.75
+)
+REST_QUOTE_MAX_RETRIES = _env_int("REST_QUOTE_MAX_RETRIES", 3)
+HONOUR_ZERO_TRADE_DONE_STATE = _env_bool(
+    "HONOUR_ZERO_TRADE_DONE_STATE", False
+)
+
 ENTRY_SLIPPAGE_TICKS = _env_int("ENTRY_SLIPPAGE_TICKS", 1)
 EXIT_SLIPPAGE_TICKS = _env_int("EXIT_SLIPPAGE_TICKS", 1)
 DEPTH_SHORTFALL_PENALTY_TICKS = _env_int("DEPTH_SHORTFALL_PENALTY_TICKS", 4)
@@ -447,7 +524,8 @@ DECISION_FIELDS = [
     "pe_symbol", "ce_ltp", "pe_ltp", "ce_bid", "ce_ask", "pe_bid", "pe_ask",
     "ce_spread", "pe_spread", "ce_quote_age_ms", "pe_quote_age_ms",
     "leg_quote_skew_ms", "estimated_ce_exit", "estimated_pe_exit",
-    "ce_depth_coverage", "pe_depth_coverage", "gross_pnl", "estimated_exit_charges",
+    "ce_depth_coverage", "pe_depth_coverage", "quote_source",
+    "gross_pnl", "estimated_exit_charges",
     "estimated_net_pnl", "peak_gross_pnl", "stop_rupees", "target_rupees",
     "profit_protect_g", "protect_armed", "protect_floor", "decision", "detail",
 ]
@@ -462,15 +540,16 @@ TRADE_FIELDS = [
     "profit_protect_pct", "profit_protect_g", "entry_ce_depth_coverage",
     "entry_pe_depth_coverage", "exit_ce_depth_coverage", "exit_pe_depth_coverage",
     "entry_slippage_ticks", "exit_slippage_ticks", "entry_quote_skew_ms",
-    "exit_quote_skew_ms", "daily_realized_net_after_trade",
+    "exit_quote_skew_ms", "entry_quote_source", "exit_quote_source",
+    "daily_realized_net_after_trade",
 ]
 
 SUMMARY_FIELDS = [
     "date", "build_id", "mode", "underlying", "expiry", "dte", "trades", "wins", "losses",
     "gross_pnl", "charges", "net_pnl", "max_trade_profit", "max_trade_loss",
     "profit_target_exits", "stoploss_exits", "profit_protect_exits", "time_exits",
-    "raw_ticks_logged", "raw_ticks_dropped", "started_at", "finished_at",
-    "session_directory",
+    "raw_ticks_logged", "raw_ticks_dropped", "completion_reason",
+    "started_at", "finished_at", "session_directory",
 ]
 
 
@@ -624,6 +703,7 @@ class PairSnapshot:
     ce_age_ms: float
     pe_age_ms: float
     skew_ms: float
+    source: str = "WEBSOCKET"
 
 
 def _depth_side(tick: Dict[str, Any], side: str) -> List[Dict[str, Any]]:
@@ -777,6 +857,7 @@ class PriceFeed:
         self._lock = threading.RLock()
         self._connected = threading.Event()
         self._subscribed: set[int] = set()
+        self._intentional_stop = False
 
         self.ticker.on_ticks = self._on_ticks
         self.ticker.on_connect = self._on_connect
@@ -836,7 +917,10 @@ class PriceFeed:
             ws.set_mode(ws.MODE_FULL, tokens)
 
     def _on_close(self, ws, code, reason):
-        self.log.warning("[WS] Closed code=%s reason=%s", code, reason)
+        if self._intentional_stop:
+            self.log.info("[WS] Closed normally.")
+        else:
+            self.log.warning("[WS] Closed unexpectedly code=%s reason=%s", code, reason)
 
     def _on_error(self, ws, code, reason):
         self.log.warning("[WS] Error code=%s reason=%s", code, reason)
@@ -854,6 +938,13 @@ class PriceFeed:
             self.log.warning("[WS] Connection was not confirmed within 20 seconds.")
 
     def stop(self) -> None:
+        self._intentional_stop = True
+        try:
+            stop_retry = getattr(self.ticker, "stop_retry", None)
+            if callable(stop_retry):
+                stop_retry()
+        except Exception:
+            pass
         try:
             self.ticker.close()
         except Exception:
@@ -863,11 +954,29 @@ class PriceFeed:
         tokens = [int(row["instrument_token"]) for row in instruments]
         with self._lock:
             for row in instruments:
-                self._symbols[int(row["instrument_token"])] = str(row["tradingsymbol"])
+                token = int(row["instrument_token"])
+                self._symbols[token] = str(row["tradingsymbol"])
+                # A re-entry can reuse the same strike. Discard the old cached
+                # tick so it can never be mistaken for a fresh subscription.
+                self._latest.pop(token, None)
             self._subscribed.update(tokens)
-        self.ticker.subscribe(tokens)
-        self.ticker.set_mode(self.ticker.MODE_FULL, tokens)
-        self.log.info("[WS] FULL subscriptions: %s", [self._symbols[t] for t in tokens])
+        try:
+            self.ticker.subscribe(tokens)
+            self.ticker.set_mode(self.ticker.MODE_FULL, tokens)
+            self.log.info("[WS] FULL subscriptions: %s", [self._symbols[t] for t in tokens])
+        except Exception as exc:
+            # Do not kill the paper strategy: synchronized REST quote depth is
+            # an explicit fallback, and reconnect will resubscribe these tokens.
+            self.log.warning(
+                "[WS] Subscription/FULL-mode request failed: %s. REST depth fallback remains available.",
+                exc,
+            )
+            self.audit.event(
+                "WS_SUBSCRIPTION_FAILED",
+                tokens=tokens,
+                symbols=[self._symbols.get(t, str(t)) for t in tokens],
+                error=str(exc),
+            )
 
     def unsubscribe(self, tokens: Iterable[int]) -> None:
         token_list = [int(x) for x in tokens]
@@ -883,7 +992,35 @@ class PriceFeed:
             tick = self._latest.get(int(token))
             return dict(tick) if tick is not None else None
 
-    def pair_snapshot(self, ce_token: int, pe_token: int) -> Optional[PairSnapshot]:
+    @staticmethod
+    def _tick_has_depth(tick: Dict[str, Any], required_side: Optional[str]) -> bool:
+        """Validate the depth needed for an executable paper fill.
+
+        SELL needs bids; BUY needs asks. With required_side=None, both sides
+        must exist because the snapshot is intended for general monitoring.
+        """
+        depth = tick.get("depth") or {}
+        bids = [
+            row for row in (depth.get("buy") or [])
+            if float(row.get("price") or 0) > 0 and int(row.get("quantity") or 0) > 0
+        ]
+        asks = [
+            row for row in (depth.get("sell") or [])
+            if float(row.get("price") or 0) > 0 and int(row.get("quantity") or 0) > 0
+        ]
+        side = required_side.upper() if required_side else None
+        if side == "SELL":
+            return bool(bids)
+        if side == "BUY":
+            return bool(asks)
+        return bool(bids and asks)
+
+    def pair_snapshot(
+        self,
+        ce_token: int,
+        pe_token: int,
+        required_side: Optional[str] = None,
+    ) -> Optional[PairSnapshot]:
         ce = self.latest(ce_token)
         pe = self.latest(pe_token)
         if ce is None or pe is None:
@@ -900,23 +1037,61 @@ class PriceFeed:
             return None
         if skew > MAX_LEG_QUOTE_SKEW_MS:
             return None
-        return PairSnapshot(ce, pe, ce_age, pe_age, skew)
+        if not self._tick_has_depth(ce, required_side):
+            return None
+        if not self._tick_has_depth(pe, required_side):
+            return None
+        return PairSnapshot(ce, pe, ce_age, pe_age, skew, source="WEBSOCKET")
 
-    def wait_for_pair(self, ce_token: int, pe_token: int, timeout: float = QUOTE_WAIT_SECONDS) -> PairSnapshot:
+    def wait_for_pair(
+        self,
+        ce_token: int,
+        pe_token: int,
+        timeout: float = QUOTE_WAIT_SECONDS,
+        required_side: Optional[str] = None,
+    ) -> PairSnapshot:
         deadline = time.time() + timeout
+        next_mode_refresh = 0.0
         while time.time() < deadline:
-            snapshot = self.pair_snapshot(ce_token, pe_token)
+            snapshot = self.pair_snapshot(
+                ce_token,
+                pe_token,
+                required_side=required_side,
+            )
             if snapshot is not None:
                 return snapshot
+
+            # set_mode is asynchronous. Reapply FULL periodically until a
+            # genuine depth packet arrives instead of accepting the first LTP
+            # packet and failing the entire session.
+            if time.time() >= next_mode_refresh:
+                try:
+                    tokens = [int(ce_token), int(pe_token)]
+                    self.ticker.set_mode(self.ticker.MODE_FULL, tokens)
+                except Exception as exc:
+                    self.log.warning("[WS] Could not reapply FULL mode: %s", exc)
+                next_mode_refresh = time.time() + max(0.25, REAPPLY_FULL_MODE_SECONDS)
             time.sleep(0.05)
+
+        ce = self.latest(ce_token) or {}
+        pe = self.latest(pe_token) or {}
+        ce_depth = ce.get("depth") or {}
+        pe_depth = pe.get("depth") or {}
+        side_name = (required_side or "BOTH").upper()
         raise RuntimeError(
-            f"No fresh synchronized CE/PE full-depth pair within {timeout:.1f}s"
+            f"No usable synchronized {side_name} depth within {timeout:.1f}s "
+            f"(CE bids={len(ce_depth.get('buy') or [])}, asks={len(ce_depth.get('sell') or [])}; "
+            f"PE bids={len(pe_depth.get('buy') or [])}, asks={len(pe_depth.get('sell') or [])})"
         )
 
 
 # =============================================================================
 # 5. INSTRUMENT DISCOVERY
 # =============================================================================
+
+class NoOpportunityError(RuntimeError):
+    """Normal no-trade-day condition, not a program failure."""
+
 
 @dataclass(frozen=True)
 class Opportunity:
@@ -985,30 +1160,36 @@ class InstrumentBook:
             if not expiries:
                 continue
             expiry = expiries[0]
-            dte = (expiry - today).days
+            dte = strategy_dte(today, expiry)
             if dte in ALLOWED_DTE:
                 result.append(Opportunity(SPECS[name], _settings(name, dte), expiry, dte))
         return result
 
     def select_today(self, today: date) -> Opportunity:
+        if not is_market_session_date(today):
+            raise NoOpportunityError(
+                f"Market is closed on {today} "
+                f"({'weekend' if today.weekday() >= 5 else 'configured holiday'})"
+            )
         opportunities = self.opportunities_for_today(today)
         if not opportunities:
             details = {
                 name: sorted({r["expiry"] for r in rows if r["expiry"] >= today})[:3]
                 for name, rows in self.rows_by_underlying.items()
             }
-            raise RuntimeError(
-                f"No DTE-0/DTE-1/DTE-2 opportunity for {today}; ALLOWED_DTE={ALLOWED_DTE}; next_expiries={details}"
+            raise NoOpportunityError(
+                f"No configured-DTE opportunity for {today}; DTE_MODE={DTE_MODE}; "
+                f"ALLOWED_DTE={ALLOWED_DTE}; next_expiries={details}"
             )
         if TRADE_SELECTION == "ONLY_NIFTY":
             matches = [x for x in opportunities if x.spec.name == "NIFTY"]
             if not matches:
-                raise RuntimeError("NIFTY is not an allowed-DTE opportunity today")
+                raise NoOpportunityError("NIFTY is not an allowed-DTE opportunity today")
             return matches[0]
         if TRADE_SELECTION == "ONLY_SENSEX":
             matches = [x for x in opportunities if x.spec.name == "SENSEX"]
             if not matches:
-                raise RuntimeError("SENSEX is not an allowed-DTE opportunity today")
+                raise NoOpportunityError("SENSEX is not an allowed-DTE opportunity today")
             return matches[0]
         priority = {name: idx for idx, name in enumerate(TRADE_PRIORITY)}
         return sorted(
@@ -1068,6 +1249,7 @@ class Position:
     peak_gross_pnl: float = 0.0
     max_drawdown_gross: float = 0.0
     protect_armed: bool = False
+    entry_quote_source: str = "WEBSOCKET"
 
 
 class PaperStraddleTrader:
@@ -1098,14 +1280,121 @@ class PaperStraddleTrader:
         self.started_at = now_ist()
         self.finished_at: Optional[datetime] = None
         self.trades: List[Dict[str, Any]] = []
+        self.completed_trade_count = 0
+        self.completion_reason: Optional[str] = None
         self._last_state_save = 0.0
         self._last_heartbeat = 0.0
+        self._last_rest_quote_at = 0.0
 
     def _spot(self) -> float:
         result = _api(self.kite.ltp, [self.spec.spot_key], desc=f"ltp({self.spec.spot_key})")
         if self.spec.spot_key not in result:
             raise RuntimeError(f"Spot quote missing for {self.spec.spot_key}")
         return float(result[self.spec.spot_key]["last_price"])
+
+    def _rest_pair_snapshot(
+        self,
+        ce_symbol: str,
+        pe_symbol: str,
+        ce_token: int,
+        pe_token: int,
+        required_side: str,
+    ) -> PairSnapshot:
+        """Fetch both legs in one Kite quote() call.
+
+        This is a depth-preserving fallback when the WebSocket has connected
+        but its first packet is LTP-only or FULL mode is still propagating.
+        It is not an LTP fill fallback: usable bid/ask depth remains mandatory.
+        """
+        elapsed = time.monotonic() - self._last_rest_quote_at
+        if elapsed < REST_QUOTE_MIN_INTERVAL_SECONDS:
+            time.sleep(REST_QUOTE_MIN_INTERVAL_SECONDS - elapsed)
+
+        ce_key = f"{self.spec.options_exchange}:{ce_symbol}"
+        pe_key = f"{self.spec.options_exchange}:{pe_symbol}"
+        result = _api(
+            self.kite.quote,
+            [ce_key, pe_key],
+            desc=f"quote depth({ce_symbol},{pe_symbol})",
+            max_retries=max(1, REST_QUOTE_MAX_RETRIES),
+        )
+        self._last_rest_quote_at = time.monotonic()
+        if ce_key not in result or pe_key not in result:
+            raise RuntimeError(
+                f"REST quote missing leg(s): CE={ce_key in result}, PE={pe_key in result}"
+            )
+
+        received = now_ist()
+        ce_tick = dict(result[ce_key])
+        pe_tick = dict(result[pe_key])
+        ce_tick["instrument_token"] = int(
+            ce_tick.get("instrument_token") or ce_token
+        )
+        pe_tick["instrument_token"] = int(
+            pe_tick.get("instrument_token") or pe_token
+        )
+        ce_tick["_received_at"] = received
+        pe_tick["_received_at"] = received
+
+        if not PriceFeed._tick_has_depth(ce_tick, required_side):
+            raise RuntimeError(f"REST quote has no usable {required_side} depth for {ce_symbol}")
+        if not PriceFeed._tick_has_depth(pe_tick, required_side):
+            raise RuntimeError(f"REST quote has no usable {required_side} depth for {pe_symbol}")
+
+        return PairSnapshot(
+            ce_tick=ce_tick,
+            pe_tick=pe_tick,
+            ce_age_ms=0.0,
+            pe_age_ms=0.0,
+            skew_ms=0.0,
+            source="REST_QUOTE",
+        )
+
+    def _obtain_pair_snapshot(
+        self,
+        ce_symbol: str,
+        pe_symbol: str,
+        ce_token: int,
+        pe_token: int,
+        required_side: str,
+        timeout: float,
+    ) -> PairSnapshot:
+        """Obtain a synchronized executable pair, WS first and REST second."""
+        ws_timeout = min(max(0.5, timeout), WEBSOCKET_DEPTH_WAIT_SECONDS)
+        try:
+            return self.feed.wait_for_pair(
+                ce_token,
+                pe_token,
+                timeout=ws_timeout,
+                required_side=required_side,
+            )
+        except Exception as ws_exc:
+            if not REST_QUOTE_FALLBACK:
+                raise
+            try:
+                snapshot = self._rest_pair_snapshot(
+                    ce_symbol,
+                    pe_symbol,
+                    ce_token,
+                    pe_token,
+                    required_side,
+                )
+                self.log.warning(
+                    "[QUOTE] WebSocket depth unavailable (%s); using synchronized REST depth for this evaluation.",
+                    ws_exc,
+                )
+                self.audit.event(
+                    "REST_DEPTH_FALLBACK",
+                    ce_symbol=ce_symbol,
+                    pe_symbol=pe_symbol,
+                    required_side=required_side,
+                    websocket_error=str(ws_exc),
+                )
+                return snapshot
+            except Exception as rest_exc:
+                raise RuntimeError(
+                    f"WS depth unavailable: {ws_exc}; REST depth unavailable: {rest_exc}"
+                ) from rest_exc
 
     def _save_state(self) -> None:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -1120,6 +1409,8 @@ class PaperStraddleTrader:
             "daily_realized_gross": self.daily_realized_gross,
             "daily_charges": self.daily_charges,
             "daily_realized_net": self.daily_realized_net,
+            "completed_trade_count": self.completed_trade_count,
+            "completion_reason": self.completion_reason,
             "reentry_at": self.reentry_at.isoformat() if self.reentry_at else None,
             "position": asdict(self.position) if self.position else None,
             "session_directory": str(self.audit.session_dir),
@@ -1147,11 +1438,36 @@ class PaperStraddleTrader:
         ):
             self.log.warning("[STATE] Today's state belongs to a different opportunity; ignoring it.")
             return
-        self.phase = str(state.get("phase", "WAITING"))
+        saved_phase = str(state.get("phase", "WAITING"))
+        inferred_count = 1 if (
+            abs(float(state.get("daily_realized_gross", 0.0))) > 1e-9
+            or abs(float(state.get("daily_charges", 0.0))) > 1e-9
+        ) else 0
+        saved_trade_count = int(state.get("completed_trade_count", inferred_count) or 0)
+
+        # Old builds marked a day DONE after one missing-depth packet or a
+        # late-start skip, even though no trade existed. Such a state must not
+        # permanently suppress all subsequent paper-test runs that day.
+        if (
+            saved_phase == "DONE"
+            and saved_trade_count == 0
+            and not HONOUR_ZERO_TRADE_DONE_STATE
+        ):
+            self.log.warning(
+                "[STATE] Ignoring stale zero-trade DONE state "
+                "(reason=%s); starting the paper test normally.",
+                state.get("completion_reason") or "legacy/unknown",
+            )
+            self.audit.event("ZERO_TRADE_DONE_STATE_IGNORED", state=state)
+            return
+
+        self.phase = saved_phase
         self.attempt_idx = int(state.get("attempt_idx", 0))
         self.daily_realized_gross = float(state.get("daily_realized_gross", 0.0))
         self.daily_charges = float(state.get("daily_charges", 0.0))
         self.daily_realized_net = float(state.get("daily_realized_net", 0.0))
+        self.completed_trade_count = saved_trade_count
+        self.completion_reason = state.get("completion_reason")
         rt = state.get("reentry_at")
         self.reentry_at = datetime.fromisoformat(rt) if rt else None
         raw_position = state.get("position")
@@ -1237,23 +1553,71 @@ class PaperStraddleTrader:
         ce_token = int(ce_row["instrument_token"])
         pe_token = int(pe_row["instrument_token"])
         self.feed.subscribe([ce_row, pe_row])
-        try:
-            snapshot = self.feed.wait_for_pair(ce_token, pe_token)
-            ce_fill, pe_fill = self._pair_fills(
-                snapshot,
-                side="SELL",
-                qty=self.spec.qty_units,
-                slippage_ticks=ENTRY_SLIPPAGE_TICKS,
-                require_full_depth=REQUIRE_FULL_DEPTH_AT_ENTRY,
+
+        # Do not terminate the trading day because the first post-subscription
+        # packet lacks depth. Wait for FULL depth, use REST quote depth as a
+        # fallback, and retry the same attempt within a bounded window.
+        retry_deadline = time.monotonic() + max(
+            1.0, ENTRY_QUOTE_RETRY_WINDOW_SECONDS
+        )
+        snapshot: Optional[PairSnapshot] = None
+        ce_fill: Optional[FillEstimate] = None
+        pe_fill: Optional[FillEstimate] = None
+        last_error: Optional[Exception] = None
+        retry_no = 0
+        while (
+            time.monotonic() < retry_deadline
+            and now_ist().time() < self.settings.reentry_cutoff_time
+        ):
+            retry_no += 1
+            try:
+                snapshot = self._obtain_pair_snapshot(
+                    str(ce_row["tradingsymbol"]),
+                    str(pe_row["tradingsymbol"]),
+                    ce_token,
+                    pe_token,
+                    required_side="SELL",
+                    timeout=max(1.0, QUOTE_WAIT_SECONDS),
+                )
+                ce_fill, pe_fill = self._pair_fills(
+                    snapshot,
+                    side="SELL",
+                    qty=self.spec.qty_units,
+                    slippage_ticks=ENTRY_SLIPPAGE_TICKS,
+                    require_full_depth=REQUIRE_FULL_DEPTH_AT_ENTRY,
+                )
+                break
+            except Exception as exc:
+                last_error = exc
+                self.log.warning(
+                    "[ENTRY] Depth not usable yet for attempt %s (try %s): %s",
+                    self.attempt_idx + 1,
+                    retry_no,
+                    exc,
+                )
+                self.audit.event(
+                    "ENTRY_QUOTE_RETRY",
+                    underlying=self.spec.name,
+                    attempt_no=self.attempt_idx + 1,
+                    atm=atm,
+                    retry_no=retry_no,
+                    reason=str(exc),
+                )
+                time.sleep(max(0.10, ENTRY_QUOTE_RETRY_INTERVAL_SECONDS))
+
+        if snapshot is None or ce_fill is None or pe_fill is None:
+            reason = str(last_error or "entry quote retry window expired")
+            self.log.error(
+                "[ENTRY] Entry deferred after %.0fs of quote/depth retries: %s",
+                ENTRY_QUOTE_RETRY_WINDOW_SECONDS,
+                reason,
             )
-        except Exception as exc:
-            self.log.error("[ENTRY] Paper entry rejected: %s", exc)
             self.audit.event(
-                "ENTRY_REJECTED",
+                "ENTRY_DEFERRED",
                 underlying=self.spec.name,
                 attempt_no=self.attempt_idx + 1,
                 atm=atm,
-                reason=str(exc),
+                reason=reason,
             )
             self.feed.unsubscribe([ce_token, pe_token])
             return False
@@ -1293,12 +1657,14 @@ class PaperStraddleTrader:
             target_rupees=target_rupees,
             profit_protect_pct=self.settings.profit_protect_pct,
             profit_protect_g=protect_g,
+            entry_quote_source=snapshot.source,
         )
         self.phase = "IN_POSITION"
         self._save_state()
         self.log.info(
             "[ENTRY] %s attempt=%s ATM=%s qty=%s | SELL CE %s @ %.2f, PE %s @ %.2f | "
-            "premium=Rs%.2f stop=Rs%.2f target=Rs%.2f protectG=Rs%.2f | depth CE=%.0f%% PE=%.0f%% skew=%.0fms",
+            "premium=Rs%.2f stop=Rs%.2f target=Rs%.2f protectG=Rs%.2f | "
+            "depth CE=%.0f%% PE=%.0f%% skew=%.0fms source=%s",
             self.spec.name,
             self.attempt_idx + 1,
             atm,
@@ -1314,6 +1680,7 @@ class PaperStraddleTrader:
             ce_fill.coverage_ratio * 100,
             pe_fill.coverage_ratio * 100,
             snapshot.skew_ms,
+            snapshot.source,
         )
         self.audit.event(
             "PAPER_ENTRY",
@@ -1361,6 +1728,7 @@ class PaperStraddleTrader:
             "estimated_pe_exit": pe_exit.fill_price,
             "ce_depth_coverage": ce_exit.coverage_ratio,
             "pe_depth_coverage": pe_exit.coverage_ratio,
+            "quote_source": snapshot.source,
             "gross_pnl": gross_pnl,
             "estimated_exit_charges": estimated_charges,
             "estimated_net_pnl": gross_pnl - estimated_charges,
@@ -1387,7 +1755,14 @@ class PaperStraddleTrader:
             if now_ist().time() >= self.settings.exit_time:
                 return "TIME_EXIT"
             try:
-                snapshot = self.feed.wait_for_pair(p.ce_token, p.pe_token, timeout=max(1.0, MAX_QUOTE_AGE_SECONDS))
+                snapshot = self._obtain_pair_snapshot(
+                    p.ce_symbol,
+                    p.pe_symbol,
+                    p.ce_token,
+                    p.pe_token,
+                    required_side="BUY",
+                    timeout=max(1.0, MAX_QUOTE_AGE_SECONDS),
+                )
                 ce_exit, pe_exit = self._pair_fills(
                     snapshot,
                     side="BUY",
@@ -1470,7 +1845,14 @@ class PaperStraddleTrader:
         if self.position is None:
             raise RuntimeError("exit_position called without a position")
         p = self.position
-        snapshot = self.feed.wait_for_pair(p.ce_token, p.pe_token, timeout=QUOTE_WAIT_SECONDS)
+        snapshot = self._obtain_pair_snapshot(
+            p.ce_symbol,
+            p.pe_symbol,
+            p.ce_token,
+            p.pe_token,
+            required_side="BUY",
+            timeout=QUOTE_WAIT_SECONDS,
+        )
         ce_exit, pe_exit = self._pair_fills(
             snapshot,
             side="BUY",
@@ -1540,9 +1922,12 @@ class PaperStraddleTrader:
             "exit_slippage_ticks": EXIT_SLIPPAGE_TICKS,
             "entry_quote_skew_ms": p.entry_quote_skew_ms,
             "exit_quote_skew_ms": snapshot.skew_ms,
+            "entry_quote_source": p.entry_quote_source,
+            "exit_quote_source": snapshot.source,
             "daily_realized_net_after_trade": round(self.daily_realized_net, 2),
         }
         self.trades.append(row)
+        self.completed_trade_count += 1
         self.audit.trade(row)
         self.audit.event(
             "PAPER_EXIT",
@@ -1639,6 +2024,7 @@ class PaperStraddleTrader:
             "time_exits": reasons.count("TIME_EXIT"),
             "raw_ticks_logged": self.audit.raw_ticks_logged,
             "raw_ticks_dropped": self.audit.raw_ticks_dropped,
+            "completion_reason": self.completion_reason or "",
             "started_at": self.started_at.isoformat(timespec="seconds"),
             "finished_at": self.finished_at.isoformat(timespec="seconds"),
             "session_directory": str(self.audit.session_dir),
@@ -1690,6 +2076,7 @@ class PaperStraddleTrader:
             self.exit_position(reason)
             if not self._schedule_reentry(reason, completed):
                 self.phase = "DONE"
+                self.completion_reason = f"EXIT_{reason}"
                 self._save_state()
                 self._write_summary()
                 return
@@ -1698,6 +2085,7 @@ class PaperStraddleTrader:
         if self.phase == "WAITING_REENTRY" and self.reentry_at is not None:
             if not self._wait_until(self.reentry_at, "saved re-entry"):
                 self.phase = "DONE"
+                self.completion_reason = "EXIT_TIME_REACHED_DURING_REENTRY_WAIT"
                 self._save_state()
                 self._write_summary()
                 return
@@ -1711,6 +2099,8 @@ class PaperStraddleTrader:
             if now_ist() < entry_dt:
                 if not self._wait_until(entry_dt, "initial entry"):
                     self.phase = "DONE"
+                    self.completion_reason = "EXIT_TIME_REACHED_BEFORE_ENTRY"
+                    self._save_state()
                     self._write_summary()
                     return
             elif LATE_START_MODE == "SKIP":
@@ -1719,7 +2109,10 @@ class PaperStraddleTrader:
                     self.settings.entry_time.strftime("%H:%M"),
                 )
                 self.audit.event("LATE_START_SKIPPED", entry_time=self.settings.entry_time)
-                self.phase = "DONE"
+                # Keep a zero-trade skip restartable. It must not become a
+                # permanent DONE lock for the rest of the day.
+                self.phase = "WAITING"
+                self.completion_reason = "LATE_START_SKIPPED"
                 self._save_state()
                 self._write_summary()
                 return
@@ -1738,20 +2131,53 @@ class PaperStraddleTrader:
                     daily_net=self.daily_realized_net,
                     limit=self.settings.max_daily_loss_rupees,
                 )
+                self.completion_reason = "DAILY_LOSS_BREAKER"
                 break
             if now_ist().time() >= self.settings.reentry_cutoff_time:
                 self.log.info("[DAY] Fresh-entry cutoff reached.")
+                self.completion_reason = "FRESH_ENTRY_CUTOFF"
                 break
             if not self.enter():
-                break
+                # A transient quote/depth problem is not a strategy exit. Keep
+                # the same attempt number and retry until the fresh-entry
+                # cutoff instead of ending the entire day.
+                retry_at = now_ist() + timedelta(
+                    seconds=max(1.0, ENTRY_FAILURE_BACKOFF_SECONDS)
+                )
+                cutoff_dt = IST.localize(
+                    datetime.combine(
+                        now_ist().date(), self.settings.reentry_cutoff_time
+                    )
+                )
+                if retry_at >= cutoff_dt:
+                    self.completion_reason = "NO_EXECUTABLE_ENTRY_BEFORE_CUTOFF"
+                    break
+                self.phase = "WAITING"
+                self.completion_reason = None
+                self._save_state()
+                self.log.warning(
+                    "[ENTRY] No executable pair yet; retrying the same attempt at %s.",
+                    retry_at.strftime("%H:%M:%S"),
+                )
+                self.audit.event(
+                    "ENTRY_RETRY_SCHEDULED",
+                    attempt_no=self.attempt_idx + 1,
+                    retry_at=retry_at,
+                )
+                if not self._wait_until(retry_at, "entry quote retry"):
+                    self.completion_reason = "EXIT_TIME_REACHED_DURING_ENTRY_RETRY"
+                    break
+                continue
             reason = self.monitor_until_exit()
             assert self.position is not None
             completed = self.position.attempt_idx
             self.exit_position(reason)
             if not self._schedule_reentry(reason, completed):
+                self.completion_reason = f"EXIT_{reason}"
                 break
             assert self.reentry_at is not None
             if not self._wait_until(self.reentry_at, f"re-entry attempt {self.attempt_idx+1}"):
+                self.completion_reason = "EXIT_TIME_REACHED_DURING_REENTRY_WAIT"
                 break
             self.phase = "WAITING"
             self.reentry_at = None
@@ -1759,10 +2185,70 @@ class PaperStraddleTrader:
 
         if self.position is not None:
             self.exit_position("TIME_EXIT")
+            self.completion_reason = "TIME_EXIT"
+        if self.completion_reason is None:
+            self.completion_reason = (
+                "SESSION_COMPLETE"
+                if self.completed_trade_count > 0
+                else "NO_TRADE_COMPLETED"
+            )
         self.phase = "DONE"
         self.reentry_at = None
         self._save_state()
         self._write_summary()
+
+
+def saved_state_blocks_duplicate_run(
+    opportunity: Opportunity,
+    log: logging.Logger,
+    audit: AuditWriter,
+) -> bool:
+    """Return True only for a genuinely completed same-day strategy run.
+
+    Legacy/failed zero-trade DONE files are deliberately ignored. This check is
+    performed before starting KiteTicker, avoiding needless WebSocket startup
+    and shutdown noise when a real completed run already exists.
+    """
+    if not RESUME_TODAY_STATE or not STATE_FILE.exists():
+        return False
+    try:
+        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("[STATE] Preflight could not read state file: %s", exc)
+        return False
+
+    if state.get("date") != now_ist().date().isoformat():
+        return False
+    if (
+        state.get("underlying") != opportunity.spec.name
+        or state.get("expiry") != opportunity.expiry.isoformat()
+        or int(state.get("dte", opportunity.dte)) != opportunity.dte
+    ):
+        return False
+    if str(state.get("phase", "")).upper() != "DONE":
+        return False
+
+    inferred_count = 1 if (
+        abs(float(state.get("daily_realized_gross", 0.0))) > 1e-9
+        or abs(float(state.get("daily_charges", 0.0))) > 1e-9
+    ) else 0
+    trade_count = int(state.get("completed_trade_count", inferred_count) or 0)
+    if trade_count <= 0 and not HONOUR_ZERO_TRADE_DONE_STATE:
+        log.warning(
+            "[STATE] Preflight ignored zero-trade DONE state (reason=%s).",
+            state.get("completion_reason") or "legacy/unknown",
+        )
+        audit.event("ZERO_TRADE_DONE_STATE_IGNORED_PREFLIGHT", state=state)
+        return False
+
+    log.info(
+        "[DAY] A completed run already exists: trades=%s reason=%s. "
+        "WebSocket will not be started.",
+        trade_count,
+        state.get("completion_reason") or "completed",
+    )
+    audit.event("ALREADY_DONE_SKIP", state=state)
+    return True
 
 
 # =============================================================================
@@ -1794,7 +2280,31 @@ def run_self_test() -> None:
     costs = estimate_trade_charges("NFO", 100, 100, 90, 90, 325)
     assert costs["total"] > 80
     assert round_to_step(24776, 50) == 24800
-    assert set(ALLOWED_DTE) == {0, 1, 2}, f"Expected ALLOWED_DTE 0,1,2; got {ALLOWED_DTE}"
+    assert ALLOWED_DTE and all(x >= 0 for x in ALLOWED_DTE)
+    assert PriceFeed._tick_has_depth(tick, "SELL")
+    assert PriceFeed._tick_has_depth(tick, "BUY")
+
+    # Regression test for the reported failure: a fresh LTP-only pair must not
+    # be accepted as a FULL-depth snapshot.
+    fake_feed = object.__new__(PriceFeed)
+    fake_feed._lock = threading.RLock()
+    received = now_ist()
+    fake_feed._latest = {
+        1: {"instrument_token": 1, "last_price": 100.0, "_received_at": received},
+        2: {"instrument_token": 2, "last_price": 100.0, "_received_at": received},
+    }
+    assert fake_feed.pair_snapshot(1, 2, required_side="SELL") is None
+    fake_feed._latest = {
+        1: {**tick, "instrument_token": 1, "_received_at": received},
+        2: {**tick, "instrument_token": 2, "_received_at": received},
+    }
+    assert fake_feed.pair_snapshot(1, 2, required_side="SELL") is not None
+
+    if DTE_MODE == "TRADING_SESSIONS":
+        # Friday 24 July -> Tuesday 28 July: Monday and Tuesday remain.
+        assert strategy_dte(date(2026, 7, 24), date(2026, 7, 28)) == 2
+    else:
+        assert strategy_dte(date(2026, 7, 24), date(2026, 7, 28)) == 4
     assert _settings("NIFTY", 0).entry_time == _settings("NIFTY", 2).entry_time
     assert _settings("SENSEX", 1).profit_target_pct > 0
     print("SELF-TEST PASSED")
@@ -1810,10 +2320,18 @@ def run_self_test() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Paper-only live DTE-0/DTE-1/DTE-2 short-straddle validator")
     parser.add_argument("--self-test", action="store_true", help="Run pure fill/cost tests without Kite")
+    parser.add_argument(
+        "--reset-state",
+        action="store_true",
+        help="Delete today's paper state before starting a deliberate fresh test run.",
+    )
     args = parser.parse_args()
     if args.self_test:
         run_self_test()
         return 0
+    if args.reset_state and STATE_FILE.exists():
+        STATE_FILE.unlink()
+        print(f"[STATE] Deleted paper state: {STATE_FILE}")
 
     if oUtils is None:
         raise RuntimeError(
@@ -1831,7 +2349,14 @@ def main() -> int:
         log.info("[BOOT] %s", BUILD_ID)
         log.info("[BOOT] HARD SAFETY LOCK: PAPER ONLY; this program has no order-placement code.")
         log.info("[BOOT] Config=%s | output=%s | state=%s", PROPERTY_FILE_PATH, audit.session_dir, STATE_FILE)
-        log.info("[BOOT] Allowed DTE=%s | selection=%s | priority=%s", ALLOWED_DTE, TRADE_SELECTION, TRADE_PRIORITY)
+        log.info(
+            "[BOOT] DTE mode=%s holidays=%s | allowed=%s | selection=%s | priority=%s",
+            DTE_MODE,
+            len(MARKET_HOLIDAYS),
+            ALLOWED_DTE,
+            TRADE_SELECTION,
+            TRADE_PRIORITY,
+        )
         audit.event(
             "BOOT",
             build_id=BUILD_ID,
@@ -1839,6 +2364,8 @@ def main() -> int:
             output=audit.session_dir,
             state_file=STATE_FILE,
             allowed_dte=ALLOWED_DTE,
+            dte_mode=DTE_MODE,
+            market_holidays=sorted(MARKET_HOLIDAYS),
             trade_selection=TRADE_SELECTION,
         )
 
@@ -1852,7 +2379,12 @@ def main() -> int:
 
         book = InstrumentBook(kite, log, audit)
         book.load()
-        opportunity = book.select_today(now_ist().date())
+        try:
+            opportunity = book.select_today(now_ist().date())
+        except NoOpportunityError as exc:
+            log.info("[NO TRADE DAY] %s", exc)
+            audit.event("NO_TRADE_DAY", reason=str(exc))
+            return 0
         log.info(
             "[SELECT] %s selected: expiry=%s DTE=%s selection=%s priority=%s",
             opportunity.spec.name,
@@ -1868,6 +2400,9 @@ def main() -> int:
             dte=opportunity.dte,
             selection=TRADE_SELECTION,
         )
+
+        if saved_state_blocks_duplicate_run(opportunity, log, audit):
+            return 0
 
         feed = PriceFeed(str(api_key), str(access_token), audit, log)
         feed.start()

@@ -65,7 +65,7 @@ except Exception:
 def _load_property_file() -> str:
     cfg_path = os.getenv(
         "STRADDLE_CONFIG",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs/straddle_config_v3opt_optuna_best.properties"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs/straddle_config_v3opt_DTE0.properties"),
     )
     if not os.path.exists(cfg_path):
         print(f"[CONFIG] Property file not found at {cfg_path}; using built-in defaults.")

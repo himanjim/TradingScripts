@@ -72,7 +72,7 @@ import pandas as pd
 RUN_MODE = "optimize"  # "optimize" or "backtest"
 
 # Number of Optuna trials.  First use 5-10 trials with the sample limits below.
-OPT_TRIALS = 300
+OPT_TRIALS = 1000
 OPT_SEED = 42
 
 # 1 = maximise full-sample total net profit exactly.
@@ -89,7 +89,7 @@ OPT_MIN_MONTHS = 3
 # Every completed trial is appended and flushed to CSV.  SQLite persistence is
 # optional; when enabled, re-running this script continues the same study.
 OPT_SAVE_DB = False
-OPT_STUDY_NAME = "atm_straddle_DTE1_v2_profit"
+OPT_STUDY_NAME = "atm_straddle_DTE2_v2_profit"
 OPT_OUTPUT_DIR = str(Path.home() / "Downloads" / "straddle_optimizer_runs")
 
 # Generate a detailed Excel backtest and a ready-to-run .properties file for

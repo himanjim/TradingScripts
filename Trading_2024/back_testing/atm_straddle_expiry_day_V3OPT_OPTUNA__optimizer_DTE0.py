@@ -3,7 +3,7 @@ V3-OPT ATM short-straddle backtester + Optuna profit optimizer.
 
 This file is the optimizer-enabled version of:
     A. atm_straddle_expiry_day_V3OPT.py
-    B. straddle_config_v3opt.properties
+    B. straddle_config_v3opt_DTE0.properties
 
 It preserves the V3 strategy rules:
     * hard entry/exit cut-offs;
@@ -122,7 +122,7 @@ PROPERTY_FILE_PATH = _load_property_file()
 # =============================================================================
 # RUN CONTROL AND OPTIMIZER SETTINGS
 # =============================================================================
-# All settings can be placed in straddle_config_v3opt.properties. A real process
+# All settings can be placed in straddle_config_v3opt_DTE0.properties. A real process
 # environment variable still takes precedence because the property loader above
 # does not overwrite existing environment variables.
 
@@ -166,7 +166,7 @@ OPT_MIN_MONTHS = int(float(os.getenv("OPT_MIN_MONTHS", "6")))
 _OPT_DISQUALIFY = -1.0e18
 
 # Search-group switches. Setting a switch to 0 freezes that group at the values
-# already present in straddle_config_v3opt.properties.
+# already present in straddle_config_v3opt_DTE0.properties.
 OPT_TUNE_TIMES = os.getenv("OPT_TUNE_TIMES", "1").strip() == "1"
 OPT_TUNE_STOPLOSS = os.getenv("OPT_TUNE_STOPLOSS", "1").strip() == "1"
 OPT_TUNE_REENTRY = os.getenv("OPT_TUNE_REENTRY", "1").strip() == "1"
