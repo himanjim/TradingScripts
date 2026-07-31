@@ -208,7 +208,7 @@ BREAKEVEN_LOCK_PCT = _parse_pct_value(os.getenv("BREAKEVEN_LOCK_PCT", "0"))
 PROFIT_TARGET_PCT = _parse_pct_value(os.getenv("PROFIT_TARGET_PCT", "0.10"))
 REENTRY_ON_PROFIT_TARGET = _bool_env("REENTRY_ON_PROFIT_TARGET", True)
 REENTRY_DELAY_AFTER_TARGET = _csv_ints(
-    os.getenv("REENTRY_DELAY_AFTER_TARGET"), [1]
+    os.getenv("REENTRY_DELAY_AFTER_TARGET"), [1, 2, 4]
 )
 
 MAX_DAILY_LOSS_RUPEES = _float_env("MAX_DAILY_LOSS_RUPEES", 20000.0)
@@ -2287,7 +2287,7 @@ def _validate_configuration() -> None:
         raise RuntimeError("MAX_REATTEMPTS cannot be negative.")
     if not LOSS_LIMIT_RUPEES_BY_ATTEMPT:
         raise RuntimeError("LOSS_LIMIT_RUPEES_BY_ATTEMPT cannot be empty.")
-    if ENFORCE_DTE and 1 not in ALLOWED_DTE:
+    if ENFORCE_DTE and 4 not in ALLOWED_DTE:
         raise RuntimeError(
             f"This strategy is DTE-1 only; ALLOWED_DTE must contain 1, got {ALLOWED_DTE}."
         )
