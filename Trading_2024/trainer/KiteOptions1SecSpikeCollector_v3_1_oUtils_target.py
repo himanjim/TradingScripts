@@ -4,7 +4,8 @@ Compact, restart-safe Kite option spike collector.
 
 What it stores
 --------------
-For the nearest expiry of every configured index, the collector watches:
+For the single target selected by ``OptionTradeUtils.get_instruments()``,
+the collector watches the exact option series identified by ``PART_SYMBOL``:
 
     ATM-10 ... ATM ... ATM+10, both CE and PE
 
@@ -37,10 +38,9 @@ This version uses a highly compact SQLite schema:
   ``MODE_FULL`` (184-byte packet);
 * underlying indices use ``MODE_LTP`` (8-byte packet).
 
-Even the theoretical maximum for NIFTY+SENSEX, 86 instruments for every second
-of the 09:15-15:30 session, is normally well below 100 MB with this schema.
-With the default ``SAVE_ONLY_PRICE_CHANGES=true``, the actual database should be
-considerably smaller.
+For one target index, the normal saved band contains 42 options plus the
+underlying. With the default ``SAVE_ONLY_PRICE_CHANGES=true``, the actual
+database should remain considerably below the earlier collector's size.
 
 Accuracy boundary
 -----------------
@@ -63,8 +63,12 @@ The script preserves the project convention:
 
     import OptionTradeUtils as oUtils
     kite = oUtils.intialize_kite_api()
+    target = oUtils.get_instruments(kite)
 
-The returned KiteConnect object must contain a valid current-day access token.
+``OptionTradeUtils.get_instruments()`` is the only source of target selection.
+Its ``choice`` determines whether NIFTY or SENSEX is collected, while its
+``PART_SYMBOL`` determines the exact expiry series. The returned KiteConnect
+object must contain a valid current-day access token.
 
 Recommended installation
 ------------------------
@@ -78,7 +82,6 @@ Recommended execution
 
 Important environment variables
 -------------------------------
-TARGET_INDEXES=NIFTY,SENSEX
 ATM_WINGS=10
 SUBSCRIPTION_BUFFER_WINGS=1
 PREOPEN_EXTRA_WINGS=10
@@ -94,11 +97,11 @@ PRECONNECT_SECONDS=5
 STRICT_OPTION_BAND=true
 REFRESH_INSTRUMENT_CACHE=false
 
-Optional expiry overrides
--------------------------
-EXPIRY_NIFTY=2026-08-04
-EXPIRY_SENSEX=2026-08-06
-EXPIRY_BANKNIFTY=2026-08-25
+Target and expiry selection
+---------------------------
+Change only ``choice`` and the active ``PART_SYMBOL`` inside
+``OptionTradeUtils.get_instruments()``. ``TARGET_INDEXES`` and ``EXPIRY_*``
+environment variables are intentionally not used by this collector.
 
 Compact flags
 -------------
@@ -136,7 +139,7 @@ from kiteconnect import exceptions as kite_exceptions
 from twisted.internet import reactor
 
 # Preserve the user's existing API initialisation convention.
-import OptionTradeUtils as oUtils
+import Trading_2024.OptionTradeUtils as oUtils
 
 try:
     from zoneinfo import ZoneInfo
@@ -148,7 +151,7 @@ except ImportError as exc:  # pragma: no cover
 # Version, constants and configuration
 # =============================================================================
 
-SCRIPT_VERSION = "3.0.0-compact-spikes"
+SCRIPT_VERSION = "3.1.0-oUtils-single-target"
 SCHEMA_VERSION = 3
 IST = ZoneInfo("Asia/Kolkata")
 T = TypeVar("T")
@@ -275,23 +278,6 @@ OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "./kite_spike_data")).expanduser().res
 CACHE_DIR = OUTPUT_DIR / "instrument_cache"
 LOG_DIR = OUTPUT_DIR / "logs"
 
-SUPPORTED_INDEXES = ("NIFTY", "SENSEX", "BANKNIFTY")
-TARGET_INDEXES = tuple(
-    dict.fromkeys(
-        item.strip().upper()
-        for item in os.getenv("TARGET_INDEXES", "NIFTY,SENSEX").split(",")
-        if item.strip()
-    )
-)
-if not TARGET_INDEXES:
-    raise ValueError("TARGET_INDEXES cannot be empty")
-for target in TARGET_INDEXES:
-    if target not in SUPPORTED_INDEXES:
-        raise ValueError(
-            f"Unsupported index {target!r}. Allowed: {', '.join(SUPPORTED_INDEXES)}"
-        )
-
-
 @dataclass(frozen=True)
 class IndexConfig:
     key: str
@@ -310,6 +296,129 @@ INDEX_CONFIGS: Dict[str, IndexConfig] = {
         "BANKNIFTY", 3, "NSE", "NIFTY BANK", "NFO", "BANKNIFTY", 100
     ),
 }
+
+
+@dataclass(frozen=True)
+class UtilityTargetSelection:
+    """Single collector target returned by OptionTradeUtils.get_instruments()."""
+
+    config: IndexConfig
+    part_symbol: str
+    quantity_units: int
+    stoploss_points: float
+    minimum_lots: int
+    long_straddle_strike_distance: int
+
+
+def _normalise_exchange(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def _normalise_utility_symbol(value: Any) -> str:
+    # Existing OptionTradeUtils values are written as ':NIFTY 50' / ':SENSEX'.
+    return str(value or "").strip().lstrip(":").upper()
+
+
+def _normalise_part_symbol(value: Any) -> str:
+    return str(value or "").strip().lstrip(":").upper()
+
+
+def resolve_target_from_option_utils(kite: Any) -> UtilityTargetSelection:
+    """Resolve exactly one index and expiry series from oUtils.get_instruments().
+
+    Expected legacy tuple:
+        underlying_exchange, underlying, options_exchange, part_symbol,
+        quantity, strike_multiple, stoploss_points, minimum_lots,
+        long_straddle_strike_distance
+    """
+
+    raw = retry_call(
+        "oUtils.get_instruments(kite)",
+        lambda: oUtils.get_instruments(kite),
+    )
+    if not isinstance(raw, (tuple, list)) or len(raw) != 9:
+        raise RuntimeError(
+            "OptionTradeUtils.get_instruments() must return exactly 9 values; "
+            f"received {type(raw).__name__} with "
+            f"{len(raw) if isinstance(raw, (tuple, list)) else 'unknown'} values"
+        )
+
+    (
+        underlying_exchange,
+        underlying_symbol,
+        options_exchange,
+        part_symbol,
+        quantity_units,
+        strike_multiple,
+        stoploss_points,
+        minimum_lots,
+        long_straddle_strike_distance,
+    ) = raw
+
+    underlying_exchange_n = _normalise_exchange(underlying_exchange)
+    underlying_symbol_n = _normalise_utility_symbol(underlying_symbol)
+    options_exchange_n = _normalise_exchange(options_exchange)
+    part_symbol_n = _normalise_part_symbol(part_symbol)
+
+    matches = [
+        config
+        for config in INDEX_CONFIGS.values()
+        if config.index_exchange == underlying_exchange_n
+        and config.index_tradingsymbol.upper() == underlying_symbol_n
+        and config.option_exchange == options_exchange_n
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            "Could not uniquely map OptionTradeUtils.get_instruments() to a "
+            "supported index. Received "
+            f"underlying={underlying_exchange_n}:{underlying_symbol_n}, "
+            f"options_exchange={options_exchange_n}, part_symbol={part_symbol_n!r}."
+        )
+
+    config = matches[0]
+    if not part_symbol_n:
+        raise RuntimeError("PART_SYMBOL returned by get_instruments() is blank")
+    if not part_symbol_n.startswith(config.option_name):
+        raise RuntimeError(
+            f"PART_SYMBOL {part_symbol_n!r} does not belong to {config.key}"
+        )
+
+    try:
+        strike_multiple_i = int(round(float(strike_multiple)))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Invalid STRIKE_MULTIPLE from get_instruments(): {strike_multiple!r}"
+        ) from exc
+    if strike_multiple_i != config.strike_step:
+        raise RuntimeError(
+            f"STRIKE_MULTIPLE mismatch for {config.key}: OptionTradeUtils returned "
+            f"{strike_multiple_i}, collector expects {config.strike_step}"
+        )
+
+    try:
+        selection = UtilityTargetSelection(
+            config=config,
+            part_symbol=part_symbol_n,
+            quantity_units=int(quantity_units),
+            stoploss_points=float(stoploss_points),
+            minimum_lots=int(minimum_lots),
+            long_straddle_strike_distance=int(long_straddle_strike_distance),
+        )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Invalid numeric value returned by OptionTradeUtils.get_instruments()"
+        ) from exc
+    logging.info(
+        "Target selected by OptionTradeUtils.get_instruments(): "
+        "%s underlying=%s:%s options=%s part=%s strike_step=%d",
+        config.key,
+        config.index_exchange,
+        config.index_tradingsymbol,
+        config.option_exchange,
+        selection.part_symbol,
+        config.strike_step,
+    )
+    return selection
 
 
 # =============================================================================
@@ -441,18 +550,6 @@ def normalize_expiry(value: Any) -> date:
         except ValueError:
             pass
     raise ValueError(f"Cannot parse expiry value: {value!r}")
-
-
-def parse_expiry_override(index_key: str) -> Optional[date]:
-    raw = os.getenv(f"EXPIRY_{index_key}", "").strip()
-    if not raw:
-        return None
-    for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
-        try:
-            return datetime.strptime(raw, fmt).date()
-        except ValueError:
-            continue
-    raise ValueError(f"EXPIRY_{index_key} must be YYYY-MM-DD or DD-MM-YYYY")
 
 
 def round_to_atm(price: float, step: int) -> int:
@@ -678,9 +775,10 @@ def build_index_runtime(
     index_rows: Sequence[Mapping[str, Any]],
     option_rows: Sequence[Mapping[str, Any]],
     trading_day: date,
+    part_symbol: str,
 ) -> IndexRuntime:
     underlying = find_underlying(index_rows, config)
-    override = parse_expiry_override(config.key)
+    part_prefix = _normalise_part_symbol(part_symbol)
 
     candidates: List[Tuple[date, Mapping[str, Any]]] = []
     for row in option_rows:
@@ -694,6 +792,10 @@ def build_index_runtime(
                 continue
         elif not symbol_matches_option_root(symbol, config.option_name):
             continue
+        # PART_SYMBOL is the exact expiry-series prefix selected in
+        # OptionTradeUtils.py, e.g. NIFTY26804 or SENSEX26JUL.
+        if not symbol.startswith(part_prefix):
+            continue
         try:
             expiry = normalize_expiry(row.get("expiry"))
         except Exception:
@@ -703,13 +805,18 @@ def build_index_runtime(
 
     expiries = sorted({expiry for expiry, _ in candidates})
     if not expiries:
-        raise RuntimeError(f"No non-expired {config.key} option expiry found")
-    selected_expiry = override or expiries[0]
-    if selected_expiry not in expiries:
-        preview = ", ".join(str(item) for item in expiries[:10])
         raise RuntimeError(
-            f"EXPIRY_{config.key}={selected_expiry} absent. Available: {preview}"
+            f"No non-expired {config.key} options match PART_SYMBOL={part_prefix!r}. "
+            "Update the active PART_SYMBOL in OptionTradeUtils.get_instruments()."
         )
+    if len(expiries) > 1:
+        logging.warning(
+            "%s PART_SYMBOL=%s matched multiple expiries %s; selecting nearest",
+            config.key,
+            part_prefix,
+            expiries,
+        )
+    selected_expiry = expiries[0]
 
     option_map: Dict[Tuple[int, str], InstrumentMeta] = {}
     for expiry, row in candidates:
@@ -746,10 +853,11 @@ def build_index_runtime(
         raise RuntimeError(f"No {config.key} contracts built for {selected_expiry}")
 
     logging.info(
-        "%s: underlying=%s token=%d expiry=%s contracts=%d",
+        "%s: underlying=%s token=%d part=%s expiry=%s contracts=%d",
         config.key,
         underlying.tradingsymbol,
         underlying.instrument_token,
+        part_prefix,
         selected_expiry,
         len(option_map),
     )
@@ -1951,13 +2059,15 @@ def initialise_kite() -> Any:
     return kite
 
 
-def build_runtimes(kite: Any, trading_day: date) -> Dict[str, IndexRuntime]:
-    required_exchanges: Set[str] = set()
-    for key in TARGET_INDEXES:
-        config = INDEX_CONFIGS[key]
-        required_exchanges.add(config.index_exchange)
-        required_exchanges.add(config.option_exchange)
+def build_runtimes(
+    kite: Any,
+    trading_day: date,
+    selection: UtilityTargetSelection,
+) -> Dict[str, IndexRuntime]:
+    """Build exactly one runtime selected by OptionTradeUtils.get_instruments()."""
 
+    config = selection.config
+    required_exchanges = {config.index_exchange, config.option_exchange}
     by_exchange: Dict[str, List[Dict[str, Any]]] = {}
     for exchange in sorted(required_exchanges):
         by_exchange[exchange] = load_instruments_with_cache(
@@ -1966,16 +2076,14 @@ def build_runtimes(kite: Any, trading_day: date) -> Dict[str, IndexRuntime]:
             trading_day,
         )
 
-    result: Dict[str, IndexRuntime] = {}
-    for key in TARGET_INDEXES:
-        config = INDEX_CONFIGS[key]
-        result[key] = build_index_runtime(
-            config,
-            by_exchange[config.index_exchange],
-            by_exchange[config.option_exchange],
-            trading_day,
-        )
-    return result
+    runtime = build_index_runtime(
+        config,
+        by_exchange[config.index_exchange],
+        by_exchange[config.option_exchange],
+        trading_day,
+        selection.part_symbol,
+    )
+    return {config.key: runtime}
 
 
 def all_runtime_instruments(runtimes: Mapping[str, IndexRuntime]) -> List[InstrumentMeta]:
@@ -2010,19 +2118,6 @@ def main() -> int:
         logging.error("%s is a weekend; refusing normal live run", trading_day)
         return 2
 
-    db_path = OUTPUT_DIR / f"kite_option_spikes_v3_{trading_day:%Y%m%d}.sqlite3"
-    lock_path = db_path.with_suffix(db_path.suffix + ".lock")
-
-    logging.info("=" * 88)
-    logging.info("Kite compact option spike collector %s", SCRIPT_VERSION)
-    logging.info("Trading day: %s", trading_day)
-    logging.info("Targets: %s", ", ".join(TARGET_INDEXES))
-    logging.info("Saved band: ATM-%d through ATM+%d, CE+PE", ATM_WINGS, ATM_WINGS)
-    logging.info("Store only price-changing seconds: %s", SAVE_ONLY_PRICE_CHANGES)
-    logging.info("Options mode: QUOTE; underlyings mode: LTP")
-    logging.info("Database: %s", db_path)
-    logging.info("=" * 88)
-
     connect_time, market_open, market_close = build_market_times(trading_day)
     current = now_ist()
     if current >= market_close:
@@ -2030,9 +2125,28 @@ def main() -> int:
         return 2
 
     try:
+        kite = initialise_kite()
+        selection = resolve_target_from_option_utils(kite)
+        target_key = selection.config.key
+        db_path = OUTPUT_DIR / (
+            f"kite_option_spikes_v3_{target_key}_{trading_day:%Y%m%d}.sqlite3"
+        )
+        lock_path = db_path.with_suffix(db_path.suffix + ".lock")
+
+        logging.info("=" * 88)
+        logging.info("Kite compact option spike collector %s", SCRIPT_VERSION)
+        logging.info("Trading day: %s", trading_day)
+        logging.info("Target source: OptionTradeUtils.get_instruments()")
+        logging.info("Target: %s", target_key)
+        logging.info("PART_SYMBOL: %s", selection.part_symbol)
+        logging.info("Saved band: ATM-%d through ATM+%d, CE+PE", ATM_WINGS, ATM_WINGS)
+        logging.info("Store only price-changing seconds: %s", SAVE_ONLY_PRICE_CHANGES)
+        logging.info("Options mode: QUOTE; underlyings mode: LTP")
+        logging.info("Database: %s", db_path)
+        logging.info("=" * 88)
+
         with SingleInstanceLock(lock_path):
-            kite = initialise_kite()
-            runtimes = build_runtimes(kite, trading_day)
+            runtimes = build_runtimes(kite, trading_day, selection)
             store = CompactSQLiteStore(db_path, trading_day)
             store.set_metadata_many(
                 {
@@ -2040,7 +2154,12 @@ def main() -> int:
                     "script_version": SCRIPT_VERSION,
                     "kiteconnect_version": package_version_or_unknown("kiteconnect"),
                     "trading_day": trading_day.isoformat(),
-                    "target_indexes": ",".join(TARGET_INDEXES),
+                    "target_source": "OptionTradeUtils.get_instruments",
+                    "target_index": selection.config.key,
+                    "target_part_symbol": selection.part_symbol,
+                    "target_underlying_exchange": selection.config.index_exchange,
+                    "target_underlying_symbol": selection.config.index_tradingsymbol,
+                    "target_options_exchange": selection.config.option_exchange,
                     "atm_wings": ATM_WINGS,
                     "subscription_buffer_wings": SUBSCRIPTION_BUFFER_WINGS,
                     "preopen_extra_wings": PREOPEN_EXTRA_WINGS,
