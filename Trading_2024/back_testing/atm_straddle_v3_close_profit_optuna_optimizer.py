@@ -1,13 +1,17 @@
 """
-Optuna optimizer for the latest DTE-1 ATM short-straddle v3 strategy.
-====================================================================
+Optuna optimizer for the latest ATM short-straddle v3 strategy.
+==============================================================
 
 Purpose
 -------
 This is a STANDALONE optimizer for:
 
     A. atm_straddle_backtest_v3.py
-    B. straddle_config_DTE_1_v3.properties
+    B. the properties file selected by BASE_STRATEGY_CONFIG
+
+The optimizer does NOT hard-code DTE. ``ALLOWED_DTE`` is read from the selected
+properties file and is preserved for every trial and in the generated winner.
+Single-DTE and comma-separated multi-DTE settings are both supported.
 
 It deliberately IMPORTS the supplied backtester instead of maintaining a second
 copy of the trading rules. Every trial therefore executes the latest strategy
@@ -70,7 +74,7 @@ RUN_MODE = os.getenv("OPT_RUN_MODE", "optimize").strip().lower()  # optimize / v
 
 # Number of Optuna trials. For an initial smoke test, use 5-10 trials together
 # with SAMPLE_MAX_PICKLES and SAMPLE_MAX_DAYS below.
-OPT_TRIALS = 700
+OPT_TRIALS = 500
 
 # 1 = maximize full-sample TOTAL NET PROFIT exactly.
 # >1 = contiguous walk-forward block score:
@@ -90,7 +94,10 @@ OPT_SEARCH_PROFILE = "core"  # "core" or "full"
 
 # Persistent outputs.
 OPT_OUTPUT_DIR = r"G:\My Drive\Trading\optimizer_runs"
-OPT_STUDY_NAME = "atm_straddle_dte1_v3_close_profit"
+# Leave blank to derive a DTE-specific study/output name from ALLOWED_DTE in
+# the selected properties file. Set OPT_STUDY_NAME in the environment only when
+# you deliberately want a custom fixed study name.
+OPT_STUDY_NAME = os.getenv("OPT_STUDY_NAME", "").strip()
 OPT_SAVE_DB = False
 OPT_WRITE_BEST_EXCEL = True
 OPT_WRITE_BEST_PROPERTIES = True
@@ -130,15 +137,17 @@ _CONFIG_OVERRIDE = os.getenv("BASE_STRATEGY_CONFIG", "").strip()
 BACKTEST_SCRIPT_PATH = _first_existing(
     [Path(_BACKTEST_OVERRIDE)] if _BACKTEST_OVERRIDE else [
         THIS_DIR / "atm_straddle_backtest_v3.py",
-        THIS_DIR / "atm_straddle_backtest_v3(3).py",
     ],
     "latest backtest script",
 )
 
 BASE_STRATEGY_CONFIG = _first_existing(
     [Path(_CONFIG_OVERRIDE)] if _CONFIG_OVERRIDE else [
-        THIS_DIR / "configs/straddle_config_DTE_1_v3.properties",
-        THIS_DIR / "configs/straddle_config_DTE_1_v3(3).properties",
+        # Preferred generic name for a DTE-independent optimizer setup.
+        THIS_DIR / "configs/straddle_config_DTE_1_v3_close_profit_optimized.properties",
+        # Backward-compatible fallback for the user's existing DTE-1 filename.
+        # The filename does NOT control DTE; ALLOWED_DTE inside the file does.
+        THIS_DIR / "configs/straddle_config_DTE_1_v3_close_profit_optimized.properties",
     ],
     "base strategy properties file",
 )
@@ -166,6 +175,58 @@ def _read_properties(path: Path) -> Dict[str, str]:
 
 BASE_PROPERTY_VALUES = _read_properties(BASE_STRATEGY_CONFIG)
 
+
+def _parse_allowed_dte_from_properties(values: Dict[str, str]) -> List[int]:
+    """Read and validate ALLOWED_DTE from the selected properties file.
+
+    Examples:
+        ALLOWED_DTE=0     -> [0]
+        ALLOWED_DTE=1     -> [1]
+        ALLOWED_DTE=0,1   -> [0, 1]
+
+    Deliberately fail if ALLOWED_DTE is missing/blank instead of silently
+    falling back to a code-level DTE. This prevents an optimizer run from
+    accidentally using the wrong expiry bucket.
+    """
+    raw = values.get("ALLOWED_DTE")
+    if raw is None or not str(raw).strip():
+        raise RuntimeError(
+            f"ALLOWED_DTE is missing or blank in properties file: "
+            f"{BASE_STRATEGY_CONFIG}"
+        )
+
+    try:
+        parsed = [
+            int(round(float(part.strip())))
+            for part in str(raw).split(",")
+            if part.strip()
+        ]
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Invalid ALLOWED_DTE={raw!r} in {BASE_STRATEGY_CONFIG}; "
+            "use non-negative integers such as 0, 1, or 0,1."
+        ) from exc
+
+    if not parsed or any(dte < 0 for dte in parsed):
+        raise RuntimeError(
+            f"Invalid ALLOWED_DTE={raw!r} in {BASE_STRATEGY_CONFIG}; "
+            "at least one non-negative DTE is required."
+        )
+
+    # Preserve the configured order while removing accidental duplicates.
+    return list(dict.fromkeys(parsed))
+
+
+BASE_ALLOWED_DTE = _parse_allowed_dte_from_properties(BASE_PROPERTY_VALUES)
+ALLOWED_DTE_PROPERTY_VALUE = ",".join(str(dte) for dte in BASE_ALLOWED_DTE)
+_DTE_NAME_PART = "-".join(str(dte) for dte in BASE_ALLOWED_DTE)
+
+# When no explicit study name was supplied, derive it from the actual DTE
+# setting in the properties file. This prevents DTE-0/DTE-1 studies from
+# accidentally sharing filenames or a resumable Optuna database name.
+if not OPT_STUDY_NAME:
+    OPT_STUDY_NAME = f"atm_straddle_dte{_DTE_NAME_PART}_v3_close_profit"
+
 # Remove only keys defined by the selected strategy file, then let the imported
 # backtester load them normally. This prevents stale PyCharm/Windows strategy
 # variables from overriding file B, while leaving Kite credentials untouched.
@@ -187,6 +248,12 @@ def _import_strategy_module(path: Path):
 
 
 strategy = _import_strategy_module(BACKTEST_SCRIPT_PATH)
+
+# Keep the imported backtester synchronized with the authoritative properties
+# value. The imported module should already have loaded the same value through
+# STRADDLE_CONFIG; this explicit assignment protects optimizer trials from any
+# later mutation of the module-level setting.
+strategy.ALLOWED_DTE = list(BASE_ALLOWED_DTE)
 
 
 # =============================================================================
@@ -417,8 +484,10 @@ def apply_params(params: StrategyParams) -> None:
     strategy.MIN_MINUTES_LEFT_FOR_REENTRY = int(params.min_minutes_left_for_reentry)
     strategy.REENTRY_MAX_PREMIUM_RATIO = float(params.reentry_max_premium_ratio)
 
-    # This optimizer is specifically for the supplied DTE-1 strategy.
-    strategy.ALLOWED_DTE = [1]
+    # DTE is strategy configuration, not an Optuna search parameter. Restore
+    # the exact ALLOWED_DTE read from the selected properties file on every
+    # trial so no trial can accidentally change the expiry bucket.
+    strategy.ALLOWED_DTE = list(BASE_ALLOWED_DTE)
 
 
 # =============================================================================
@@ -614,6 +683,15 @@ def build_day_groups(
             ):
                 if min_expiry_map.get((und, dy)) != expiry:
                     continue
+
+                # Cache only the expiry buckets requested by ALLOWED_DTE in
+                # the properties file. The backtester also filters by DTE when
+                # constructing actual trades; filtering here avoids needless
+                # simulation/cache work for disallowed days.
+                dte = int((expiry - dy).days)
+                if dte not in BASE_ALLOWED_DTE:
+                    continue
+
                 day_key = (str(und), dy, expiry)
                 if day_key in processed:
                     skipped.append({
@@ -1161,7 +1239,7 @@ def params_to_property_values(params: StrategyParams) -> Dict[str, str]:
     return {
         "ENTRY_TIME_IST": _fmt_time(params.entry_time),
         "EXIT_TIME_IST": _fmt_time(params.exit_time),
-        "ALLOWED_DTE": "1",
+        "ALLOWED_DTE": ALLOWED_DTE_PROPERTY_VALUE,
         "LOSS_LIMIT_RUPEES_BY_ATTEMPT": _serialize_schedule(
             params.loss_limit_pct_by_attempt
         ),
@@ -1216,7 +1294,7 @@ def write_optimized_properties(
 
     output: List[str] = [
         "# =============================================================================",
-        "# OPTUNA-OPTIMIZED DTE-1 V3 CONFIGURATION",
+        f"# OPTUNA-OPTIMIZED V3 CONFIGURATION | ALLOWED_DTE={ALLOWED_DTE_PROPERTY_VALUE}",
         f"# Generated: {datetime.now().isoformat(timespec='seconds')}",
         f"# Backtester: {BACKTEST_SCRIPT_PATH.name}",
         f"# Objective score: {_inr(metrics.get('objective_score', 0.0))}",
@@ -1472,6 +1550,10 @@ def optimize(
     print(f"[OPT] Backtester : {BACKTEST_SCRIPT_PATH}", flush=True)
     print(f"[OPT] Base config: {BASE_STRATEGY_CONFIG}", flush=True)
     print(
+        f"[OPT] ALLOWED_DTE from properties: {ALLOWED_DTE_PROPERTY_VALUE}",
+        flush=True,
+    )
+    print(
         f"[OPT] Profile={OPT_SEARCH_PROFILE}; trials={OPT_TRIALS}; "
         f"CV folds={OPT_CV_FOLDS}; groups={len(groups)}",
         flush=True,
@@ -1584,7 +1666,10 @@ def prepare_optimizer_data() -> Tuple[
         max_days=SAMPLE_MAX_DAYS,
     )
     if not groups:
-        raise RuntimeError("No eligible DTE-1 day-groups were built.")
+        raise RuntimeError(
+            f"No eligible day-groups were built for ALLOWED_DTE="
+            f"{ALLOWED_DTE_PROPERTY_VALUE}."
+        )
     return groups, min_expiry_map
 
 
@@ -1595,7 +1680,8 @@ def run_self_tests() -> None:
     """Fast tests that do not read market data or call Kite."""
     assert BACKTEST_SCRIPT_PATH.exists()
     assert BASE_STRATEGY_CONFIG.exists()
-    assert list(strategy.ALLOWED_DTE) == [1]
+    assert list(strategy.ALLOWED_DTE) == list(BASE_ALLOWED_DTE)
+    assert params_to_property_values(BASE_PARAMS)["ALLOWED_DTE"] == ALLOWED_DTE_PROPERTY_VALUE
 
     # Confirm the latest source contains the close-based target implementation
     # and no longer contains the old independent-low target variable.
@@ -1640,6 +1726,7 @@ def main() -> None:
         metrics = performance_metrics(actual_df)
         print("=" * 100)
         print("BASELINE VERIFICATION")
+        print(f"Allowed DTE   : {ALLOWED_DTE_PROPERTY_VALUE}")
         print(f"Net P&L       : {_inr(metrics['total_pnl'])}")
         print(f"Max drawdown  : {_inr(metrics['max_drawdown'])}")
         print(f"Worst day     : {_inr(metrics['worst_day'])}")
