@@ -59,7 +59,7 @@ ALLOWED_OPTION_TYPES = ("CE", "PE")
 
 # Trading session times (IST)
 SESSION_START = dtime(9, 15, 0)
-SESSION_END = dtime(15, 30, 0)
+SESSION_END = dtime(15, 40, 0)
 
 # Conservative chunk size for minute data
 MAX_DAYS_PER_CHUNK = 25
