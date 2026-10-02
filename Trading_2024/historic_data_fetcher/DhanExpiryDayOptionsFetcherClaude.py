@@ -175,7 +175,7 @@ MELT_MIN_BARS = int(os.getenv("DHAN_MELT_MIN_BARS", "20"))
 MELT_STRICT = os.getenv("DHAN_MELT_STRICT", "0").strip().lower() not in ("0", "false", "no")
 
 # Credentials: environment only. Do not paste tokens into this file.
-ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzgzODU5OTgwLCJpYXQiOjE3ODM3NzM1ODAsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.D1ywHfjFLyrDhjOje16HvriU57ZEELOVJToD8SddCj-i1ch3TXDy3JhAaeYeqj4pcg7rFN0ljQE7TKrAY7Dv2Q").strip()
+ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJ1c2VyUmVnaW9uIjoiUjEiLCJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzkxMDE4NzI0LCJpYXQiOjE3OTA5MzIzMjQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.V0sPPebCAxHH198_GstJWr8xGJjsSR1CygW0DsH116uxKr-wWGXMfLj8L4lrE4iewrU8LO3IS89DTQVGrXGQ-g").strip()
 CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "1108588932").strip()
 
 
@@ -555,9 +555,9 @@ def _check_melt(metrics: Optional[dict], sym: str, expiry_d: date) -> bool:
 # COVERAGE DIAGNOSTICS
 # =============================================================================
 def _expected_session_minutes(dy: date) -> int:
-    """Expected Indian cash/F&O minute bars from 09:15 to 15:30 inclusive."""
+    """Expected Indian cash/F&O minute bars from 09:15 to 15:40 inclusive."""
     start = pd.Timestamp(f"{dy} 09:15:00", tz=TIMEZONE_IST)
-    end = pd.Timestamp(f"{dy} 15:30:00", tz=TIMEZONE_IST)
+    end = pd.Timestamp(f"{dy} 15:40:00", tz=TIMEZONE_IST)
     return len(pd.date_range(start, end, freq="1min"))
 
 
