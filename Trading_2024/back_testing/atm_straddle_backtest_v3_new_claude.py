@@ -1,5 +1,37 @@
 """ATM short-straddle backtest -- v3 (= v2 + two opt-in keys, defaults reproduce v2 exactly).
 
+SPEED REVISION (results unchanged -- every output sheet is identical to the
+previous v3 script; verified cell-by-cell on pandas 2.2 and 3.0).
+Every changed spot is tagged "[SPEED]" -- search for it. Summary:
+
+  S1. ensure_ist()                 fast path for Series already in IST, and a
+                                   fixed +05:30 shift instead of pandas' slow
+                                   zoneinfo tz_localize for naive timestamps.
+  S2. _map_unique()                row-wise Python (.map / .str.upper) now runs
+                                   once per DISTINCT value, not once per row.
+  S3. _load_option_pickle()        each pickle is read ONCE; PASS-1 stats and
+      scan_pickles_pass1()         the PASS-2 frame come from the same read.
+                                   Only nearest-expiry rows are kept for PASS-2.
+  S4. process_pickles_generate_trades()
+                                   uses the cached PASS-2 frames; spot candles
+                                   are split by day once (dict lookup per day).
+  S5. _DayLegs                     per-day cache: (strike, CE/PE) rows located
+                                   once, each leg series built once and reused
+                                   by re-entries at the same strike.
+  S6. simulate_day_multi_trades()  per-attempt P&L / stop / target / protect
+                                   math on numpy arrays (same arithmetic, same
+                                   tie-break order) instead of ~30 small pandas
+                                   operations per attempt.
+  S7. download_underlyings()       optional on-disk cache of Kite spot candles.
+
+Optional keys (property file or environment):
+  KEEP_PICKLES_IN_MEMORY=1   (default) keep trimmed pickles in RAM between passes;
+                             0 = re-read in PASS-2 (lower RAM, still vectorised).
+  UNDERLYING_CACHE_FILE=...  path of a .pkl to reuse the Kite spot download.
+  SIMULATE_ONLY_ACTUAL_DAYS=1  simulate only days that can reach actual_trades
+                             (actual_trades / monthwise_summary identical; the
+                             all-trades sheets then cover only those days).
+
 v3 additions:
   5. PROFIT_TARGET_REENTRY_ENABLED / PROFIT_TARGET_REENTRY_DELAY
      Hitting the profit target no longer has to end the day: a fresh ATM
@@ -43,6 +75,7 @@ from dataclasses import dataclass
 from datetime import datetime, date, time as dtime, timedelta
 from typing import Dict, List, Tuple, Optional, Any
 
+import numpy as np
 import pandas as pd
 
 import Trading_2024.OptionTradeUtils as oUtils
@@ -78,7 +111,7 @@ except Exception:
 def _load_property_file() -> str:
     cfg_path = os.getenv(
         "STRADDLE_CONFIG",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs/atm_straddle_DTE2_v3_claude_new.properties"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs/straddle_config_DTE_1_v3_new_claude.properties"),
     )
     if not os.path.exists(cfg_path):
         print(f"[CONFIG] Property file not found at {cfg_path}; using built-in defaults.")
@@ -300,6 +333,19 @@ PROFIT_TARGET_REENTRY_DELAY = int(float(os.getenv("PROFIT_TARGET_REENTRY_DELAY",
 # CLOSE: minute close only (conservative check; both legs' lows rarely coincide).
 PROFIT_TARGET_FILL = os.getenv("PROFIT_TARGET_FILL", "LOWLOW").strip().upper()
 
+# --- [SPEED] options (none of these change any computed number) -------------
+# KEEP_PICKLES_IN_MEMORY=1 (default): each pickle is read ONCE; the rows PASS-2
+#   can use (nearest expiry only) are kept in RAM. 0 = re-read in PASS-2 (low RAM).
+# UNDERLYING_CACHE_FILE=<path.pkl>: reuse the Kite spot download across runs when
+#   the cached range covers the backtest window (only completed days are cached).
+# SIMULATE_ONLY_ACTUAL_DAYS=1: simulate only the (underlying, day) pairs that can
+#   reach actual_trades (ALLOWED_DTE + chosen index). actual_trades/monthwise are
+#   identical; all_trades_backtested / pivots / instrument_summary then cover
+#   those days only. Default 0 = full original output.
+KEEP_PICKLES_IN_MEMORY = os.getenv("KEEP_PICKLES_IN_MEMORY", "1").strip() == "1"
+UNDERLYING_CACHE_FILE = os.getenv("UNDERLYING_CACHE_FILE", "").strip()
+SIMULATE_ONLY_ACTUAL_DAYS = os.getenv("SIMULATE_ONLY_ACTUAL_DAYS", "0").strip() == "1"
+
 
 # --- Absolute daily circuit breaker -------------------------------------------------
 # Once cumulative realized NET P&L for the current underlying/day reaches this
@@ -420,9 +466,20 @@ def ist_tz():
 
 def ensure_ist(series_or_scalar) -> Any:
     tz = ist_tz()
+    # [SPEED S1] a Series already in this exact IST zone is returned as-is
+    # (tz_convert to the same zone is a no-op on the values).
+    if isinstance(series_or_scalar, pd.Series) and isinstance(series_or_scalar.dtype, pd.DatetimeTZDtype):
+        cur = series_or_scalar.dtype.tz
+        if type(cur) is type(tz) and str(cur) == str(tz):
+            return series_or_scalar
     dt = pd.to_datetime(series_or_scalar, errors="coerce")
     if isinstance(dt, pd.Series):
         if dt.dt.tz is None:
+            # [SPEED S1] Asia/Kolkata is a fixed +05:30 (no DST) since 1945, so
+            # localizing == shifting to UTC; pandas' generic zoneinfo localize
+            # is ~3 us/row. Same values and dtype; older data uses the slow path.
+            if str(tz) == "Asia/Kolkata" and dt.notna().any() and dt.min() >= pd.Timestamp("1946-01-01"):
+                return (dt - pd.Timedelta(hours=5, minutes=30)).dt.tz_localize("UTC").dt.tz_convert(tz)
             return dt.dt.tz_localize(tz)
         return dt.dt.tz_convert(tz)
     if getattr(dt, "tzinfo", None) is None:
@@ -460,6 +517,30 @@ def asof_close(df: pd.DataFrame, ts: pd.Timestamp) -> float:
     if loc[0] == -1:
         return float("nan")
     return float(d.iloc[loc[0]]["close"])
+
+# --- [SPEED] helpers: same results as the per-call versions, computed once ------
+def _prep_asof(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """asof_close() preparation, done once per day instead of once per attempt."""
+    if df.empty:
+        return None
+    d = df[["date", "close"]].dropna().copy()
+    d["date"] = ensure_ist(d["date"])
+    return d.sort_values("date").set_index("date")
+
+def _asof_lookup(d: Optional[pd.DataFrame], ts: pd.Timestamp) -> float:
+    if d is None:
+        return float("nan")
+    loc = d.index.get_indexer([ts], method="pad")
+    if loc[0] == -1:
+        return float("nan")
+    return float(d.iloc[loc[0]]["close"])
+
+def _map_unique(s: pd.Series, func) -> pd.Series:
+    """[SPEED S2] s.map(func) evaluated once per DISTINCT value (row-wise Python is the
+    slowest part of the pickle prep on millions of rows)."""
+    codes, uniq = pd.factorize(s)
+    out = np.array([func(v) for v in uniq] + [func(np.nan)], dtype=object)
+    return pd.Series(out[codes], index=s.index)
 
 def compute_window_start(end_day: date, months: int) -> date:
     if relativedelta is not None:
@@ -650,45 +731,131 @@ class TradeRow:
 # =============================================================================
 # PASS-1: nearest expiry per (underlying, day)
 # =============================================================================
+_PASS2_COLS = ["date", "name", "type", "option_type", "strike", "expiry", "instrument", "high", "low", "close"]
+
+# Filled by scan_pickles_pass1 so PASS-2 does not read every pickle a second time.
+# path -> ("ok", frame) | ("err", exception raised by the PASS-2 preparation)
+_PASS2_CACHE: Dict[str, Tuple[str, Any]] = {}
+
+
+def _load_option_pickle(p: str):
+    """[SPEED S3] Read one pickle ONCE and return (pass1_frame, pass2_frame, pass2_error).
+
+    pass1_frame: rows exactly as the original PASS-1 kept them (option rows,
+        tradeable underlying, expiry >= day); "day" / "expiry_date" are
+        midnight Timestamps instead of datetime.date objects (vectorised).
+    pass2_frame: rows exactly as the original PASS-2 kept them (before the
+        window filter), further restricted to this file's nearest expiry per
+        (underlying, day). The global nearest expiry is <= this file's, so a
+        dropped row could never have matched min_expiry_map in PASS-2.
+    """
+    df = pd.read_pickle(p)
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return None, None, None
+
+    for c in ("date", "name", "expiry", "type"):
+        if c not in df.columns:
+            raise ValueError(f"Missing column '{c}' in {p}")
+
+    # Option rows only (== df["type"].astype(str).str.upper().eq("OPTION")).
+    is_opt = _map_unique(df["type"], lambda v: str(v).upper() == "OPTION").to_numpy(dtype=bool)
+    # PASS-2 needs more columns than PASS-1. If any are missing, PASS-1 still
+    # uses the file and PASS-2 later reports the same "Missing columns" warning
+    # the original printed.
+    missing = [c for c in _PASS2_COLS if c not in df.columns]
+    miss_err = ValueError(f"Missing columns {missing} in {p}") if missing else None
+    d2 = df.loc[is_opt, (["date", "name", "expiry"] if missing else _PASS2_COLS)].copy()
+    del df
+    if d2.empty:
+        return None, None, miss_err
+
+    d2["date"] = ensure_ist(d2["date"])
+    # == .dt.date. Asia/Kolkata has been a fixed +05:30 since 1945, so the IST
+    # wall-clock day is (UTC + 5:30) floored; this avoids pandas' slow
+    # per-element tz_localize(None) on zoneinfo zones.
+    d2["day"] = (d2["date"].dt.tz_convert("UTC").dt.tz_localize(None)
+                 + pd.Timedelta(hours=5, minutes=30)).dt.normalize()
+    d2["underlying"] = _map_unique(d2["name"], lambda v: normalize_underlying(str(v)))
+    # == pd.to_datetime(expiry).dt.date, evaluated once per distinct expiry
+    exp = pd.to_datetime(d2["expiry"], errors="coerce")
+    codes, uniq = pd.factorize(exp)
+    uniq = pd.DatetimeIndex(uniq)
+    if uniq.tz is not None:
+        uniq = uniq.tz_localize(None)
+    uarr = uniq.normalize().to_numpy()
+    # Slot for code -1 (unparseable expiry). The NaT must carry the array's own
+    # unit: a unit-less np.datetime64("NaT") raises a DeprecationWarning on
+    # newer NumPy and will become an error.
+    nat = np.array([np.datetime64("NaT", np.datetime_data(uarr.dtype)[0])], dtype=uarr.dtype)
+    uvals = np.concatenate([uarr, nat])
+    d2["expiry_date"] = pd.Series(uvals[codes], index=d2.index)
+    d2 = d2.dropna(subset=["underlying", "day", "expiry_date"])
+    d2 = d2[d2["underlying"].isin(TRADEABLE)]
+    d2 = d2[d2["expiry_date"] >= d2["day"]]
+    if d2.empty:
+        return None, None, miss_err
+
+    # Everything above is the original PASS-1 filter chain (same rows).
+    pass1 = d2[["underlying", "day", "expiry_date"]]
+
+    if missing:
+        return pass1, None, miss_err
+
+    # PASS-2 preparation (same steps as the original PASS-2, minus the window
+    # filter which needs the global date range and is applied later).
+    try:
+        # Keep only this file's nearest expiry per (underlying, day).
+        loc_min = d2.groupby(["underlying", "day"], sort=False)["expiry_date"].transform("min")
+        p2 = d2[d2["expiry_date"] == loc_min].copy()
+        p2["strike_num"] = pd.to_numeric(p2["strike"], errors="coerce")
+        p2["strike_int"] = p2["strike_num"].round().astype("Int64")
+        p2["option_type"] = _map_unique(p2["option_type"], lambda v: str(v).upper())
+        p2 = p2.dropna(subset=["strike_int", "close"])
+        p2["strike_int"] = p2["strike_int"].astype(int)
+        # astype(str) once here; the original repeated it on every leg lookup.
+        p2["instrument"] = p2["instrument"].astype(str)
+        p2 = p2[["date", "underlying", "day", "expiry_date", "strike_int",
+                 "option_type", "instrument", "high", "low", "close"]]
+        return pass1, p2, None
+    except Exception as e:  # reported in PASS-2, like the original
+        return pass1, None, e
+
+
 def scan_pickles_pass1(pickle_paths: List[str]) -> Tuple[date, Dict[Tuple[str, date], date], date]:
+    """PASS-1: earliest/latest option day and nearest expiry per (underlying, day).
+
+    [SPEED S3] Also stores each file's PASS-2 frame in _PASS2_CACHE so PASS-2
+    does not read the pickle again. Signature and return value are unchanged.
+    """
     max_day_seen: Optional[date] = None
     min_day_seen: Optional[date] = None
     min_expiry_map: Dict[Tuple[str, date], date] = {}
+    _PASS2_CACHE.clear()
+    cached_rows = 0
 
     for p in pickle_paths:
         try:
-            df = pd.read_pickle(p)
-            if not isinstance(df, pd.DataFrame) or df.empty:
+            d2, p2, p2_err = _load_option_pickle(p)
+            if KEEP_PICKLES_IN_MEMORY:
+                if p2_err is not None:
+                    _PASS2_CACHE[p] = ("err", p2_err)
+                else:
+                    _PASS2_CACHE[p] = ("ok", p2)
+                    cached_rows += 0 if p2 is None else len(p2)
+            if d2 is None:
                 continue
 
-            for c in ("date", "name", "expiry", "type"):
-                if c not in df.columns:
-                    raise ValueError(f"Missing column '{c}' in {p}")
-
-            d2 = df[df["type"].astype(str).str.upper().eq("OPTION")]
-            if d2.empty:
-                continue
-
-            d2 = d2[["date", "name", "expiry"]].copy()
-            d2["date"] = ensure_ist(d2["date"])
-            d2["day"] = d2["date"].dt.date
-            d2["underlying"] = d2["name"].astype(str).map(normalize_underlying)
-            d2["expiry_date"] = pd.to_datetime(d2["expiry"], errors="coerce").dt.date
-            d2 = d2.dropna(subset=["underlying", "day", "expiry_date"])
-
-            d2 = d2[d2["underlying"].isin(TRADEABLE)]
-            d2 = d2[d2["expiry_date"] >= d2["day"]]
-            if d2.empty:
-                continue
-
-            file_min_day = d2["day"].min()
-            file_max_day = d2["day"].max()
+            file_min_day = d2["day"].min().date()
+            file_max_day = d2["day"].max().date()
             max_day_seen = file_max_day if (max_day_seen is None or file_max_day > max_day_seen) else max_day_seen
             min_day_seen = file_min_day if (min_day_seen is None or file_min_day < min_day_seen) else min_day_seen
 
+            # Keys are converted back to datetime.date so min_expiry_map is
+            # exactly what the original produced.
             grp = d2.groupby(["underlying", "day"], sort=False)["expiry_date"].min()
             for (und, dy), ex in grp.items():
-                key = (und, dy)
+                key = (und, dy.date())
+                ex = ex.date()
                 if key not in min_expiry_map or ex < min_expiry_map[key]:
                     min_expiry_map[key] = ex
 
@@ -700,6 +867,9 @@ def scan_pickles_pass1(pickle_paths: List[str]) -> Tuple[date, Dict[Tuple[str, d
                 raise RuntimeError(msg) from e
             print(msg)
 
+    if KEEP_PICKLES_IN_MEMORY:
+        print(f"[PASS1] kept {cached_rows:,} nearest-expiry option rows in memory for PASS-2")
+
     if max_day_seen is None or min_day_seen is None:
         raise RuntimeError("No usable option data found in pickles (PASS1) for tradeable underlyings.")
 
@@ -710,6 +880,28 @@ def scan_pickles_pass1(pickle_paths: List[str]) -> Tuple[date, Dict[Tuple[str, d
 # Underlying download
 # =============================================================================
 def download_underlyings(kite, day_start: date, day_end: date) -> Dict[str, pd.DataFrame]:
+    # [SPEED S7] Optional disk cache of the (immutable) historical spot candles.
+    if UNDERLYING_CACHE_FILE and os.path.exists(UNDERLYING_CACHE_FILE):
+        try:
+            obj = pd.read_pickle(UNDERLYING_CACHE_FILE)
+            if (obj["from"] <= day_start and obj["to"] >= day_end
+                    and set(UNDERLYING_KITE) <= set(obj["data"])):
+                print(f"[UNDERLYING CACHE] using {UNDERLYING_CACHE_FILE} ({obj['from']} -> {obj['to']})")
+                return {u: obj["data"][u] for u in UNDERLYING_KITE}
+            print("[UNDERLYING CACHE] does not cover the window; downloading")
+        except Exception as e:
+            print(f"[UNDERLYING CACHE] unreadable ({e}); downloading")
+    out = _download_underlyings_kite(kite, day_start, day_end)
+    if UNDERLYING_CACHE_FILE and day_end < date.today():   # never cache a partial session
+        try:
+            pd.to_pickle({"from": day_start, "to": day_end, "data": out}, UNDERLYING_CACHE_FILE)
+            print(f"[UNDERLYING CACHE] saved {UNDERLYING_CACHE_FILE}")
+        except Exception as e:
+            print(f"[UNDERLYING CACHE] save failed: {e}")
+    return out
+
+
+def _download_underlyings_kite(kite, day_start: date, day_end: date) -> Dict[str, pd.DataFrame]:
     cache: Dict[str, List[Dict]] = {}
     from_dt = datetime.combine(day_start, SESSION_START_IST)
     to_dt = datetime.combine(day_end, SESSION_END_IST)
@@ -728,6 +920,9 @@ def download_underlyings(kite, day_start: date, day_end: date) -> Dict[str, pd.D
 # =============================================================================
 # Simulation helpers
 # =============================================================================
+# NOTE: _pick_symbol / _build_leg_series (and asof_close above) are no longer
+# called by the simulator -- _DayLegs / _asof_lookup replace them with the same
+# logic. They are kept unchanged in case another script imports them.
 def _pick_symbol(day_opt: pd.DataFrame, strike: int, opt_type: str) -> Optional[str]:
     sub = day_opt[(day_opt["strike_int"] == strike) & (day_opt["option_type"] == opt_type)]
     if sub.empty:
@@ -752,6 +947,75 @@ def _build_leg_series(day_opt: pd.DataFrame, idx_all: pd.DatetimeIndex,
     sub = sub.sort_values("date").drop_duplicates(subset=["date"], keep="last").set_index("date")
     s = sub[price_col].astype(float).reindex(idx_all)
     return s.ffill() if do_ffill else s
+
+
+class _DayLegs:
+    """[SPEED S5] Per-day cache for symbol picks and leg series.
+
+    The original filtered the whole day's chain (and re-ran astype(str)) for
+    every leg/column/attempt. Here the (strike, CE/PE) row positions are found
+    once per day, and each leg series is built once and reused by re-entries at
+    the same strike. The per-leg pandas steps are exactly those of
+    _pick_symbol / _build_leg_series on the same rows in the same order, so
+    every value is identical.
+    """
+
+    def __init__(self, day_opt: pd.DataFrame, idx_all: pd.DatetimeIndex):
+        self.day_opt = day_opt
+        self.idx_all = idx_all
+        self.pos = day_opt.groupby(["strike_int", "option_type"], sort=False).indices
+        self._rows: Dict[Tuple[int, str], Tuple[Optional[str], Optional[pd.DataFrame]]] = {}
+        self._series: Dict[Tuple[int, str, str], pd.Series] = {}
+        self._arrays: Dict[Tuple[int, str], Tuple[np.ndarray, ...]] = {}
+
+    def _rows_for(self, strike: int, opt_type: str):
+        key = (int(strike), opt_type)
+        if key not in self._rows:
+            p = self.pos.get(key)
+            if p is None or len(p) == 0:
+                self._rows[key] = (None, None)
+            else:
+                sub = self.day_opt.iloc[p]
+                instr = sub["instrument"].astype(str)
+                syms = sorted(instr.unique().tolist())
+                sym = syms[0] if syms else None
+                self._rows[key] = (sym, sub[instr == sym] if sym else None)
+        return self._rows[key]
+
+    def symbol(self, strike: int, opt_type: str) -> Optional[str]:
+        return self._rows_for(strike, opt_type)[0]
+
+    def series(self, strike: int, opt_type: str, price_col: str) -> pd.Series:
+        """Un-forward-filled series (do_ffill=False); callers must not mutate it."""
+        key = (int(strike), opt_type, price_col)
+        if key not in self._series:
+            _, rows = self._rows_for(strike, opt_type)
+            if rows is None:
+                s = pd.Series(index=self.idx_all, dtype="float64")
+            else:
+                sub = rows[["date", price_col]].dropna()
+                if sub.empty:
+                    s = pd.Series(index=self.idx_all, dtype="float64")
+                else:
+                    sub = sub.copy()
+                    sub["date"] = ensure_ist(sub["date"])
+                    sub = sub.sort_values("date").drop_duplicates(subset=["date"], keep="last").set_index("date")
+                    s = sub[price_col].astype(float).reindex(self.idx_all)
+            self._series[key] = s
+        return self._series[key]
+
+    def arrays(self, strike: int, opt_type: str):
+        """(close_raw, close_ffilled, high, low) as float64 numpy arrays on idx_all."""
+        key = (int(strike), opt_type)
+        if key not in self._arrays:
+            close_raw = self.series(strike, opt_type, "close")
+            self._arrays[key] = (
+                close_raw.to_numpy(dtype="float64"),
+                close_raw.ffill().to_numpy(dtype="float64"),
+                self.series(strike, opt_type, "high").to_numpy(dtype="float64"),
+                self.series(strike, opt_type, "low").to_numpy(dtype="float64"),
+            )
+        return self._arrays[key]
 
 def simulate_day_multi_trades(
     *,
@@ -817,6 +1081,9 @@ def simulate_day_multi_trades(
     daily_loss_limit_enabled = MAX_DAILY_LOSS_RUPEES > 0
     prev_entry_premium_per_unit = None   # v2: for REENTRY_MAX_PREMIUM_RATIO
 
+    legs = _DayLegs(day_opt, idx_all)            # [SPEED S5] per-day leg cache
+    und_asof = _prep_asof(underlying_day)        # [SPEED S4] spot sorted once per day
+
     while cur_entry_ts < trade_end_ts:
         if daily_loss_limit_enabled and daily_realized_pnl <= -float(MAX_DAILY_LOSS_RUPEES):
             skipped.append({
@@ -832,7 +1099,7 @@ def simulate_day_multi_trades(
             })
             break
 
-        u_px = asof_close(underlying_day, cur_entry_ts)
+        u_px = _asof_lookup(und_asof, cur_entry_ts)
         if pd.isna(u_px):
             skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
                             "reason": f"No underlying price at entry {cur_entry_ts.strftime('%H:%M')}"})
@@ -840,35 +1107,29 @@ def simulate_day_multi_trades(
 
         atm = round_to_step(float(u_px), step)
 
-        ce_sym = _pick_symbol(day_opt, atm, "CE")
-        pe_sym = _pick_symbol(day_opt, atm, "PE")
+        ce_sym = legs.symbol(atm, "CE")
+        pe_sym = legs.symbol(atm, "PE")
         if not ce_sym or not pe_sym:
             skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
                             "atm_strike": atm, "reason": "ATM CE/PE not available in pickle band"})
             break
 
-        # Close series (used for entry pricing, profit-protect tracking, and reporting)
-        # Raw close series for exact entry validation
-        ce_close_raw = _build_leg_series(day_opt, idx_all, atm, "CE", ce_sym, "close", do_ffill=False)
-        pe_close_raw = _build_leg_series(day_opt, idx_all, atm, "PE", pe_sym, "close", do_ffill=False)
-
-        # Forward-filled close series for post-entry tracking/reporting
-        ce_close = ce_close_raw.ffill()
-        pe_close = pe_close_raw.ffill()
-
-        # High/Low series (used only to detect STOPLOSS intraminute extremes)
-        ce_high = _build_leg_series(day_opt, idx_all, atm, "CE", ce_sym, "high", do_ffill=False)
-        ce_low = _build_leg_series(day_opt, idx_all, atm, "CE", ce_sym, "low", do_ffill=False)
-        pe_high = _build_leg_series(day_opt, idx_all, atm, "PE", pe_sym, "high", do_ffill=False)
-        pe_low = _build_leg_series(day_opt, idx_all, atm, "PE", pe_sym, "low", do_ffill=False)
+        # [SPEED S6] all leg series are float64 numpy arrays aligned on idx_all
+        # (same values as the pandas Series of the original; positions replace
+        # timestamp labels).
+        # close_raw = un-filled close for exact entry validation; close = ffilled
+        # close for tracking/reporting; high/low only for intraminute extremes.
+        ce_close_raw, ce_close, ce_high, ce_low = legs.arrays(atm, "CE")
+        pe_close_raw, pe_close, pe_high, pe_low = legs.arrays(atm, "PE")
 
         if cur_entry_ts not in idx_all:
             skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
                             "reason": "Entry timestamp not in session index"})
             break
 
-        ce_entry = ce_close_raw.loc[cur_entry_ts]
-        pe_entry = pe_close_raw.loc[cur_entry_ts]
+        entry_pos = idx_all.get_loc(cur_entry_ts)
+        ce_entry = ce_close_raw[entry_pos]
+        pe_entry = pe_close_raw[entry_pos]
         monitor_start_ts = pd.Timestamp(cur_entry_ts) + pd.Timedelta(minutes=1)
         if monitor_start_ts > trade_end_ts:
             break
@@ -925,9 +1186,16 @@ def simulate_day_multi_trades(
         #   - profit-protect exits when current P&L <= peak - G
         G = float(profit_protect_pct * entry_premium_sum)
 
+        # [SPEED S6] Monitoring window [monitor_start_ts, trade_end_ts] as positions in idx_all
+        # (== the inclusive .loc[monitor_start_ts:trade_end_ts] label slice).
+        i0 = int(idx_all.searchsorted(monitor_start_ts, side="left"))
+        i1 = int(idx_all.searchsorted(trade_end_ts, side="right"))
+        win = np.arange(i0, i1)
+
         # Close-based PnL (same as before)
         pnl_close_all = (float(ce_entry) - ce_close) * qty + (float(pe_entry) - pe_close) * qty
-        pnl = pnl_close_all.loc[monitor_start_ts:trade_end_ts].dropna()  # keep 'pnl' as close-based for profit-protect
+        pnl_pos = win[~np.isnan(pnl_close_all[i0:i1])]   # == .dropna() on the window
+        pnl = pnl_close_all[pnl_pos]                      # keep 'pnl' as close-based for profit-protect
 
         # STOPLOSS worst-case PnL candidates within each minute:
         #  A) CE high, PE low
@@ -935,17 +1203,19 @@ def simulate_day_multi_trades(
         #  B) CE low, PE high
         pnl_ceLow_peHigh_all = (float(ce_entry) - ce_low) * qty + (float(pe_entry) - pe_high) * qty
 
-        # Worst-case PnL per minute among (close, A, B)
-        pnl_sl_all = pd.concat([pnl_close_all, pnl_ceHigh_peLow_all, pnl_ceLow_peHigh_all], axis=1).min(axis=1)
-        pnl_sl = pnl_sl_all.loc[monitor_start_ts:trade_end_ts].dropna()
+        # Worst-case PnL per minute among (close, A, B); fmin skips NaN exactly
+        # like DataFrame.min(axis=1).
+        pnl_sl_all = np.fmin(np.fmin(pnl_close_all, pnl_ceHigh_peLow_all), pnl_ceLow_peHigh_all)
+        sl_pos = win[~np.isnan(pnl_sl_all[i0:i1])]
+        pnl_sl = pnl_sl_all[sl_pos]
 
-        if pnl.empty:
+        if len(pnl) == 0:
             skipped.append({"day": dy, "underlying": und, "expiry": expiry, "trade_seq": trade_seq,
                             "atm_strike": atm, "reason": "PnL series empty after entry"})
             break
 
-        eod_ts = pnl.index[-1]
-        eod_pnl = float(pnl.iloc[-1])
+        eod_pos = int(pnl_pos[-1])
+        eod_pnl = float(pnl[-1])
 
         # If EXIT_TIME_IST is earlier than market close and no risk/profit event
         # triggers before that, the attempt is closed at the configured cutoff.
@@ -962,72 +1232,76 @@ def simulate_day_multi_trades(
         # The stop floor starts at -loss_limit_rupees. Once the running peak of
         # the close-based P&L reaches BREAKEVEN_ARM_PCT of premium, the floor is
         # lifted to BREAKEVEN_LOCK_PCT of premium for the rest of the trade.
-        stop_floor = pd.Series(-float(loss_limit_rupees), index=pnl_sl.index)
+        stop_floor = np.full(len(pnl_sl), -float(loss_limit_rupees))
         if BREAKEVEN_ARM_PCT > 0:
-            running_peak = pnl.cummax().reindex(pnl_sl.index).ffill()
-            be_armed = running_peak >= (BREAKEVEN_ARM_PCT * entry_premium_sum)
+            # == pnl.cummax().reindex(pnl_sl.index).ffill()
+            peak_full = np.full(len(idx_all), np.nan)
+            peak_full[pnl_pos] = np.maximum.accumulate(pnl)
+            running_peak = pd.Series(peak_full[sl_pos]).ffill().to_numpy()
+            be_armed = running_peak >= (BREAKEVEN_ARM_PCT * entry_premium_sum)   # NaN -> False
             be_floor = float(BREAKEVEN_LOCK_PCT * entry_premium_sum)
-            stop_floor = stop_floor.mask(be_armed.fillna(False),
-                                         max(-float(loss_limit_rupees), be_floor))
+            stop_floor = np.where(be_armed, max(-float(loss_limit_rupees), be_floor), stop_floor)
 
         stop_hit = pnl_sl <= stop_floor
-        stop_ts = pnl_sl.index[stop_hit.to_numpy().argmax()] if stop_hit.any() else None
+        stop_k = int(stop_hit.argmax()) if stop_hit.any() else None
 
-        protect_ts = None
+        protect_k = None
         if profit_protect_enabled:
-            peak = pnl.cummax()
+            peak = np.maximum.accumulate(pnl)
             arm_rupees = float(PROFIT_PROTECT_ARM_PCT * entry_premium_sum)
             give_rupees = float(PROFIT_PROTECT_GIVEBACK_PCT * entry_premium_sum)
             armed = peak >= arm_rupees
             trail = peak - give_rupees
             protect_hit = armed & (pnl <= trail)
-            protect_ts = pnl.index[protect_hit.to_numpy().argmax()] if protect_hit.any() else None
+            protect_k = int(protect_hit.argmax()) if protect_hit.any() else None
 
         # --- Per-day PROFIT TARGET: % of premium collected on this attempt ---
         # When reached, this trade exits at the target AND no further trades are
         # taken for the day (PROFIT_TARGET is excluded from the re-entry rule below).
-        target_ts = None
+        target_pos = None
         target_rupees = None
         if PROFIT_TARGET_PCT > 0.0:
             target_rupees = PROFIT_TARGET_PCT * entry_premium_sum
             # best-case (favourable) intrabar profit: both legs bought back at their lows
             pnl_best_all = (float(ce_entry) - ce_low) * qty + (float(pe_entry) - pe_low) * qty
-            pnl_tp = pd.concat([pnl_close_all, pnl_best_all], axis=1).max(axis=1)
+            pnl_tp_all = np.fmax(pnl_close_all, pnl_best_all)   # == DataFrame.max(axis=1)
             if PROFIT_TARGET_FILL == "CLOSE":  # v3
-                pnl_tp = pnl_close_all
-            pnl_tp = pnl_tp.loc[monitor_start_ts:trade_end_ts].dropna()
-            tp_hit = pnl_tp >= float(target_rupees)
-            target_ts = pnl_tp.index[tp_hit.to_numpy().argmax()] if tp_hit.any() else None
+                pnl_tp_all = pnl_close_all
+            tp_pos = win[~np.isnan(pnl_tp_all[i0:i1])]
+            tp_hit = pnl_tp_all[tp_pos] >= float(target_rupees)
+            target_pos = int(tp_pos[tp_hit.argmax()]) if tp_hit.any() else None
 
         # Earliest triggered exit wins; on identical timestamps prefer the more
         # conservative outcome: STOPLOSS, then PROFIT_TARGET, then PROFIT_PROTECT.
-        exit_ts = eod_ts
+        # (positions in idx_all sort exactly like their timestamps)
+        exit_pos = eod_pos
         exit_reason = default_exit_reason
         _candidates = []
-        if stop_ts is not None:
-            _candidates.append((stop_ts, 0, "STOPLOSS"))
-        if target_ts is not None:
-            _candidates.append((target_ts, 1, "PROFIT_TARGET"))
-        if protect_ts is not None:
-            _candidates.append((protect_ts, 2, "PROFIT_PROTECT"))
+        if stop_k is not None:
+            _candidates.append((int(sl_pos[stop_k]), 0, "STOPLOSS"))
+        if target_pos is not None:
+            _candidates.append((target_pos, 1, "PROFIT_TARGET"))
+        if protect_k is not None:
+            _candidates.append((int(pnl_pos[protect_k]), 2, "PROFIT_PROTECT"))
         if _candidates:
             _candidates.sort(key=lambda c: (c[0], c[1]))
-            exit_ts, _, exit_reason = _candidates[0]
+            exit_pos, _, exit_reason = _candidates[0]
+        exit_ts = idx_all[exit_pos]
 
         if exit_reason == "STOPLOSS":
             # v2: with the ratchet armed this may be a small PROFIT, not a loss.
-            exit_pnl_gross = float(stop_floor.loc[exit_ts])
+            exit_pnl_gross = float(stop_floor[stop_k])
         elif exit_reason == "PROFIT_TARGET":
             exit_pnl_gross = float(target_rupees)
-        else:
-            exit_pnl_gross = float(pnl.loc[exit_ts])
+        else:  # EOD / TIME_EXIT / PROFIT_PROTECT: exit_pos is a pnl position
+            exit_pnl_gross = float(pnl[int(np.searchsorted(pnl_pos, exit_pos))])
 
         # Peak (close-based) profit reached during this trade's life, up to its exit
-        pnl_pre_exit = pnl.loc[:exit_ts]
+        pnl_pre_exit = pnl[pnl_pos <= exit_pos]
         max_profit_before_exit = float(max(0.0, pnl_pre_exit.max())) if len(pnl_pre_exit) else 0.0
 
-        exit_ce = float(ce_close.loc[exit_ts]) if pd.notna(ce_close.loc[exit_ts]) else float("nan")
-        exit_pe = float(pe_close.loc[exit_ts]) if pd.notna(pe_close.loc[exit_ts]) else float("nan")
+        exit_ce = float(ce_close[exit_pos]) if pd.notna(ce_close[exit_pos]) else float("nan")
+        exit_pe = float(pe_close[exit_pos]) if pd.notna(pe_close[exit_pos]) else float("nan")
 
         txn_charges = compute_trade_charges(
             entry_ce=float(ce_entry), entry_pe=float(pe_entry),
@@ -1159,52 +1433,48 @@ def process_pickles_generate_trades(
     # IMPORTANT: prevent double-count if same (und,day,expiry) appears in multiple files
     processed_day_keys: set[Tuple[str, date, date]] = set()
 
+    # [SPEED S4] split each underlying's spot candles by day once (was a full-frame
+    # filter for every (underlying, day)).
+    und_by_day: Dict[str, Dict[date, pd.DataFrame]] = {
+        u: {k: g for k, g in udf.groupby("day", sort=False)}
+        for u, udf in underlying_data.items()
+    }
+    actual_und = pick_actual_underlying_by_day(min_expiry_map) if SIMULATE_ONLY_ACTUAL_DAYS else None
+    ws_ts, we_ts = pd.Timestamp(window_start), pd.Timestamp(window_end)
+
     for p in pickle_paths:
         try:
-            df = pd.read_pickle(p)
-            if not isinstance(df, pd.DataFrame) or df.empty:
-                continue
-
-            needed_cols = ["date", "name", "type", "option_type", "strike", "expiry", "instrument", "high", "low", "close"]
-            missing = [c for c in needed_cols if c not in df.columns]
-            if missing:
-                raise ValueError(f"Missing columns {missing} in {p}")
-
-            d2 = df[df["type"].astype(str).str.upper().eq("OPTION")][needed_cols].copy()
-            if d2.empty:
-                continue
-
-            d2["date"] = ensure_ist(d2["date"])
-            d2["day"] = d2["date"].dt.date
-            d2["underlying"] = d2["name"].astype(str).map(normalize_underlying)
-            d2 = d2[d2["underlying"].isin(TRADEABLE)]
-            if d2.empty:
-                continue
-
-            d2["expiry_date"] = pd.to_datetime(d2["expiry"], errors="coerce").dt.date
-            d2["strike_num"] = pd.to_numeric(d2["strike"], errors="coerce")
-            d2["strike_int"] = d2["strike_num"].round().astype("Int64")  # safer than truncation
-            d2["option_type"] = d2["option_type"].astype(str).str.upper()
-
-            d2 = d2.dropna(subset=["day", "underlying", "expiry_date", "strike_int", "close"])
-            d2["strike_int"] = d2["strike_int"].astype(int)
-
-            # SAFETY: ignore stale rows where expiry is already before the trading day
-            d2 = d2[d2["expiry_date"] >= d2["day"]]
-            if d2.empty:
+            # [SPEED S3/S4] take the frame prepared in PASS-1 (pop frees RAM as
+            # we go); fall back to reading the file when it was not cached.
+            cached = _PASS2_CACHE.pop(p, None)
+            if cached is None:                      # not cached (low-RAM mode or PASS-1 failed)
+                _, d2, err = _load_option_pickle(p)
+            else:
+                kind, val = cached
+                d2, err = (val, None) if kind == "ok" else (None, val)
+            if err is not None:
+                raise err
+            if d2 is None or d2.empty:
                 continue
 
             # window filter
-            d2 = d2[(d2["day"] >= window_start) & (d2["day"] <= window_end)]
+            d2 = d2[(d2["day"] >= ws_ts) & (d2["day"] <= we_ts)]
             if d2.empty:
                 continue
 
             # group by (und, day, expiry)
-            for (und, dy, ex), g in d2.groupby(["underlying", "day", "expiry_date"], sort=False):
+            # Group keys are midnight Timestamps; convert to datetime.date so
+            # every downstream value (TradeRow.day, DTE, map keys) is unchanged.
+            for (und, dy_ts, ex_ts), g in d2.groupby(["underlying", "day", "expiry_date"], sort=False):
+                dy = dy_ts.date()
+                ex = ex_ts.date()
                 key_ud = (und, dy)
                 if key_ud not in min_expiry_map:
                     continue
                 if min_expiry_map[key_ud] != ex:
+                    continue
+                # Optional: skip days that can never reach actual_trades.
+                if actual_und is not None and actual_und.get(dy) != und:
                     continue
 
                 day_key = (und, dy, ex)
@@ -1216,12 +1486,12 @@ def process_pickles_generate_trades(
                     continue
                 processed_day_keys.add(day_key)
 
-                uday = underlying_data.get(und)
-                if uday is None:
+                udays = und_by_day.get(und)
+                if udays is None:
                     skipped_rows.append({"day": dy, "underlying": und, "expiry": ex, "reason": "No underlying series downloaded"})
                     continue
-                uday = uday[uday["day"] == dy]
-                if uday.empty:
+                uday = udays.get(dy)
+                if uday is None or uday.empty:
                     skipped_rows.append({"day": dy, "underlying": und, "expiry": ex, "reason": "Underlying missing for day"})
                     continue
 
