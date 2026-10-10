@@ -1,5 +1,13 @@
 """ATM short-straddle backtest -- v3 (= v2 + two opt-in keys, defaults reproduce v2 exactly).
 
+DTE REVISION: days-to-expiry is now counted in TRADING SESSIONS (DTE_MODE=
+TRADING, default), so DTE 2 is always two sessions before expiry: the Friday
+before a Tuesday expiry is DTE 2 (it was 4 in calendar days), holidays and
+holiday-moved expiries are handled, and ALLOWED_DTE=4 is read as 2.
+DTE_MODE=CALENDAR reproduces the previous calendar-day results exactly.
+New Excel column calendar_days_to_expiry keeps the old number for reference.
+Every changed spot is tagged "[DTE]".
+
 SPEED REVISION (results unchanged -- every output sheet is identical to the
 previous v3 script; verified cell-by-cell on pandas 2.2 and 3.0).
 Every changed spot is tagged "[SPEED]" -- search for it. Summary:
@@ -111,7 +119,7 @@ except Exception:
 def _load_property_file() -> str:
     cfg_path = os.getenv(
         "STRADDLE_CONFIG",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs/straddle_config_DTE_1_v3_new_claude.properties"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs/short_straddle_v3_dte2_windays_v2_20261010_102348_BEST.properties"),
     )
     if not os.path.exists(cfg_path):
         print(f"[CONFIG] Property file not found at {cfg_path}; using built-in defaults.")
@@ -277,6 +285,34 @@ def loss_limit_pct_for_attempt(attempt_idx: int) -> float:
 
 # --- Allowed days-to-expiry to trade: [0,1]=expiry day + day before; [0]=expiry only ---
 ALLOWED_DTE = _parse_int_list(os.getenv("ALLOWED_DTE"), [0])
+
+# --- [DTE] How days-to-expiry is counted -------------------------------------
+# TRADING  (default): DTE = number of TRADING sessions after the day, up to and
+#          including the expiry date. "DTE 2" is always two sessions before
+#          expiry, whatever the weekday or holidays:
+#             Tuesday expiry  -> Friday is DTE 2 (4 calendar days), Monday DTE 1
+#             Thursday expiry -> Tuesday is DTE 2, Wednesday DTE 1
+#             holiday in between (e.g. Wednesday shut, Thursday expiry)
+#                             -> Tuesday is DTE 1, not 2
+#             expiry moved earlier for a holiday/Muhurat (data still shows the
+#             original date) -> the real last trading day is DTE 0
+#          Sessions come from the Kite spot data (a day counts when it has at
+#          least _MIN_SESSION_MINUTES one-minute candles inside 09:15-15:30, so
+#          a one-hour Muhurat session is not a session). Beyond the last spot
+#          day, Monday-Friday is assumed.
+# CALENDAR : DTE = plain calendar days (expiry - day). The previous behaviour,
+#          exactly: Friday before a Tuesday expiry is DTE 4, not 2.
+DTE_MODE = os.getenv("DTE_MODE", "TRADING").strip().upper()
+if DTE_MODE not in ("TRADING", "CALENDAR"):
+    raise ValueError(f"DTE_MODE={DTE_MODE!r}; use TRADING or CALENDAR")
+_MIN_SESSION_MINUTES = 120
+
+# In TRADING mode ALLOWED_DTE=4 (the calendar count for the Friday before a
+# Tuesday expiry) means the same as 2, so either value in the config selects
+# the same days.
+ALLOWED_DTE_CONFIGURED = list(ALLOWED_DTE)
+if DTE_MODE == "TRADING" and 4 in ALLOWED_DTE:
+    ALLOWED_DTE = sorted({2 if v == 4 else v for v in ALLOWED_DTE})
 
 # --- Profit-protect threshold/giveback as % of premium collected on that attempt ---
 # Default: 30%.
@@ -501,6 +537,79 @@ def normalize_underlying(name: str) -> Optional[str]:
 def round_to_step(x: float, step: int) -> int:
     return int(round(x / step) * step)
 
+
+# =============================================================================
+# [DTE] Trading-session calendar and days-to-expiry
+# =============================================================================
+_SESSIONS: Optional[np.ndarray] = None      # sorted datetime64[D] trading sessions
+
+
+def set_trading_calendar(underlying_data: Dict[str, pd.DataFrame]) -> None:
+    """Build the trading-session calendar from the Kite spot candles (union of
+    all underlyings). Called once, after the spot download, before PASS-2."""
+    global _SESSIONS
+    days = set()
+    for udf in underlying_data.values():
+        if udf is None or udf.empty:
+            continue
+        t = udf["date"].dt.tz_convert(ist_tz())
+        tod = t.dt.hour * 60 + t.dt.minute
+        regular = (tod >= 9 * 60 + 15) & (tod <= 15 * 60 + 30)
+        counts = t[regular].dt.date.value_counts()
+        days.update(counts[counts >= _MIN_SESSION_MINUTES].index)
+    _SESSIONS = np.array(sorted(days), dtype="datetime64[D]") if days else None
+    if DTE_MODE == "TRADING":
+        n = 0 if _SESSIONS is None else len(_SESSIONS)
+        print(f"[DTE] trading-session calendar: {n} sessions from the spot data "
+              f"(DTE counted in trading sessions; DTE_MODE=CALENDAR restores calendar days)")
+
+
+def days_to_expiry(dy: date, expiry: date) -> int:
+    """
+    Days-to-expiry used everywhere (trade rows, actual-trade selection).
+
+    TRADING : sessions s with dy < s <= expiry (see DTE_MODE above). A missing
+              calendar falls back to Monday-Friday counting.
+    CALENDAR: (expiry - dy).days, the previous behaviour.
+    """
+    if DTE_MODE == "CALENDAR":
+        return int((expiry - dy).days)
+    if expiry <= dy:
+        return 0
+    d0, d1 = np.datetime64(dy, "D"), np.datetime64(expiry, "D")
+    if _SESSIONS is None or len(_SESSIONS) == 0:
+        return int(np.busday_count(d0 + 1, d1 + 1))
+    last = _SESSIONS[-1]
+    lo = int(np.searchsorted(_SESSIONS, d0, side="right"))
+    hi = int(np.searchsorted(_SESSIONS, min(d1, last), side="right"))
+    n = max(0, hi - lo)
+    if d1 > last:                               # beyond the spot data: weekdays
+        n += int(np.busday_count(max(d0, last) + 1, d1 + 1))
+    return n
+
+
+def _dte_report(min_expiry_map: Dict[Tuple[str, date], date]) -> None:
+    """Print how the trading-session count differs from calendar days."""
+    if DTE_MODE != "TRADING":
+        return
+    changes: Dict[Tuple[int, int], int] = {}
+    counts: Dict[int, int] = {}
+    for (und, dy), ex in min_expiry_map.items():
+        if und not in TRADEABLE or ex < dy:
+            continue
+        cal, trd = int((ex - dy).days), days_to_expiry(dy, ex)
+        counts[trd] = counts.get(trd, 0) + 1
+        if cal != trd:
+            changes[(cal, trd)] = changes.get((cal, trd), 0) + 1
+    print("[DTE] (underlying, day) pairs by trading-session DTE: "
+          + ", ".join(f"DTE {k}: {counts[k]}" for k in sorted(counts)))
+    if changes:
+        print("[DTE] pairs whose DTE differs from calendar days: "
+              + ", ".join(f"calendar {c} -> trading {t}: {n}" for (c, t), n in sorted(changes.items())))
+    if ALLOWED_DTE != ALLOWED_DTE_CONFIGURED:
+        print(f"[DTE] ALLOWED_DTE={ALLOWED_DTE_CONFIGURED} read as {ALLOWED_DTE} "
+              "(DTE 4 = calendar count of DTE 2 for Tuesday expiries)")
+
 def build_minute_index(day_d: date, start_t: dtime, end_t: dtime) -> pd.DatetimeIndex:
     tz = ist_tz()
     start = pd.Timestamp(datetime.combine(day_d, start_t), tz=tz)
@@ -694,7 +803,8 @@ class TradeRow:
     underlying: str
     trade_seq: int
     expiry: date
-    days_to_expiry: int
+    days_to_expiry: int             # [DTE] per DTE_MODE (trading sessions by default)
+    calendar_days_to_expiry: int    # [DTE] plain calendar days, for reference
     atm_strike: int
     qty_units: int
     entry_time: str
@@ -1318,7 +1428,7 @@ def simulate_day_multi_trades(
             daily_loss_limit_enabled and daily_realized_pnl <= -float(MAX_DAILY_LOSS_RUPEES)
         )
 
-        dte = int((expiry - dy).days)
+        dte = days_to_expiry(dy, expiry)          # [DTE]
 
         results.append(
             TradeRow(
@@ -1327,6 +1437,7 @@ def simulate_day_multi_trades(
                 trade_seq=trade_seq,
                 expiry=expiry,
                 days_to_expiry=dte,
+                calendar_days_to_expiry=int((expiry - dy).days),
                 atm_strike=int(atm),
                 qty_units=qty,
                 entry_time=pd.Timestamp(cur_entry_ts).strftime("%H:%M"),
@@ -1537,7 +1648,7 @@ def pick_actual_underlying_by_day(min_expiry_map: Dict[Tuple[str, date], date]) 
         if und not in TRADEABLE:
             continue
 
-        dte = int((ex - dy).days)
+        dte = days_to_expiry(dy, ex)          # [DTE]
         if dte not in ALLOWED_DTE:
             continue
 
@@ -1803,7 +1914,8 @@ def main():
           f"Per-attempt stop cap: Rs {_fmt_rupee_value(MAX_LOSS_LIMIT_RUPEES_BY_ATTEMPT)} | "
           f"Daily max loss: Rs {_fmt_rupee_value(MAX_DAILY_LOSS_RUPEES)} | "
           f"ProfitProtect trigger/giveback %: {_fmt_pct_value(PROFIT_PROTECT_TRIGGER_RUPEES)} | "
-          f"Re-entry delay min/attempt: {REENTRY_DELAY_BY_ATTEMPT} | Allowed DTE: {ALLOWED_DTE}")
+          f"Re-entry delay min/attempt: {REENTRY_DELAY_BY_ATTEMPT} | Allowed DTE: {ALLOWED_DTE} "
+          f"(DTE_MODE={DTE_MODE})")
     print(f"[INFO] Entry time: {ENTRY_TIME_IST} | Strategy exit/filter cutoff: {EXIT_TIME_IST}")
     print(f"[INFO] Day profit target: {PROFIT_TARGET_PCT:.0%} of premium (0 = disabled)")
     print(f"[INFO] v2 ProfitProtect arm/giveback: {PROFIT_PROTECT_ARM_PCT:.2%} / "
@@ -1821,6 +1933,8 @@ def main():
     print("[OK] Kite ready.")
 
     underlying_data = download_underlyings(kite, window_start, end_day)
+    set_trading_calendar(underlying_data)          # [DTE] before any DTE is computed
+    _dte_report(min_expiry_map)
 
     all_trades_df, skipped_df = process_pickles_generate_trades(
         paths, min_expiry_map, underlying_data, window_start, end_day

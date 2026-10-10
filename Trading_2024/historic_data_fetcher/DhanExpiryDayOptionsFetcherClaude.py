@@ -52,12 +52,17 @@ Default behaviour
       set DHAN_KEEP_DTE=0,1        (Windows, expiry + day-before)
       export DHAN_KEEP_DTE=0       (Linux/macOS)
 
-  NOTE: DTE here is CALENDAR days from the resolved expiry. The straddle-melt
-  verification validates ONLY the DTE=0 session, because a straddle melts to
-  intrinsic value at expiry; DTE=1 and DTE=2 rows still carry time value and
-  are intentionally NOT melt-checked. On weeks where a given calendar day
-  before expiry is a holiday there is simply no row for that DTE (consistent
-  with A, which also filters on calendar DTE).
+  NOTE: DTE here is counted in TRADING SESSIONS before the resolved expiry
+  ([DTE FIX]). DTE 2 is always the second session before expiry: the Friday
+  before a Tuesday expiry, the Monday before a Thursday expiry whose Wednesday
+  is a holiday, etc. (The previous version counted CALENDAR days, so for every
+  Tuesday expiry "DTE 2" was a Sunday and the Friday session was never
+  downloaded; holiday weeks lost a session the same way.) Existing pickles with
+  fewer sessions than KEEP_DTE asks for are re-downloaded automatically
+  (DHAN_REFETCH_SHORT=1, default). The straddle-melt verification validates
+  ONLY the DTE=0 session, because a straddle melts to intrinsic value at
+  expiry; DTE=1 and DTE=2 rows still carry time value and are intentionally
+  NOT melt-checked.
 
 - Writes one A-compatible pickle per symbol-expiry.
 - Also writes an optional coverage CSV per pickle to help detect missing
@@ -139,8 +144,8 @@ STRIKE_BAND = int(os.getenv("DHAN_STRIKE_BAND", "10"))
 EXPIRY_CODE = int(os.getenv("DHAN_EXPIRY_CODE", "1"))
 WINDOW_BACK_DAYS = int(os.getenv("DHAN_WINDOW_BACK_DAYS", "7"))
 
-# Rows retained from the fetched window, expressed as calendar DTE versus the
-# resolved expiry date.
+# Rows retained from the fetched window, expressed as TRADING-SESSION DTE
+# versus the resolved expiry date ([DTE FIX]; was calendar days).
 # Default "0,1,2" keeps the expiry day (DTE 0), the day before expiry (DTE 1),
 # AND two days before expiry (DTE 2).
 # IMPORTANT: set ALLOWED_DTE=[0,1,2] in A as well, otherwise the DTE 1/2 rows are
@@ -155,6 +160,12 @@ def _parse_int_csv(s: str, default: Iterable[int]) -> List[int]:
 
 
 KEEP_DTE = sorted(set(_parse_int_csv(os.getenv("DHAN_KEEP_DTE", "0,1,2"), [0, 1, 2])))
+
+# [DTE FIX] An existing pickle that holds fewer trading sessions than KEEP_DTE
+# asks for (e.g. written by the old calendar-day version, which skipped the
+# Friday before every Tuesday expiry) is downloaded again and overwritten.
+# 0 = never touch existing files.
+REFETCH_SHORT = os.getenv("DHAN_REFETCH_SHORT", "1").strip().lower() not in ("0", "false", "no")
 
 # Fields requested from Dhan. `spot` is needed for expiry-session validation
 # and for debugging ATM selection.
@@ -175,7 +186,9 @@ MELT_MIN_BARS = int(os.getenv("DHAN_MELT_MIN_BARS", "20"))
 MELT_STRICT = os.getenv("DHAN_MELT_STRICT", "0").strip().lower() not in ("0", "false", "no")
 
 # Credentials: environment only. Do not paste tokens into this file.
-ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJ1c2VyUmVnaW9uIjoiUjEiLCJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzkxMDE4NzI0LCJpYXQiOjE3OTA5MzIzMjQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.V0sPPebCAxHH198_GstJWr8xGJjsSR1CygW0DsH116uxKr-wWGXMfLj8L4lrE4iewrU8LO3IS89DTQVGrXGQ-g").strip()
+# (The hard-coded token/client-id defaults were removed: set the environment
+# variables, see the docstring.)
+ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJ1c2VyUmVnaW9uIjoiUjEiLCJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzkxNjg5MzYzLCJpYXQiOjE3OTE2MDI5NjMsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTA4NTg4OTMyIn0.DemS__N_3VJIZ3uMRMYnwh5R2rZYd8SS7uc28TNcf_DowD3fJ5AVQdPTWjMS6U_XIsvAAWBIQiNPdY483Olq6g").strip()
 CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "1108588932").strip()
 
 
@@ -349,6 +362,20 @@ def _leg_to_df(j: dict, leg: str) -> pd.DataFrame:
     return df
 
 
+def _trading_dte_map(dates: Iterable[date]) -> Dict[date, int]:
+    """
+    [DTE FIX] Trading-session DTE for every date in a fetched window.
+
+    The window [E-7, E+1) returned by Dhan contains every session of the week,
+    so the sessions are simply the distinct dates in the data: the last one is
+    the actual expiry (DTE 0), the one before it DTE 1, and so on. Weekends and
+    holidays have no data and therefore never take a DTE number.
+    """
+    sessions = sorted(set(dates))
+    n = len(sessions)
+    return {d: n - 1 - i for i, d in enumerate(sessions)}
+
+
 def _strike_offset(sel: str) -> int:
     """Convert selector strings like ATM+3 / ATM-5 into signed offsets."""
     s = sel.upper().strip()
@@ -447,7 +474,11 @@ def _to_a_compatible_schema(df: pd.DataFrame, sym: str, actual_expiry: date, sch
     out["expiry"] = actual_expiry                       # A converts this with pd.to_datetime.
     out["expiry_date"] = actual_expiry                  # Diagnostic/explicit actual expiry.
     out["scheduled_expiry"] = scheduled_expiry          # Useful when holiday-shifted.
-    out["dte"] = out["date_ist"].map(lambda d: int((actual_expiry - d).days))
+    # [DTE FIX] keep the trading-session DTE computed per fetch window; the
+    # calendar count is kept alongside for reference.
+    if "dte" not in out.columns:
+        out["dte"] = out["date_ist"].map(_trading_dte_map(out["date_ist"]))
+    out["calendar_dte"] = out["date_ist"].map(lambda d: int((actual_expiry - d).days))
     out["source"] = "DHAN_ROLLINGOPTION"
 
     # Fixed-contract-like identifier used by A's _pick_symbol/_build_leg_series.
@@ -476,7 +507,7 @@ def _to_a_compatible_schema(df: pd.DataFrame, sym: str, actual_expiry: date, sch
     front = required_for_a + [
         "open", "volume", "oi", "iv", "spot",
         "timestamp", "dt_ist", "date_ist", "timestamp_str",
-        "symbol", "exchangeSegment", "scheduled_expiry", "expiry_date", "dte",
+        "symbol", "exchangeSegment", "scheduled_expiry", "expiry_date", "dte", "calendar_dte",
         "strikeSelector", "strike_offset", "abs_strike_offset", "source",
     ]
     cols = [c for c in front if c in out.columns] + [c for c in out.columns if c not in front]
@@ -715,7 +746,10 @@ class ExpiryDayDownloader:
             return pd.DataFrame(), None
 
         actual_expiry = df["date_ist"].max()
-        df["dte"] = df["date_ist"].map(lambda d: int((actual_expiry - d).days))
+        # [DTE FIX] trading sessions before expiry (was calendar days, which
+        # skipped e.g. the Friday before a Tuesday expiry).
+        df["dte"] = df["date_ist"].map(_trading_dte_map(df["date_ist"]))
+        df["calendar_dte"] = df["date_ist"].map(lambda d: int((actual_expiry - d).days))
         df = df[df["dte"].isin(KEEP_DTE)].copy()
         if df.empty:
             return pd.DataFrame(), actual_expiry
@@ -822,6 +856,31 @@ def _coverage_path(pickle_path: str) -> str:
     return base + "_coverage.csv"
 
 
+def _existing_sessions(path: str) -> Optional[int]:
+    """
+    [DTE FIX] Number of distinct trading days in an existing pickle (None if
+    it does not exist or cannot be read). Uses the small coverage CSV when it
+    is there, so the pickle itself is not opened.
+    """
+    if not os.path.exists(path):
+        return None
+    try:
+        cov = _coverage_path(path)
+        if os.path.exists(cov):
+            return int(pd.read_csv(cov, usecols=["date_ist"])["date_ist"].nunique())
+        old = pd.read_pickle(path)
+        col = "date_ist" if "date_ist" in old.columns else "date"
+        return int(pd.to_datetime(old[col]).dt.date.nunique())
+    except Exception:
+        return None
+
+
+def _is_complete(path: str) -> bool:
+    """True if the file exists and holds every session KEEP_DTE asks for."""
+    n = _existing_sessions(path)
+    return n is not None and n >= len(KEEP_DTE)
+
+
 def _write_pickle(df: pd.DataFrame, path: str) -> None:
     """Atomic-ish pickle write: temp file then rename."""
     tmp = path + ".tmp"
@@ -852,7 +911,8 @@ def main() -> None:
     cfgs = dl.resolve_underlying_ids()
 
     print(f"[CONFIG] OUT_DIR={os.path.abspath(OUT_DIR)}")
-    print(f"[CONFIG] KEEP_DTE={KEEP_DTE} | STRIKE_BAND=ATM±{STRIKE_BAND} | EXPIRY_CODE={EXPIRY_CODE}")
+    print(f"[CONFIG] KEEP_DTE={KEEP_DTE} (trading sessions before expiry) | "
+          f"STRIKE_BAND=ATM±{STRIKE_BAND} | EXPIRY_CODE={EXPIRY_CODE} | REFETCH_SHORT={REFETCH_SHORT}")
     print("[CONFIG] Output schema: A-compatible for atm_straddle_claude_reattempt.py")
 
     for sym in ("NIFTY", "SENSEX"):
@@ -867,6 +927,13 @@ def main() -> None:
         )
 
         for scheduled in expiries:
+            # [DTE FIX] skip without any API call when the file for the
+            # scheduled date already exists and is complete.
+            sched_path = _out_path(sym, scheduled)
+            if os.path.exists(sched_path) and (not REFETCH_SHORT or _is_complete(sched_path)):
+                print(f"[SKIP] exists: {os.path.basename(sched_path)}")
+                continue
+
             try:
                 df = dl.fetch_expiry(cfg, scheduled)
             except Exception as e:
@@ -883,8 +950,12 @@ def main() -> None:
 
             path = _out_path(sym, actual)
             if os.path.exists(path):
-                print(f"[SKIP] exists: {os.path.basename(path)}")
-                continue
+                if not REFETCH_SHORT or _is_complete(path):
+                    print(f"[SKIP] exists: {os.path.basename(path)}")
+                    continue
+                old_n = _existing_sessions(path)
+                print(f"[REFETCH] {os.path.basename(path)}: had {old_n} session(s), "
+                      f"now {int(pd.Series(df['date_ist']).nunique())}; overwriting")
 
             _write_pickle(df, path)
             _write_coverage_csv(df, path)
@@ -949,6 +1020,22 @@ def _selftest() -> None:
     assert set(out["option_type"]) == {"CE", "PE"}
     assert out["type"].eq("OPTION").all()
     assert out["name"].eq("NIFTY").all()
+
+    # [DTE FIX] trading-session DTE
+    # Tuesday expiry 2025-09-09: window has Tue 2nd .. Tue 9th (no weekend rows).
+    wk = [date(2025, 9, 2), date(2025, 9, 3), date(2025, 9, 4), date(2025, 9, 5),
+          date(2025, 9, 8), date(2025, 9, 9)]
+    m = _trading_dte_map(wk)
+    assert (m[date(2025, 9, 9)], m[date(2025, 9, 8)], m[date(2025, 9, 5)]) == (0, 1, 2), m
+    # Thursday expiry with the Wednesday shut: Monday becomes DTE 2.
+    wk2 = [date(2022, 8, 4), date(2022, 8, 5), date(2022, 8, 8), date(2022, 8, 10), date(2022, 8, 11)]
+    m2 = _trading_dte_map(wk2)
+    assert (m2[date(2022, 8, 11)], m2[date(2022, 8, 10)], m2[date(2022, 8, 8)]) == (0, 1, 2), m2
+    # Schema conversion keeps the window DTE and adds calendar_dte.
+    raw2 = raw.copy()
+    raw2["dte"] = 1
+    out2 = _to_a_compatible_schema(raw2, "NIFTY", date(2026, 6, 19), date(2026, 6, 19))
+    assert out2["dte"].eq(1).all() and out2["calendar_dte"].eq(1).all()
 
     print("SELFTEST OK")
 

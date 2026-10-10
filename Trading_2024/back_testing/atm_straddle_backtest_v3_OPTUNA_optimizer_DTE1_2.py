@@ -54,6 +54,33 @@ HOW IT WORKS (same framework as the expiry-day V3OPT optimizer)
              a ready-to-use .properties file.
 
 =============================================================================
+OBJECTIVE MODES  (OPT_OBJECTIVE; every changed spot is tagged [MODES])
+=============================================================================
+  profit    maximize total net P&L                                   [default]
+            identical to the previous version (OPT_CV_FOLDS still works)
+  win_days  maximize the NUMBER OF PROFITABLE DAYS (day net > OPT_WIN_DAY_MIN_RUPEES);
+            ties broken by net P&L; by default the config must also be net
+            positive (OPT_MIN_NET_PNL=0)
+  calmar    maximize net P&L / max drawdown of the daily equity curve -- the
+            figure that actually limits how many lots an account can carry
+  sharpe    maximize mean / std of daily net P&L (steadiest days)
+
+  Guards (any mode; a trial that misses one can never be selected):
+    OPT_MIN_NET_PNL, OPT_MIN_NET_VS_BASELINE, OPT_MAX_LOSS_DAY, OPT_MAX_DRAWDOWN
+
+  Example -- "most winning days, but keep >= 80% of the profit and never lose
+  more than Rs 15,000 in a day":
+    OPT_OBJECTIVE=win_days
+    OPT_WIN_DAY_MIN_RUPEES=500
+    OPT_MIN_NET_VS_BASELINE=0.8
+    OPT_MAX_LOSS_DAY=15000
+    OPT_STUDY_NAME=<new name>
+
+  Every mode reports the same day-level figures (profitable / losing days,
+  max drawdown, net/DD, worst day) for the winner and the baseline, in-sample
+  and holdout, so modes can be compared side by side.
+
+=============================================================================
 WHAT IS SEARCHED (defaults; every group can be frozen or narrowed)
 =============================================================================
   Times          ENTRY_TIME_IST, EXIT_TIME_IST
@@ -82,6 +109,9 @@ OPTIMIZER PROPERTY KEYS (all optional; put them in the same .properties file)
                 OPT_DATA_CACHE, OPT_REFRESH_DATA_CACHE, SAMPLE_MAX_DAYS,
                 SAMPLE_MAX_PICKLES
   Checks      : OPT_PARITY_CHECK, OPT_PARITY_RANDOM_TRIALS, OPT_PARITY_MAX_DAYS
+  Objective   : OPT_OBJECTIVE, OPT_WIN_DAY_MIN_RUPEES, OPT_CALMAR_DD_FLOOR,
+                OPT_MIN_NET_PNL, OPT_MIN_NET_VS_BASELINE, OPT_MAX_LOSS_DAY,
+                OPT_MAX_DRAWDOWN
   Scoring     : OPT_HOLDOUT_FROM, OPT_SLIPPAGE_PTS_NIFTY/_SENSEX,
                 OPT_STRESS_SLIPPAGE_PTS_NIFTY/_SENSEX, OPT_TARGET_FILL,
                 OPT_MIN_DAYS, OPT_MIN_MONTHS, OPT_CV_FOLDS, OPT_CV_PENALTY
@@ -232,6 +262,61 @@ OPT_REFINE_TRIALS = _env_int("OPT_REFINE_TRIALS", 300)
 OPT_CV_FOLDS = _env_int("OPT_CV_FOLDS", 1)
 OPT_CV_PENALTY = _env_float("OPT_CV_PENALTY", 0.15)
 
+# ---- [MODES] What the search maximizes --------------------------------------
+# OPT_OBJECTIVE selects the score every trial is ranked by (in-sample days):
+#   profit    total net P&L in rupees.                                [default]
+#             Exactly the previous behaviour (OPT_CV_FOLDS still applies).
+#   win_days  number of PROFITABLE days (day net P&L > OPT_WIN_DAY_MIN_RUPEES).
+#             Ties are broken by total net P&L, so among configs with the same
+#             count the more profitable one wins. Guarded by OPT_MIN_NET_PNL
+#             (default 0 in this mode: the config must also make money).
+#   calmar    total net P&L / maximum drawdown of the daily equity curve.
+#             "Profit per rupee of pain" -- the number that decides how many
+#             lots the account can carry.
+#   sharpe    mean daily net P&L / standard deviation of daily net P&L
+#             (per traded day, not annualised). Rewards smooth, steady days.
+# OPT_CV_FOLDS > 1 is a profit-mode feature; other modes ignore it (a message
+# is printed).
+#
+# Why win_days is guarded: counting winning days alone rewards configs that
+# bank many tiny wins and take rare large losses (tiny target, wide stop).
+# Such a config can win 80%+ of days and still lose money, and adding lots
+# multiplies the rare big loss too. The guards below keep the search honest.
+OPT_OBJECTIVE = os.getenv("OPT_OBJECTIVE", "profit").strip().lower()
+_OBJECTIVE_MODES = ("profit", "win_days", "calmar", "sharpe")
+if OPT_OBJECTIVE not in _OBJECTIVE_MODES:
+    raise ValueError(f"OPT_OBJECTIVE={OPT_OBJECTIVE!r}; use one of {', '.join(_OBJECTIVE_MODES)}")
+
+# A day counts as "profitable" only above this net P&L (Rs). 0 = any profit.
+# Raising it (e.g. 500) stops trivially small wins from padding the count.
+OPT_WIN_DAY_MIN_RUPEES = _env_float("OPT_WIN_DAY_MIN_RUPEES", 0.0)
+
+# ---- [MODES] Guards: a trial that breaks any of these cannot win -------------
+# They apply in EVERY mode. Blank = off (except OPT_MIN_NET_PNL in win_days
+# mode, which defaults to 0).
+#   OPT_MIN_NET_PNL            in-sample net P&L must be >= this (Rs)
+#   OPT_MIN_NET_VS_BASELINE    in-sample net P&L must be >= this fraction of the
+#                              property-file baseline's (e.g. 0.8 = give up at
+#                              most 20% of profit). Ignored if baseline <= 0.
+#   OPT_MAX_LOSS_DAY           worst day must not lose more than this (Rs, >0)
+#   OPT_MAX_DRAWDOWN           max drawdown must not exceed this (Rs, >0)
+# Breaking trials get a score below every valid trial, ordered by how far they
+# miss, so the sampler is still steered toward the valid region.
+def _env_optional_float(name: str) -> Optional[float]:
+    raw = os.getenv(name, "").strip()
+    return float(raw.replace(",", "")) if raw else None
+
+
+OPT_MIN_NET_PNL = _env_optional_float("OPT_MIN_NET_PNL")
+if OPT_MIN_NET_PNL is None and OPT_OBJECTIVE == "win_days":
+    OPT_MIN_NET_PNL = 0.0
+OPT_MIN_NET_VS_BASELINE = _env_optional_float("OPT_MIN_NET_VS_BASELINE")
+OPT_MAX_LOSS_DAY = _env_optional_float("OPT_MAX_LOSS_DAY")
+OPT_MAX_DRAWDOWN = _env_optional_float("OPT_MAX_DRAWDOWN")
+# calmar: drawdowns smaller than this (Rs) are treated as this, so a config
+# with almost no drawdown (e.g. hardly trading) cannot score an absurd ratio.
+OPT_CALMAR_DD_FLOOR = _env_float("OPT_CALMAR_DD_FLOOR", 5000.0)
+
 OPT_SEED = _env_int("OPT_SEED", 42)
 OPT_STARTUP_TRIALS = _env_int("OPT_STARTUP_TRIALS", 50)
 OPT_PROGRESS_EVERY = max(1, _env_int("OPT_PROGRESS_EVERY", 10))  # a new best is always printed
@@ -305,6 +390,13 @@ OPT_MIN_DAYS = _env_int("OPT_MIN_DAYS", 100)
 OPT_MIN_MONTHS = _env_int("OPT_MIN_MONTHS", 6)
 _MIN_DAYS_FRACTION = 0.75
 _OPT_DISQUALIFY = -1.0e18
+# [MODES] Trials breaking an OPT_MIN_*/OPT_MAX_* guard score in
+# (_OPT_DISQUALIFY, _OPT_INFEASIBLE]: below every valid trial, above trials
+# that fail the activity guard. Anything <= _OPT_INFEASIBLE is "not valid".
+_OPT_INFEASIBLE = -1.0e15
+# Net-P&L floor actually enforced this run (OPT_MIN_NET_PNL and/or
+# OPT_MIN_NET_VS_BASELINE x baseline); set once in optimize().
+_NET_FLOOR: Optional[float] = None
 _ACTIVE_MINIMA: Optional[Tuple[int, int]] = None   # set once per run
 
 # ---- Search-group switches (0 = freeze the group at the config values) --------
@@ -2548,6 +2640,35 @@ class DaySet:
         )
 
 
+def _day_risk_stats(daily: np.ndarray) -> Dict[str, Any]:
+    """
+    [MODES] Day-level statistics behind the objective modes, from the net P&L
+    of each TRADED day in chronological order (one index per date).
+
+      win_days        days with net P&L > OPT_WIN_DAY_MIN_RUPEES
+      loss_days       days with net P&L < 0
+      max_drawdown    largest peak-to-trough fall of the cumulative daily P&L,
+                      counted from a starting equity of 0 (Rs, >= 0)
+      daily_sharpe    mean / std (ddof=1) of daily P&L; 0 if < 2 days or std 0
+      return_over_dd  total net / max(max_drawdown, OPT_CALMAR_DD_FLOOR)
+    """
+    daily = np.asarray(daily, dtype=np.float64)
+    if daily.size == 0:
+        return {"win_days": 0, "loss_days": 0, "max_drawdown": 0.0,
+                "daily_sharpe": 0.0, "return_over_dd": 0.0}
+    equity = np.cumsum(daily)
+    peak = np.maximum.accumulate(np.concatenate(([0.0], equity)))[1:]
+    max_dd = float(max(0.0, np.max(peak - equity)))
+    std = float(daily.std(ddof=1)) if daily.size >= 2 else 0.0
+    return {
+        "win_days": int((daily > OPT_WIN_DAY_MIN_RUPEES).sum()),
+        "loss_days": int((daily < 0).sum()),
+        "max_drawdown": max_dd,
+        "daily_sharpe": float(daily.mean() / std) if std > 0 else 0.0,
+        "return_over_dd": float(daily.sum() / max(max_dd, OPT_CALMAR_DD_FLOOR)),
+    }
+
+
 def _summarise_fast(pnl: np.ndarray, trades: np.ndarray, caps: np.ndarray, dayset: DaySet) -> Dict[str, Any]:
     """
     Fast twin of robustness_metrics(): only days with at least one trade count,
@@ -2567,6 +2688,7 @@ def _summarise_fast(pnl: np.ndarray, trades: np.ndarray, caps: np.ndarray, dayse
             "median_month": 0.0, "worst_day": 0.0, "worst_month": 0.0,
             "monthly": {},
         })
+        base.update(_day_risk_stats(daily))          # [MODES]
         return base
 
     keys, inverse = np.unique(dayset.month_keys[traded], return_inverse=True)
@@ -2583,6 +2705,7 @@ def _summarise_fast(pnl: np.ndarray, trades: np.ndarray, caps: np.ndarray, dayse
         "worst_month": float(monthly.min()),
         "monthly": {dayset.month_labels[int(key)]: float(val) for key, val in zip(keys, monthly)},
     })
+    base.update(_day_risk_stats(daily))              # [MODES]
     return base
 
 
@@ -2957,6 +3080,60 @@ def _cv_score_from_metrics(metrics: Dict[str, Any], folds: int) -> float:
     return float(values.mean() - OPT_CV_PENALTY * values.std(ddof=0))
 
 
+def _mode_score(metrics: Dict[str, Any]) -> float:
+    """
+    [MODES] Raw score of the selected OPT_OBJECTIVE (higher is better).
+
+    win_days: count + tie-break. The tie-break is total net P&L squeezed into
+    (-0.5, +0.5), so it can reorder configs with the SAME number of winning
+    days but can never outweigh one extra winning day.
+    """
+    if OPT_OBJECTIVE == "win_days":
+        tie = 0.5 * math.tanh(float(metrics["total_pnl"]) / 1.0e7)
+        return float(metrics["win_days"]) + tie
+    if OPT_OBJECTIVE == "calmar":
+        return float(metrics["return_over_dd"])
+    if OPT_OBJECTIVE == "sharpe":
+        return float(metrics["daily_sharpe"])
+    return float(metrics["total_pnl"])
+
+
+def _guard_shortfall(metrics: Dict[str, Any]) -> float:
+    """
+    [MODES] Total amount (Rs) by which a trial misses the OPT_MIN_*/OPT_MAX_*
+    guards; 0.0 = all guards met.
+    """
+    miss = 0.0
+    if _NET_FLOOR is not None and metrics["total_pnl"] < _NET_FLOOR:
+        miss += _NET_FLOOR - float(metrics["total_pnl"])
+    if OPT_MAX_LOSS_DAY is not None and metrics["worst_day"] < -abs(OPT_MAX_LOSS_DAY):
+        miss += -abs(OPT_MAX_LOSS_DAY) - float(metrics["worst_day"])
+    if OPT_MAX_DRAWDOWN is not None and metrics["max_drawdown"] > abs(OPT_MAX_DRAWDOWN):
+        miss += float(metrics["max_drawdown"]) - abs(OPT_MAX_DRAWDOWN)
+    return miss
+
+
+def _objective_from_metrics(metrics: Dict[str, Any], cv_folds: int) -> float:
+    """[MODES] Activity guard -> OPT_MIN/OPT_MAX guards -> mode score."""
+    if OPT_OBJECTIVE == "profit":
+        # Unchanged previous objective (including the optional CV folds).
+        score = (_cv_score_from_metrics(metrics, cv_folds) if cv_folds > 1
+                 else _score_from_metrics(metrics))
+    else:
+        min_days, min_months = _activity_minima()
+        if metrics["n_days"] < min_days or metrics["n_months"] < min_months:
+            return _OPT_DISQUALIFY
+        score = _mode_score(metrics)
+    if score <= _OPT_DISQUALIFY:
+        return score
+    miss = _guard_shortfall(metrics)
+    if miss > 0.0:
+        # Below every valid trial; a smaller miss ranks higher, so the
+        # sampler is still pulled toward configurations that meet the guards.
+        return _OPT_INFEASIBLE - miss
+    return score
+
+
 def evaluate_fast(
     params: Params,
     dayset: DaySet,
@@ -2966,11 +3143,47 @@ def evaluate_fast(
     """One complete fast evaluation: simulate, summarise, score."""
     pnl, trades, caps = fast_simulate(_fast_params(params), dayset.days, slippage_pts)
     metrics = _summarise_fast(pnl, trades, caps, dayset)
-    metrics["objective"] = (
-        _cv_score_from_metrics(metrics, cv_folds) if cv_folds > 1
-        else _score_from_metrics(metrics)
-    )
+    metrics["objective"] = _objective_from_metrics(metrics, cv_folds)   # [MODES]
     return metrics
+
+
+def _fmt_objective(value: Any) -> str:
+    """[MODES] Human-readable objective value for the selected mode."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    if v <= _OPT_DISQUALIFY:
+        return "DISQUALIFIED (activity guard)"
+    if v <= _OPT_INFEASIBLE:
+        return f"GUARD MISS by {_inr(_OPT_INFEASIBLE - v)}"
+    if OPT_OBJECTIVE == "win_days":
+        return f"{int(round(v))} win days"   # tie-break part is always < 0.5
+    if OPT_OBJECTIVE == "calmar":
+        return f"{v:.3f}x net/DD"
+    if OPT_OBJECTIVE == "sharpe":
+        return f"{v:.4f} daily Sharpe"
+    return _inr(v)
+
+
+def _mode_label() -> str:
+    """[MODES] One-line description of the active objective and guards."""
+    parts = {
+        "profit": "maximize total net P&L",
+        "win_days": f"maximize profitable days (day net > {_inr(OPT_WIN_DAY_MIN_RUPEES)}), "
+                    "tie-break by net P&L",
+        "calmar": f"maximize net P&L / max drawdown (DD floor {_inr(OPT_CALMAR_DD_FLOOR)})",
+        "sharpe": "maximize mean / std of daily net P&L",
+    }
+    guards = []
+    if _NET_FLOOR is not None:
+        guards.append(f"net >= {_inr(_NET_FLOOR)}")
+    if OPT_MAX_LOSS_DAY is not None:
+        guards.append(f"worst day >= -{_inr(abs(OPT_MAX_LOSS_DAY))}")
+    if OPT_MAX_DRAWDOWN is not None:
+        guards.append(f"max drawdown <= {_inr(abs(OPT_MAX_DRAWDOWN))}")
+    text = f"OPT_OBJECTIVE={OPT_OBJECTIVE}: {parts[OPT_OBJECTIVE]}"
+    return text + (f" | guards: {', '.join(guards)}" if guards else " | guards: none")
 
 
 def robustness_metrics(actual_df: pd.DataFrame) -> Dict[str, Any]:
@@ -2987,6 +3200,7 @@ def robustness_metrics(actual_df: pd.DataFrame) -> Dict[str, Any]:
             "worst_day": 0.0,
             "worst_month": 0.0,
             "monthly": pd.Series(dtype="float64"),
+            **_day_risk_stats(np.zeros(0)),          # [MODES]
         }
 
     trades = actual_df.copy()
@@ -3009,6 +3223,7 @@ def robustness_metrics(actual_df: pd.DataFrame) -> Dict[str, Any]:
         "worst_day": float(daily.min()),
         "worst_month": float(monthly.min()),
         "monthly": monthly,
+        **_day_risk_stats(daily.to_numpy(dtype=np.float64)),   # [MODES] (chronological)
     }
 
 
@@ -3594,6 +3809,8 @@ _SCALAR_METRICS = (
     "n_days", "n_months", "n_trades", "cap_hit_days", "profitable_day_ratio",
     "profitable_month_ratio", "total_pnl", "mean_month", "median_month",
     "worst_day", "worst_month",
+    # [MODES]
+    "win_days", "loss_days", "max_drawdown", "daily_sharpe", "return_over_dd",
 )
 
 # Column order of the per-trial CSV log. Must list every key _trial_record()
@@ -3602,7 +3819,8 @@ _TRIAL_CSV_FIELDS = (
     "run_index", "phase", "trial_number", "state", "objective_score", "net_pnl",
     "n_trades", "cap_hit_days", "mean_month", "median_month", "worst_month",
     "worst_day", "profitable_month_ratio", "profitable_day_ratio", "n_months",
-    "n_days", "entry_time", "exit_time", "stop_cap", "max_reattempts",
+    "n_days", "win_days", "loss_days", "max_drawdown", "daily_sharpe",
+    "return_over_dd", "entry_time", "exit_time", "stop_cap", "max_reattempts",
     "reentry_delay", "target_reentry_delay", "profit_target_pct",
     "protect_arm_pct", "protect_giveback_pct", "breakeven_arm_pct",
     "breakeven_lock_pct", "premium_ratio", "daily_loss", "params_json",
@@ -3636,6 +3854,12 @@ def _trial_record(
         "profitable_day_ratio": round(float(metrics.get("profitable_day_ratio", 0.0)), 6),
         "n_months": int(metrics.get("n_months", 0)),
         "n_days": int(metrics.get("n_days", 0)),
+        # [MODES]
+        "win_days": int(metrics.get("win_days", 0)),
+        "loss_days": int(metrics.get("loss_days", 0)),
+        "max_drawdown": round(float(metrics.get("max_drawdown", 0.0)), 2),
+        "daily_sharpe": round(float(metrics.get("daily_sharpe", 0.0)), 6),
+        "return_over_dd": round(float(metrics.get("return_over_dd", 0.0)), 6),
         "entry_time": params.entry_time.strftime("%H:%M"),
         "exit_time": params.exit_time.strftime("%H:%M"),
         "stop_cap": int(round(params.max_loss_limit_cap_rupees)),
@@ -3766,9 +3990,31 @@ def _search_signature(base: Params) -> str:
                                 OPT_DAILY_LOSS_MIN, OPT_DAILY_LOSS_MAX, OPT_DAILY_LOSS_STEP],
             "objective": [OPT_CV_FOLDS, OPT_CV_PENALTY, OPT_MIN_DAYS, OPT_MIN_MONTHS,
                           OPT_HOLDOUT_FROM_RAW, OPT_SLIPPAGE_PTS],
+            **_mode_signature(),
         },
         sort_keys=True,
     )
+
+
+def _mode_signature() -> Dict[str, Any]:
+    """
+    [MODES] Objective-mode part of the study signature. Empty for the default
+    (profit, no guards), so studies created before modes existed still resume;
+    any other mode or guard makes it a different problem (new study needed).
+    """
+    settings = {
+        "mode": OPT_OBJECTIVE,
+        "win_day_min": OPT_WIN_DAY_MIN_RUPEES if OPT_OBJECTIVE == "win_days" else None,
+        "calmar_floor": OPT_CALMAR_DD_FLOOR if OPT_OBJECTIVE == "calmar" else None,
+        "min_net": OPT_MIN_NET_PNL,
+        "min_net_vs_base": OPT_MIN_NET_VS_BASELINE,
+        "max_loss_day": OPT_MAX_LOSS_DAY,
+        "max_drawdown": OPT_MAX_DRAWDOWN,
+    }
+    is_default = OPT_OBJECTIVE == "profit" and all(
+        settings[k] is None for k in ("min_net", "min_net_vs_base", "max_loss_day", "max_drawdown")
+    )
+    return {} if is_default else {"objective_mode": settings}
 
 
 def _data_fingerprint(days: List[FastDay]) -> str:
@@ -3818,7 +4064,7 @@ def _run_cmaes_refinement(optuna, study, objective, progress_callback, state, *,
     for trial in study.trials:
         if trial.state != optuna.trial.TrialState.COMPLETE or trial.value is None:
             continue
-        if trial.value <= _OPT_DISQUALIFY:
+        if trial.value <= _OPT_INFEASIBLE:      # [MODES] also skips guard misses
             continue
         if any(int(trial.params.get(name, -1)) != value for name, value in pinned.items()):
             continue
@@ -3900,7 +4146,7 @@ def _top_k_report(
         t for t in study.trials
         if t.state == optuna.trial.TrialState.COMPLETE
         and t.value is not None
-        and t.value > _OPT_DISQUALIFY
+        and t.value > _OPT_INFEASIBLE          # [MODES] valid trials only
     ]
     complete.sort(key=lambda t: t.value, reverse=True)
     chosen = []
@@ -3931,6 +4177,13 @@ def _top_k_report(
             "in_sample_worst_month": round(ins["worst_month"], 2),
             "in_sample_trades": ins["n_trades"],
             "in_sample_cap_hit_days": ins["cap_hit_days"],
+            # [MODES] day-level view used by the win_days / calmar / sharpe modes
+            "in_sample_days": ins["n_days"],
+            "in_sample_win_days": ins["win_days"],
+            "in_sample_loss_days": ins["loss_days"],
+            "in_sample_max_drawdown": round(ins["max_drawdown"], 2),
+            "in_sample_return_over_dd": round(ins["return_over_dd"], 4),
+            "in_sample_daily_sharpe": round(ins["daily_sharpe"], 4),
         }
         if out_set.days:
             oos = evaluate_fast(params, out_set, OPT_SLIPPAGE_PTS, 1)
@@ -3943,6 +4196,11 @@ def _top_k_report(
                 "holdout_worst_day": round(oos["worst_day"], 2),
                 "holdout_profitable_month_ratio": round(oos["profitable_month_ratio"], 4),
                 "holdout_trades": oos["n_trades"],
+                # [MODES]
+                "holdout_days": oos["n_days"],
+                "holdout_win_days": oos["win_days"],
+                "holdout_max_drawdown": round(oos["max_drawdown"], 2),
+                "holdout_return_over_dd": round(oos["return_over_dd"], 4),
             })
         row["properties_json"] = _properties_json(params)
         return row
@@ -3965,7 +4223,9 @@ def _top_k_report(
     )
     if out_set.days:
         header += f" {'holdout':>15} {'hold stress':>15} {'hold close':>15}"
-    header += f" {'worst day':>13} {'cap days':>8}"
+    header += f" {'worst day':>13} {'cap days':>8} {'win days':>9} {'max DD':>13}"
+    if out_set.days:
+        header += f" {'hold win':>9}"
     print(header, flush=True)
     for row in rows[: min(len(rows), 11)]:
         line = (
@@ -3979,6 +4239,11 @@ def _top_k_report(
                 f" {_inr(row['holdout_net_close_fill']):>15}"
             )
         line += f" {_inr(row['in_sample_worst_day']):>13} {row['in_sample_cap_hit_days']:>8}"
+        # [MODES] profitable days as wins/traded days, and max drawdown
+        line += (f" {str(row['in_sample_win_days']) + '/' + str(row['in_sample_days']):>9}"
+                 f" {_inr(row['in_sample_max_drawdown']):>13}")
+        if out_set.days:
+            line += f" {str(row['holdout_win_days']) + '/' + str(row['holdout_days']):>9}"
         print(line, flush=True)
     print(f"[OPT] top-trials table: {csv_path}", flush=True)
     return rows
@@ -4156,15 +4421,54 @@ def optimize(
         print("[PARITY] skipped (OPT_PARITY_CHECK=0).", flush=True)
 
     # ---- 5. Baseline score --------------------------------------------------------
+    # [MODES] Fix the net-P&L guard for this run before anything is scored.
+    global _NET_FLOOR
+    floors = []
+    if OPT_MIN_NET_PNL is not None:
+        floors.append(float(OPT_MIN_NET_PNL))
+    if OPT_MIN_NET_VS_BASELINE is not None:
+        base_net = _summarise_fast(
+            *fast_simulate(_fast_params(base), in_set.days, OPT_SLIPPAGE_PTS), in_set
+        )["total_pnl"]
+        if base_net > 0:
+            floors.append(float(OPT_MIN_NET_VS_BASELINE) * base_net)
+        else:
+            print(
+                f"[MODE WARNING] OPT_MIN_NET_VS_BASELINE ignored: the baseline's in-sample "
+                f"net is {_inr(base_net)} (not positive).",
+                flush=True,
+            )
+    _NET_FLOOR = max(floors) if floors else None
+    print(f"[MODE] {_mode_label()}", flush=True)
+    if OPT_OBJECTIVE != "profit" and cv_folds > 1:
+        print(
+            f"[MODE] OPT_CV_FOLDS={cv_folds} is a profit-mode feature and is ignored "
+            f"with OPT_OBJECTIVE={OPT_OBJECTIVE}.",
+            flush=True,
+        )
+
     baseline_eval = evaluate_fast(base, in_set, OPT_SLIPPAGE_PTS, cv_folds)
     slip_text = ", ".join(f"{u} {p:g} pt" for u, p in OPT_SLIPPAGE_PTS.items())
     print(
         f"[OPT] exact property-file baseline (in-sample, slippage {slip_text}): "
-        f"net={_inr(baseline_eval['total_pnl'])}, objective={_inr(baseline_eval['objective'])}, "
+        f"net={_inr(baseline_eval['total_pnl'])}, objective={_fmt_objective(baseline_eval['objective'])}, "
         f"trades={baseline_eval['n_trades']}, days where MAX_REATTEMPTS stopped a "
         f"re-entry={baseline_eval['cap_hit_days']}",
         flush=True,
     )
+    print(
+        f"[OPT] baseline day profile: {baseline_eval['win_days']} profitable / "
+        f"{baseline_eval['loss_days']} losing of {baseline_eval['n_days']} traded days, "
+        f"max drawdown {_inr(baseline_eval['max_drawdown'])}, "
+        f"net/DD {baseline_eval['return_over_dd']:.3f}, daily Sharpe {baseline_eval['daily_sharpe']:.4f}",
+        flush=True,
+    )
+    if _OPT_DISQUALIFY < baseline_eval["objective"] <= _OPT_INFEASIBLE:
+        print(
+            "[MODE WARNING] the baseline itself misses the OPT_MIN_*/OPT_MAX_* guards "
+            f"({_fmt_objective(baseline_eval['objective'])}); loosen them if no trial can meet them.",
+            flush=True,
+        )
     if baseline_eval["objective"] <= _OPT_DISQUALIFY:
         # Say it loudly: if even the baseline fails the guard, most trials
         # will too and the search cannot find anything meaningful.
@@ -4230,8 +4534,10 @@ def optimize(
                 f"trades={metrics.get('n_trades', 0)} "
                 f"cap_days={metrics.get('cap_hit_days', 0)} "
                 f"prof_month={float(metrics.get('profitable_month_ratio', 0.0)) * 100:5.1f}% "
+                f"win_days={metrics.get('win_days', 0)}/{metrics.get('n_days', 0)} "
+                f"maxDD={_inr(metrics.get('max_drawdown', 0.0))} "
                 f"worst_day={_inr(metrics.get('worst_day', 0.0))} "
-                f"| best={_inr(state['best'])} ({rate:.1f} trials/s)"
+                f"| best={_fmt_objective(state['best'])} ({rate:.1f} trials/s)"
                 + ("  <<< NEW BEST" if is_new_best else ""),
                 flush=True,
             )
@@ -4294,8 +4600,15 @@ def optimize(
         optuna_eval = evaluate_fast(optuna_params, in_set, OPT_SLIPPAGE_PTS, cv_folds)
         if abs(optuna_eval["objective"] - float(best_trial.value)) > 0.01:
             print(
-                f"[OPT WARN] best trial re-scored to {_inr(optuna_eval['objective'])} "
-                f"but was stored as {_inr(best_trial.value)}.",
+                f"[OPT WARN] best trial re-scored to {_fmt_objective(optuna_eval['objective'])} "
+                f"but was stored as {_fmt_objective(best_trial.value)}.",
+                flush=True,
+            )
+        if float(best_trial.value) <= _OPT_INFEASIBLE:
+            print(
+                "[MODE WARNING] NO trial met the OPT_MIN_*/OPT_MAX_* guards; the best "
+                f"trial misses them ({_fmt_objective(best_trial.value)}). Loosen the guards "
+                "or widen the search before trusting this result.",
                 flush=True,
             )
         # When the baseline violates your limits it is a benchmark
@@ -4355,10 +4668,17 @@ def optimize(
         None,
     )
     summary_lines = [
+        f"# Objective mode            : {_mode_label()}",
+        f"# Objective (in-sample)     : {_fmt_objective(selected_eval['objective'])}   "
+        f"baseline {_fmt_objective(baseline_eval['objective'])}",
+        f"# Profitable days (in-samp.): {selected_eval['win_days']} of {selected_eval['n_days']}   "
+        f"baseline {baseline_eval['win_days']} of {baseline_eval['n_days']}",
+        f"# Max drawdown (in-sample)  : {_inr(selected_eval['max_drawdown'])}   "
+        f"baseline {_inr(baseline_eval['max_drawdown'])}",
         f"# Selected source           : {selected_source}",
         f"# In-sample days            : {len(in_days)}  "
         f"({in_days[0].dy} .. {in_days[-1].dy})",
-        f"# In-sample net (objective) : {_inr(selected_eval['total_pnl'])}   "
+        f"# In-sample net             : {_inr(selected_eval['total_pnl'])}   "
         f"baseline {_inr(baseline_eval['total_pnl'])}",
     ]
     if selected_row is not None:
@@ -4376,6 +4696,11 @@ def optimize(
                 f"CLOSE fill {_inr(selected_row['holdout_net_close_fill'])}   "
                 f"baseline {_inr(top_rows[0]['holdout_net'])}"
             )
+            summary_lines.append(
+                f"# Holdout profitable days   : {selected_row['holdout_win_days']} of "
+                f"{selected_row['holdout_days']}   baseline {top_rows[0]['holdout_win_days']} of "
+                f"{top_rows[0]['holdout_days']}"
+            )
     summary_lines.append(
         f"# Days MAX_REATTEMPTS bound : {selected_eval['cap_hit_days']}"
     )
@@ -4386,11 +4711,22 @@ def optimize(
 
     # ---- 12. Console summary -----------------------------------------------------------
     print(f"\n================ BEST V3 CONFIG (DTE {_DTE_LABEL}) ================", flush=True)
+    print(f"Objective mode         : {_mode_label()}", flush=True)
     print(f"Selected source        : {selected_source}", flush=True)
     if best_trial is not None:
-        print(f"Best trial / objective : {best_trial.number} / {_inr(best_trial.value)}", flush=True)
-    print(f"Baseline objective     : {_inr(baseline_eval['objective'])}", flush=True)
-    print(f"In-sample net profit   : {_inr(selected_eval['total_pnl'])}", flush=True)
+        print(f"Best trial / objective : {best_trial.number} / {_fmt_objective(best_trial.value)}", flush=True)
+    print(f"Baseline objective     : {_fmt_objective(baseline_eval['objective'])}", flush=True)
+    print(f"In-sample net profit   : {_inr(selected_eval['total_pnl'])} "
+          f"(baseline {_inr(baseline_eval['total_pnl'])})", flush=True)
+    # [MODES] the day-level numbers every mode should be judged on
+    print(f"In-sample profit days  : {selected_eval['win_days']} of {selected_eval['n_days']} "
+          f"(baseline {baseline_eval['win_days']} of {baseline_eval['n_days']}); "
+          f"losing days {selected_eval['loss_days']} (baseline {baseline_eval['loss_days']})", flush=True)
+    print(f"In-sample max drawdown : {_inr(selected_eval['max_drawdown'])} "
+          f"(baseline {_inr(baseline_eval['max_drawdown'])}); net/DD "
+          f"{selected_eval['return_over_dd']:.3f} (baseline {baseline_eval['return_over_dd']:.3f})", flush=True)
+    print(f"In-sample worst day    : {_inr(selected_eval['worst_day'])} "
+          f"(baseline {_inr(baseline_eval['worst_day'])})", flush=True)
     if selected_row is not None:
         baseline_row = top_rows[0]
         print(
@@ -4419,6 +4755,13 @@ def optimize(
                 f"(baseline {_inr(baseline_row['holdout_net_close_fill'])})",
                 flush=True,
             )
+            print(
+                f"Holdout profit days    : {selected_row['holdout_win_days']} of "
+                f"{selected_row['holdout_days']} (baseline {baseline_row['holdout_win_days']} of "
+                f"{baseline_row['holdout_days']}); max DD {_inr(selected_row['holdout_max_drawdown'])} "
+                f"(baseline {_inr(baseline_row['holdout_max_drawdown'])})",
+                flush=True,
+            )
             if selected_row["holdout_net"] < baseline_row["holdout_net"]:
                 print(
                     "WARNING                : the selected config is WORSE than the "
@@ -4429,7 +4772,10 @@ def optimize(
     print(f"Worst month (all)      : {_inr(ref_all['worst_month'])}", flush=True)
     print(f"Worst day (all)        : {_inr(ref_all['worst_day'])}", flush=True)
     print(f"Profitable months (all): {ref_all['profitable_month_ratio'] * 100:.1f}%", flush=True)
-    print(f"Profitable days (all)  : {ref_all['profitable_day_ratio'] * 100:.1f}%", flush=True)
+    print(f"Profitable days (all)  : {ref_all['profitable_day_ratio'] * 100:.1f}% "
+          f"({int(round(ref_all['profitable_day_ratio'] * ref_all['n_days']))} of "
+          f"{ref_all['n_days']} days with net > 0)", flush=True)
+    print(f"Max drawdown (all)     : {_inr(ref_all['max_drawdown'])}", flush=True)
     print(f"Days MAX_REATTEMPTS bound (in-sample): {selected_eval['cap_hit_days']}", flush=True)
     print(f"Best properties        : {properties_path}", flush=True)
     print(f"Best actual trades     : {best_trades_path}", flush=True)
