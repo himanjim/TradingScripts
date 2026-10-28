@@ -10,7 +10,7 @@ with open(record_file,'ab') as f:
     writer = csv.writer(f)
 
 # Initialise
-kws = KiteTicker("453dipfh64qcl484", "QFQyBzJT3iZQ6UIrbInqvG0qnhGgGfMg")
+kws = KiteTicker("SECRET", "SECRET")
 
 
 def get_min_sp(tick):
