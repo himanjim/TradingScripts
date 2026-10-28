@@ -2,11 +2,11 @@ from kiteconnect import KiteConnect
 import datetime as dt
 
 
-KITE_API_KEY = '453dipfh64qcl484'
-KITE_API_SECRET = 'cnt30fp12ftbzk7s0a84ieqv8wbquer4'
+KITE_API_KEY = 'SECRET'
+KITE_API_SECRET = 'SECRET'
 
 
-KITE_ACCESS_CODE = 'rfN0cIJKqBPzm4pRQGfJvxoLnrvSd5qc'
+KITE_ACCESS_CODE = 'SECRET'
 
 
 def get_instruments(kite_):
