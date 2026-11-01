@@ -1,0 +1,70 @@
+{
+  "data_dir": "G:/My Drive/Trading/Kite_tick-data",
+  "output_dir": "results/dte0",
+  "entry_time": "09:44:00",
+  "exit_time": "15:23:00",
+  "quantity": {
+    "NIFTY": 650,
+    "SENSEX": 200
+  },
+  "strike_step": {
+    "NIFTY": 50,
+    "SENSEX": 100
+  },
+  "stop_loss_by_dte": {
+    "0": 7000
+  },
+  "minimum_premium_remaining": 0.7,
+  "cooldown_minutes": 26,
+  "day_loss_limit": 40000,
+  "profit_giveback": 92500,
+  "profit_giveback_activation": 78500,
+  "slippage_points_per_order": 0,
+  "fee_per_leg_order": 0,
+  "max_quote_age_seconds": null,
+  "calendar": {
+    "covered_years": [
+      2026
+    ],
+    "holidays": [
+      "2026-01-15",
+      "2026-01-26",
+      "2026-03-03",
+      "2026-03-26",
+      "2026-03-31",
+      "2026-04-03",
+      "2026-04-14",
+      "2026-05-01",
+      "2026-05-28",
+      "2026-06-26",
+      "2026-09-14",
+      "2026-10-02",
+      "2026-10-20",
+      "2026-11-10",
+      "2026-11-24",
+      "2026-12-25"
+    ],
+    "special_open_dates": [
+      "2026-11-08"
+    ],
+    "holidays_by_index": {},
+    "sources": [
+      "https://www.nseindia.com/resources/exchange-communication-holidays",
+      "https://nsearchives.nseindia.com/content/circulars/FAOP71777.pdf",
+      "https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=20251212-8"
+    ]
+  },
+  "transaction_costs": {
+    "model": "zerodha_source",
+    "brokerage_per_order": 20,
+    "stt_sell_rate": 0.001,
+    "exchange_transaction_rate": 0.0003553,
+    "sebi_per_crore": 10,
+    "stamp_buy_rate": 3e-05,
+    "ipft_per_crore": 0.01,
+    "gst_rate": 0.18
+  },
+  "enabled_dtes": [
+    0
+  ]
+}
