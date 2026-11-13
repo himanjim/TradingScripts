@@ -1,0 +1,2128 @@
+{
+  "records": [
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20250801.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-08-01",
+      "index": "SENSEX",
+      "expiry": "2025-08-05",
+      "last": 55799,
+      "schema": "v3",
+      "size": 32272384,
+      "mtime_ns": 1794135650828690500,
+      "dte": 2,
+      "iso_week": "2025-W31",
+      "index_dte": {
+        "NIFTY": 4,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20250808.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-08-08",
+      "index": "SENSEX",
+      "expiry": "2025-08-12",
+      "last": 55799,
+      "schema": "v3",
+      "size": 32382976,
+      "mtime_ns": 1794135729711458400,
+      "dte": 2,
+      "iso_week": "2025-W32",
+      "index_dte": {
+        "NIFTY": 4,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20250822.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-08-22",
+      "index": "SENSEX",
+      "expiry": "2025-08-26",
+      "last": 55799,
+      "schema": "v3",
+      "size": 30875648,
+      "mtime_ns": 1794135859432694300,
+      "dte": 2,
+      "iso_week": "2025-W34",
+      "index_dte": {
+        "NIFTY": 3,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20250829.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-08-29",
+      "index": "NIFTY",
+      "expiry": "2025-09-02",
+      "last": 55799,
+      "schema": "v3",
+      "size": 23719936,
+      "mtime_ns": 1794135505736409200,
+      "dte": 2,
+      "iso_week": "2025-W35",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20250905.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-09-05",
+      "index": "NIFTY",
+      "expiry": "2025-09-09",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24248320,
+      "mtime_ns": 1793977910105609100,
+      "dte": 2,
+      "iso_week": "2025-W36",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20250912.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-09-12",
+      "index": "NIFTY",
+      "expiry": "2025-09-16",
+      "last": 55799,
+      "schema": "v3",
+      "size": 22298624,
+      "mtime_ns": 1793977932137308600,
+      "dte": 2,
+      "iso_week": "2025-W37",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20250919.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-09-19",
+      "index": "NIFTY",
+      "expiry": "2025-09-23",
+      "last": 55799,
+      "schema": "v3",
+      "size": 23351296,
+      "mtime_ns": 1793977962451479900,
+      "dte": 2,
+      "iso_week": "2025-W38",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20250926.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-09-26",
+      "index": "NIFTY",
+      "expiry": "2025-09-30",
+      "last": 55799,
+      "schema": "v3",
+      "size": 23949312,
+      "mtime_ns": 1793977993375129000,
+      "dte": 2,
+      "iso_week": "2025-W39",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 3
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251003.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-10-03",
+      "index": "NIFTY",
+      "expiry": "2025-10-07",
+      "last": 55799,
+      "schema": "v3",
+      "size": 23068672,
+      "mtime_ns": 1793978041908573000,
+      "dte": 2,
+      "iso_week": "2025-W40",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251010.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-10-10",
+      "index": "NIFTY",
+      "expiry": "2025-10-14",
+      "last": 55799,
+      "schema": "v3",
+      "size": 23412736,
+      "mtime_ns": 1794135571466662000,
+      "dte": 2,
+      "iso_week": "2025-W41",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251024.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-10-24",
+      "index": "NIFTY",
+      "expiry": "2025-10-28",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24903680,
+      "mtime_ns": 1794135594288459400,
+      "dte": 2,
+      "iso_week": "2025-W43",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251031.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-10-31",
+      "index": "NIFTY",
+      "expiry": "2025-11-04",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24256512,
+      "mtime_ns": 1793978189269987400,
+      "dte": 2,
+      "iso_week": "2025-W44",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 3
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251107.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-11-07",
+      "index": "NIFTY",
+      "expiry": "2025-11-11",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24657920,
+      "mtime_ns": 1793978224205676800,
+      "dte": 2,
+      "iso_week": "2025-W45",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251114.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-11-14",
+      "index": "NIFTY",
+      "expiry": "2025-11-18",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24518656,
+      "mtime_ns": 1793978257633448000,
+      "dte": 2,
+      "iso_week": "2025-W46",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251121.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-11-21",
+      "index": "NIFTY",
+      "expiry": "2025-11-25",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24424448,
+      "mtime_ns": 1793978292808126500,
+      "dte": 2,
+      "iso_week": "2025-W47",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251128.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-11-28",
+      "index": "NIFTY",
+      "expiry": "2025-12-02",
+      "last": 55799,
+      "schema": "v3",
+      "size": 23502848,
+      "mtime_ns": 1793978332864489800,
+      "dte": 2,
+      "iso_week": "2025-W48",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251205.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-12-05",
+      "index": "NIFTY",
+      "expiry": "2025-12-09",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24170496,
+      "mtime_ns": 1793978387938389400,
+      "dte": 2,
+      "iso_week": "2025-W49",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251212.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-12-12",
+      "index": "NIFTY",
+      "expiry": "2025-12-16",
+      "last": 55799,
+      "schema": "v3",
+      "size": 23977984,
+      "mtime_ns": 1793978425596873900,
+      "dte": 2,
+      "iso_week": "2025-W50",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251219.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-12-19",
+      "index": "NIFTY",
+      "expiry": "2025-12-23",
+      "last": 55799,
+      "schema": "v3",
+      "size": 23142400,
+      "mtime_ns": 1793978460138855700,
+      "dte": 2,
+      "iso_week": "2025-W51",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 3
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251226.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-12-26",
+      "index": "NIFTY",
+      "expiry": "2025-12-30",
+      "last": 55799,
+      "schema": "v3",
+      "size": 21684224,
+      "mtime_ns": 1793978493477815700,
+      "dte": 2,
+      "iso_week": "2025-W52",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260102.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-01-02",
+      "index": "NIFTY",
+      "expiry": "2026-01-06",
+      "last": 55799,
+      "schema": "v3",
+      "size": 22761472,
+      "mtime_ns": 1793978544090904200,
+      "dte": 2,
+      "iso_week": "2026-W01",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260109.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-01-09",
+      "index": "NIFTY",
+      "expiry": "2026-01-13",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25014272,
+      "mtime_ns": 1793978579872496900,
+      "dte": 2,
+      "iso_week": "2026-W02",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 3
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260116.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-01-16",
+      "index": "NIFTY",
+      "expiry": "2026-01-20",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24739840,
+      "mtime_ns": 1793978617864092200,
+      "dte": 2,
+      "iso_week": "2026-W03",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260201.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-02-01",
+      "index": "NIFTY",
+      "expiry": "2026-02-03",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25726976,
+      "mtime_ns": 1793978719257240200,
+      "dte": 2,
+      "iso_week": "2026-W05",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260206.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-02-06",
+      "index": "NIFTY",
+      "expiry": "2026-02-10",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25079808,
+      "mtime_ns": 1793978757101868700,
+      "dte": 2,
+      "iso_week": "2026-W06",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260213.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-02-13",
+      "index": "NIFTY",
+      "expiry": "2026-02-17",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24707072,
+      "mtime_ns": 1793978792417391300,
+      "dte": 2,
+      "iso_week": "2026-W07",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260220.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-02-20",
+      "index": "NIFTY",
+      "expiry": "2026-02-24",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25632768,
+      "mtime_ns": 1793978838249124700,
+      "dte": 2,
+      "iso_week": "2026-W08",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260306.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-03-06",
+      "index": "NIFTY",
+      "expiry": "2026-03-10",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24989696,
+      "mtime_ns": 1793978920027314200,
+      "dte": 2,
+      "iso_week": "2026-W10",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260313.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-03-13",
+      "index": "NIFTY",
+      "expiry": "2026-03-17",
+      "last": 55799,
+      "schema": "v3",
+      "size": 26370048,
+      "mtime_ns": 1793978960240115000,
+      "dte": 2,
+      "iso_week": "2026-W11",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260320.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-03-20",
+      "index": "NIFTY",
+      "expiry": "2026-03-24",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25804800,
+      "mtime_ns": 1793979010549242200,
+      "dte": 2,
+      "iso_week": "2026-W12",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 3
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260417.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-04-17",
+      "index": "NIFTY",
+      "expiry": "2026-04-21",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24367104,
+      "mtime_ns": 1793979175566313300,
+      "dte": 2,
+      "iso_week": "2026-W16",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260424.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-04-24",
+      "index": "NIFTY",
+      "expiry": "2026-04-28",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25366528,
+      "mtime_ns": 1793979212949728400,
+      "dte": 2,
+      "iso_week": "2026-W17",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260508.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-05-08",
+      "index": "NIFTY",
+      "expiry": "2026-05-12",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24625152,
+      "mtime_ns": 1793979287304719600,
+      "dte": 2,
+      "iso_week": "2026-W19",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260515.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-05-15",
+      "index": "NIFTY",
+      "expiry": "2026-05-19",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25030656,
+      "mtime_ns": 1793979333094449100,
+      "dte": 2,
+      "iso_week": "2026-W20",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260522.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-05-22",
+      "index": "NIFTY",
+      "expiry": "2026-05-26",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24788992,
+      "mtime_ns": 1793979376050601900,
+      "dte": 2,
+      "iso_week": "2026-W21",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 3
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260529.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-05-29",
+      "index": "NIFTY",
+      "expiry": "2026-06-02",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24940544,
+      "mtime_ns": 1793979414407559800,
+      "dte": 2,
+      "iso_week": "2026-W22",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260605.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-06-05",
+      "index": "NIFTY",
+      "expiry": "2026-06-09",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25378816,
+      "mtime_ns": 1793979454451569300,
+      "dte": 2,
+      "iso_week": "2026-W23",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260612.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-06-12",
+      "index": "NIFTY",
+      "expiry": "2026-06-16",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25624576,
+      "mtime_ns": 1793979501322633100,
+      "dte": 2,
+      "iso_week": "2026-W24",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260619.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-06-19",
+      "index": "NIFTY",
+      "expiry": "2026-06-23",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24600576,
+      "mtime_ns": 1793979538005747200,
+      "dte": 2,
+      "iso_week": "2026-W25",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260703.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-07-03",
+      "index": "NIFTY",
+      "expiry": "2026-07-07",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24444928,
+      "mtime_ns": 1793979615904612700,
+      "dte": 2,
+      "iso_week": "2026-W27",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260710.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-07-10",
+      "index": "NIFTY",
+      "expiry": "2026-07-14",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24174592,
+      "mtime_ns": 1793979661923610100,
+      "dte": 2,
+      "iso_week": "2026-W28",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260717.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-07-17",
+      "index": "NIFTY",
+      "expiry": "2026-07-21",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24535040,
+      "mtime_ns": 1793979699599214200,
+      "dte": 2,
+      "iso_week": "2026-W29",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260724.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-07-24",
+      "index": "NIFTY",
+      "expiry": "2026-07-28",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25210880,
+      "mtime_ns": 1793979747327154700,
+      "dte": 2,
+      "iso_week": "2026-W30",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260731.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-07-31",
+      "index": "NIFTY",
+      "expiry": "2026-08-04",
+      "last": 55799,
+      "schema": "v3",
+      "size": 23871488,
+      "mtime_ns": 1793979785579422600,
+      "dte": 2,
+      "iso_week": "2026-W31",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "G:\\My Drive\\Trading\\Kite_tick-data\\kite_option_spikes_v3_NIFTY_20260807.sqlite3",
+      "folder": "G:/My Drive/Trading/Kite_tick-data",
+      "date": "2026-08-07",
+      "index": "NIFTY",
+      "expiry": "2026-08-11",
+      "last": 56400,
+      "schema": "v3",
+      "size": 21237760,
+      "mtime_ns": 1786097920135000000,
+      "dte": 2,
+      "iso_week": "2026-W32",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "G:\\My Drive\\Trading\\Kite_tick-data\\kite_option_spikes_v3_NIFTY_20260821.sqlite3",
+      "folder": "G:/My Drive/Trading/Kite_tick-data",
+      "date": "2026-08-21",
+      "index": "NIFTY",
+      "expiry": "2026-08-25",
+      "last": 56400,
+      "schema": "v3",
+      "size": 17313792,
+      "mtime_ns": 1787309619320000000,
+      "dte": 2,
+      "iso_week": "2026-W34",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "G:\\My Drive\\Trading\\Kite_tick-data\\kite_option_spikes_v3_NIFTY_20260828.sqlite3",
+      "folder": "G:/My Drive/Trading/Kite_tick-data",
+      "date": "2026-08-28",
+      "index": "NIFTY",
+      "expiry": "2026-09-01",
+      "last": 56400,
+      "schema": "v3",
+      "size": 20180992,
+      "mtime_ns": 1787928266374000000,
+      "dte": 2,
+      "iso_week": "2026-W35",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "G:\\My Drive\\Trading\\Kite_tick-data\\kite_option_spikes_v3_NIFTY_20260918.sqlite3",
+      "folder": "G:/My Drive/Trading/Kite_tick-data",
+      "date": "2026-09-18",
+      "index": "NIFTY",
+      "expiry": "2026-09-22",
+      "last": 56400,
+      "schema": "v3",
+      "size": 20176896,
+      "mtime_ns": 1789726277323000000,
+      "dte": 2,
+      "iso_week": "2026-W38",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "G:\\My Drive\\Trading\\Kite_tick-data\\kite_option_spikes_v3_NIFTY_20260925.sqlite3",
+      "folder": "G:/My Drive/Trading/Kite_tick-data",
+      "date": "2026-09-25",
+      "index": "NIFTY",
+      "expiry": "2026-09-29",
+      "last": 56400,
+      "schema": "v3",
+      "size": 21987328,
+      "mtime_ns": 1790332153824000000,
+      "dte": 2,
+      "iso_week": "2026-W39",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "G:\\My Drive\\Trading\\Kite_tick-data\\kite_option_spikes_v3_NIFTY_20261009.sqlite3",
+      "folder": "G:/My Drive/Trading/Kite_tick-data",
+      "date": "2026-10-09",
+      "index": "NIFTY",
+      "expiry": "2026-10-13",
+      "last": 56400,
+      "schema": "v3",
+      "size": 23949312,
+      "mtime_ns": 1791540693432000000,
+      "dte": 2,
+      "iso_week": "2026-W41",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "G:\\My Drive\\Trading\\Kite_tick-data\\kite_option_spikes_v3_NIFTY_20261023.sqlite3",
+      "folder": "G:/My Drive/Trading/Kite_tick-data",
+      "date": "2026-10-23",
+      "index": "NIFTY",
+      "expiry": "2026-10-27",
+      "last": 56399,
+      "schema": "v3",
+      "size": 26128384,
+      "mtime_ns": 1792750816543000000,
+      "dte": 2,
+      "iso_week": "2026-W43",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "G:\\My Drive\\Trading\\Kite_tick-data\\kite_option_spikes_v3_NIFTY_20261030.sqlite3",
+      "folder": "G:/My Drive/Trading/Kite_tick-data",
+      "date": "2026-10-30",
+      "index": "NIFTY",
+      "expiry": "2026-11-03",
+      "last": 56400,
+      "schema": "v3",
+      "size": 24514560,
+      "mtime_ns": 1793358670641000000,
+      "dte": 2,
+      "iso_week": "2026-W44",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    },
+    {
+      "path": "G:\\My Drive\\Trading\\Kite_tick-data\\kite_option_spikes_v3_NIFTY_20261106.sqlite3",
+      "folder": "G:/My Drive/Trading/Kite_tick-data",
+      "date": "2026-11-06",
+      "index": "NIFTY",
+      "expiry": "2026-11-09",
+      "last": 56400,
+      "schema": "v3",
+      "size": 26865664,
+      "mtime_ns": 1793960403846000000,
+      "dte": 2,
+      "iso_week": "2026-W45",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    }
+  ],
+  "excluded_dte2_records": [
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20250805.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-08-05",
+      "index": "NIFTY",
+      "expiry": "2025-08-07",
+      "last": 55799,
+      "schema": "v3",
+      "size": 22630400,
+      "mtime_ns": 1793977724721947200,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20250812.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-08-12",
+      "index": "NIFTY",
+      "expiry": "2025-08-14",
+      "last": 55799,
+      "schema": "v3",
+      "size": 23851008,
+      "mtime_ns": 1793977762586916100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20250814.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-08-14",
+      "index": "SENSEX",
+      "expiry": "2025-08-19",
+      "last": 55799,
+      "schema": "v3",
+      "size": 23838720,
+      "mtime_ns": 1794135786528435900,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20250819.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-08-19",
+      "index": "NIFTY",
+      "expiry": "2025-08-21",
+      "last": 55799,
+      "schema": "v3",
+      "size": 22691840,
+      "mtime_ns": 1793977796825688900,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20250825.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-08-25",
+      "index": "NIFTY",
+      "expiry": "2025-08-28",
+      "last": 55799,
+      "schema": "v3",
+      "size": 22523904,
+      "mtime_ns": 1793977833573136100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 1
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20250902.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-09-02",
+      "index": "SENSEX",
+      "expiry": "2025-09-04",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29544448,
+      "mtime_ns": 1794135915554941100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20250909.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-09-09",
+      "index": "SENSEX",
+      "expiry": "2025-09-11",
+      "last": 55799,
+      "schema": "v3",
+      "size": 26517504,
+      "mtime_ns": 1794135997861666100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20250916.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-09-16",
+      "index": "SENSEX",
+      "expiry": "2025-09-18",
+      "last": 55799,
+      "schema": "v3",
+      "size": 26103808,
+      "mtime_ns": 1794136050246574900,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20250923.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-09-23",
+      "index": "SENSEX",
+      "expiry": "2025-09-25",
+      "last": 55799,
+      "schema": "v3",
+      "size": 30072832,
+      "mtime_ns": 1794136127242567700,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20250929.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-09-29",
+      "index": "SENSEX",
+      "expiry": "2025-10-01",
+      "last": 55799,
+      "schema": "v3",
+      "size": 30564352,
+      "mtime_ns": 1794136209390225000,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 1,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251007.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-10-07",
+      "index": "SENSEX",
+      "expiry": "2025-10-09",
+      "last": 55799,
+      "schema": "v3",
+      "size": 31338496,
+      "mtime_ns": 1794136272199324200,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251014.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-10-14",
+      "index": "SENSEX",
+      "expiry": "2025-10-16",
+      "last": 55799,
+      "schema": "v3",
+      "size": 31895552,
+      "mtime_ns": 1794136398880950000,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20251016.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-10-16",
+      "index": "NIFTY",
+      "expiry": "2025-10-20",
+      "last": 55799,
+      "schema": "v3",
+      "size": 23302144,
+      "mtime_ns": 1793978109147101700,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251017.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-10-17",
+      "index": "SENSEX",
+      "expiry": "2025-10-23",
+      "last": 55799,
+      "schema": "v3",
+      "size": 32448512,
+      "mtime_ns": 1794136467468259300,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 1,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251028.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-10-28",
+      "index": "SENSEX",
+      "expiry": "2025-10-30",
+      "last": 55799,
+      "schema": "v3",
+      "size": 30937088,
+      "mtime_ns": 1794136544536451100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251103.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-11-03",
+      "index": "SENSEX",
+      "expiry": "2025-11-06",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29990912,
+      "mtime_ns": 1794136633374088100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 1,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251111.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-11-11",
+      "index": "SENSEX",
+      "expiry": "2025-11-13",
+      "last": 55799,
+      "schema": "v3",
+      "size": 31219712,
+      "mtime_ns": 1794136711510680100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251118.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-11-18",
+      "index": "SENSEX",
+      "expiry": "2025-11-20",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29016064,
+      "mtime_ns": 1794136781930834800,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251125.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-11-25",
+      "index": "SENSEX",
+      "expiry": "2025-11-27",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29364224,
+      "mtime_ns": 1794136850142999500,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251202.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-12-02",
+      "index": "SENSEX",
+      "expiry": "2025-12-04",
+      "last": 55799,
+      "schema": "v3",
+      "size": 28991488,
+      "mtime_ns": 1794136915822898400,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251209.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-12-09",
+      "index": "SENSEX",
+      "expiry": "2025-12-11",
+      "last": 55799,
+      "schema": "v3",
+      "size": 31891456,
+      "mtime_ns": 1794136980484543000,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251216.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-12-16",
+      "index": "SENSEX",
+      "expiry": "2025-12-18",
+      "last": 55799,
+      "schema": "v3",
+      "size": 28553216,
+      "mtime_ns": 1794137041827892600,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251222.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-12-22",
+      "index": "SENSEX",
+      "expiry": "2025-12-24",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25997312,
+      "mtime_ns": 1794137104834535400,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 1,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20251230.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2025-12-30",
+      "index": "SENSEX",
+      "expiry": "2026-01-01",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29315072,
+      "mtime_ns": 1794137157164277500,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260106.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-01-06",
+      "index": "SENSEX",
+      "expiry": "2026-01-08",
+      "last": 55799,
+      "schema": "v3",
+      "size": 31027200,
+      "mtime_ns": 1794137302837850100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260112.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-01-12",
+      "index": "SENSEX",
+      "expiry": "2026-01-14",
+      "last": 55799,
+      "schema": "v3",
+      "size": 32862208,
+      "mtime_ns": 1794137359545518400,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 1,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260120.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-01-20",
+      "index": "SENSEX",
+      "expiry": "2026-01-22",
+      "last": 55799,
+      "schema": "v3",
+      "size": 31031296,
+      "mtime_ns": 1794137435972415900,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260122.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-01-22",
+      "index": "NIFTY",
+      "expiry": "2026-01-27",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24592384,
+      "mtime_ns": 1793978654337172900,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260127.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-01-27",
+      "index": "SENSEX",
+      "expiry": "2026-01-29",
+      "last": 55799,
+      "schema": "v3",
+      "size": 33796096,
+      "mtime_ns": 1794137499407317200,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260203.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-02-03",
+      "index": "SENSEX",
+      "expiry": "2026-02-05",
+      "last": 55799,
+      "schema": "v3",
+      "size": 32653312,
+      "mtime_ns": 1794137578932938100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260210.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-02-10",
+      "index": "SENSEX",
+      "expiry": "2026-02-12",
+      "last": 55799,
+      "schema": "v3",
+      "size": 27656192,
+      "mtime_ns": 1794137643557315000,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260217.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-02-17",
+      "index": "SENSEX",
+      "expiry": "2026-02-19",
+      "last": 55799,
+      "schema": "v3",
+      "size": 30728192,
+      "mtime_ns": 1794137704667494700,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260224.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-02-24",
+      "index": "SENSEX",
+      "expiry": "2026-02-26",
+      "last": 55799,
+      "schema": "v3",
+      "size": 31629312,
+      "mtime_ns": 1794137782649685100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260226.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-02-26",
+      "index": "NIFTY",
+      "expiry": "2026-03-02",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24391680,
+      "mtime_ns": 1793978875938309200,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260302.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-03-02",
+      "index": "SENSEX",
+      "expiry": "2026-03-05",
+      "last": 55799,
+      "schema": "v3",
+      "size": 32542720,
+      "mtime_ns": 1794137842887943700,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260310.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-03-10",
+      "index": "SENSEX",
+      "expiry": "2026-03-12",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29859840,
+      "mtime_ns": 1794137924345680100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260317.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-03-17",
+      "index": "SENSEX",
+      "expiry": "2026-03-19",
+      "last": 55799,
+      "schema": "v3",
+      "size": 33161216,
+      "mtime_ns": 1794138003685041500,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260323.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-03-23",
+      "index": "SENSEX",
+      "expiry": "2026-03-25",
+      "last": 55799,
+      "schema": "v3",
+      "size": 28700672,
+      "mtime_ns": 1794138078426450200,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 1,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260325.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-03-25",
+      "index": "NIFTY",
+      "expiry": "2026-03-30",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25542656,
+      "mtime_ns": 1793979051308977500,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260330.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-03-30",
+      "index": "SENSEX",
+      "expiry": "2026-04-02",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29151232,
+      "mtime_ns": 1794138150196972600,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260402.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-04-02",
+      "index": "NIFTY",
+      "expiry": "2026-04-07",
+      "last": 55799,
+      "schema": "v3",
+      "size": 25456640,
+      "mtime_ns": 1793979095034279500,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260407.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-04-07",
+      "index": "SENSEX",
+      "expiry": "2026-04-09",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29818880,
+      "mtime_ns": 1794138224403952500,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260409.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-04-09",
+      "index": "NIFTY",
+      "expiry": "2026-04-13",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24195072,
+      "mtime_ns": 1793979131728931300,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260413.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-04-13",
+      "index": "SENSEX",
+      "expiry": "2026-04-16",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29163520,
+      "mtime_ns": 1794138295323112100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260421.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-04-21",
+      "index": "SENSEX",
+      "expiry": "2026-04-23",
+      "last": 55799,
+      "schema": "v3",
+      "size": 26632192,
+      "mtime_ns": 1794138369207889000,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260428.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-04-28",
+      "index": "SENSEX",
+      "expiry": "2026-04-30",
+      "last": 55799,
+      "schema": "v3",
+      "size": 28663808,
+      "mtime_ns": 1794138430993132400,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260430.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-04-30",
+      "index": "NIFTY",
+      "expiry": "2026-05-05",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24629248,
+      "mtime_ns": 1793979250150852400,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260505.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-05-05",
+      "index": "SENSEX",
+      "expiry": "2026-05-07",
+      "last": 55799,
+      "schema": "v3",
+      "size": 31019008,
+      "mtime_ns": 1794138552374141100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260512.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-05-12",
+      "index": "SENSEX",
+      "expiry": "2026-05-14",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29028352,
+      "mtime_ns": 1794138632457687000,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260519.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-05-19",
+      "index": "SENSEX",
+      "expiry": "2026-05-21",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29048832,
+      "mtime_ns": 1794138692174859800,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260525.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-05-25",
+      "index": "SENSEX",
+      "expiry": "2026-05-27",
+      "last": 55799,
+      "schema": "v3",
+      "size": 26914816,
+      "mtime_ns": 1794138779420071300,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 1,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260602.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-06-02",
+      "index": "SENSEX",
+      "expiry": "2026-06-04",
+      "last": 55799,
+      "schema": "v3",
+      "size": 31789056,
+      "mtime_ns": 1794138838680873900,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260609.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-06-09",
+      "index": "SENSEX",
+      "expiry": "2026-06-11",
+      "last": 55799,
+      "schema": "v3",
+      "size": 28930048,
+      "mtime_ns": 1794138911644685300,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260616.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-06-16",
+      "index": "SENSEX",
+      "expiry": "2026-06-18",
+      "last": 55799,
+      "schema": "v3",
+      "size": 27262976,
+      "mtime_ns": 1794138983264771500,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260623.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-06-23",
+      "index": "SENSEX",
+      "expiry": "2026-06-25",
+      "last": 55799,
+      "schema": "v3",
+      "size": 30212096,
+      "mtime_ns": 1794139045658695700,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_NIFTY_20260625.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-06-25",
+      "index": "NIFTY",
+      "expiry": "2026-06-30",
+      "last": 55799,
+      "schema": "v3",
+      "size": 24043520,
+      "mtime_ns": 1793979574590262100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260630.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-06-30",
+      "index": "SENSEX",
+      "expiry": "2026-07-02",
+      "last": 55799,
+      "schema": "v3",
+      "size": 28962816,
+      "mtime_ns": 1794139115802875900,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260707.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-07-07",
+      "index": "SENSEX",
+      "expiry": "2026-07-09",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29487104,
+      "mtime_ns": 1794139168996657700,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260714.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-07-14",
+      "index": "SENSEX",
+      "expiry": "2026-07-16",
+      "last": 55799,
+      "schema": "v3",
+      "size": 29270016,
+      "mtime_ns": 1794139249266529100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260721.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-07-21",
+      "index": "SENSEX",
+      "expiry": "2026-07-23",
+      "last": 55799,
+      "schema": "v3",
+      "size": 27406336,
+      "mtime_ns": 1794139304595482200,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "C:\\Users\\himan\\Documents\\Accelpix_SQLite_1sec\\accelpix_1sec_v3_SENSEX_20260728.sqlite3",
+      "folder": "C:/Users/himan/Documents/Accelpix_SQLite_1sec",
+      "date": "2026-07-28",
+      "index": "SENSEX",
+      "expiry": "2026-07-30",
+      "last": 55799,
+      "schema": "v3",
+      "size": 26484736,
+      "mtime_ns": 1794139377047147100,
+      "dte": 2,
+      "reason": "overlap",
+      "index_dte": {
+        "NIFTY": 0,
+        "SENSEX": 2
+      }
+    },
+    {
+      "path": "G:\\My Drive\\Trading\\Kite_tick-data\\kite_options_1sec_v2_20260731.sqlite3",
+      "folder": "G:/My Drive/Trading/Kite_tick-data",
+      "date": "2026-07-31",
+      "index": "NIFTY",
+      "expiry": "2026-08-04",
+      "last": 55799,
+      "schema": "v2",
+      "size": 1359552512,
+      "mtime_ns": 1785493332666000000,
+      "dte": 2,
+      "reason": "week_already_selected",
+      "index_dte": {
+        "NIFTY": 2,
+        "SENSEX": 4
+      }
+    }
+  ],
+  "raw_dte_counts": {
+    "0": 133,
+    "2": 115,
+    "1": 130,
+    "3": 1,
+    "4": 2
+  },
+  "exclusion_counts": {
+    "overlap": 61,
+    "week_already_selected": 1
+  },
+  "training_sessions": 35,
+  "later_sessions": 18,
+  "counts_by_index": {
+    "SENSEX": 3,
+    "NIFTY": 50
+  },
+  "counts_by_folder": {
+    "C:/Users/himan/Documents/Accelpix_SQLite_1sec": 44,
+    "G:/My Drive/Trading/Kite_tick-data": 9
+  },
+  "supplementary_expiries": {
+    "SENSEX": {
+      "2026-09-24": "https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=20250623-59"
+    }
+  },
+  "expiry_calendar": {
+    "NIFTY": [
+      "2025-07-31",
+      "2025-08-07",
+      "2025-08-14",
+      "2025-08-21",
+      "2025-08-28",
+      "2025-09-02",
+      "2025-09-09",
+      "2025-09-16",
+      "2025-09-23",
+      "2025-09-30",
+      "2025-10-07",
+      "2025-10-14",
+      "2025-10-20",
+      "2025-10-28",
+      "2025-11-04",
+      "2025-11-11",
+      "2025-11-18",
+      "2025-11-25",
+      "2025-12-02",
+      "2025-12-09",
+      "2025-12-16",
+      "2025-12-23",
+      "2025-12-30",
+      "2026-01-06",
+      "2026-01-13",
+      "2026-01-20",
+      "2026-01-27",
+      "2026-02-03",
+      "2026-02-10",
+      "2026-02-17",
+      "2026-02-24",
+      "2026-03-02",
+      "2026-03-10",
+      "2026-03-17",
+      "2026-03-24",
+      "2026-03-30",
+      "2026-04-07",
+      "2026-04-13",
+      "2026-04-21",
+      "2026-04-28",
+      "2026-05-05",
+      "2026-05-12",
+      "2026-05-19",
+      "2026-05-26",
+      "2026-06-02",
+      "2026-06-09",
+      "2026-06-16",
+      "2026-06-23",
+      "2026-06-30",
+      "2026-07-07",
+      "2026-07-14",
+      "2026-07-21",
+      "2026-07-28",
+      "2026-08-04",
+      "2026-08-11",
+      "2026-08-18",
+      "2026-08-25",
+      "2026-09-01",
+      "2026-09-08",
+      "2026-09-15",
+      "2026-09-22",
+      "2026-09-29",
+      "2026-10-06",
+      "2026-10-13",
+      "2026-10-19",
+      "2026-10-27",
+      "2026-11-03",
+      "2026-11-09"
+    ],
+    "SENSEX": [
+      "2025-08-05",
+      "2025-08-12",
+      "2025-08-19",
+      "2025-08-26",
+      "2025-09-04",
+      "2025-09-11",
+      "2025-09-18",
+      "2025-09-25",
+      "2025-10-01",
+      "2025-10-09",
+      "2025-10-16",
+      "2025-10-23",
+      "2025-10-30",
+      "2025-11-06",
+      "2025-11-13",
+      "2025-11-20",
+      "2025-11-27",
+      "2025-12-04",
+      "2025-12-11",
+      "2025-12-18",
+      "2025-12-24",
+      "2026-01-01",
+      "2026-01-08",
+      "2026-01-14",
+      "2026-01-22",
+      "2026-01-29",
+      "2026-02-05",
+      "2026-02-12",
+      "2026-02-19",
+      "2026-02-26",
+      "2026-03-05",
+      "2026-03-12",
+      "2026-03-19",
+      "2026-03-25",
+      "2026-04-02",
+      "2026-04-09",
+      "2026-04-16",
+      "2026-04-23",
+      "2026-04-30",
+      "2026-05-07",
+      "2026-05-14",
+      "2026-05-21",
+      "2026-05-27",
+      "2026-06-04",
+      "2026-06-11",
+      "2026-06-18",
+      "2026-06-25",
+      "2026-07-02",
+      "2026-07-09",
+      "2026-07-16",
+      "2026-07-23",
+      "2026-07-30",
+      "2026-08-06",
+      "2026-08-13",
+      "2026-08-20",
+      "2026-08-27",
+      "2026-09-03",
+      "2026-09-10",
+      "2026-09-17",
+      "2026-09-24",
+      "2026-10-01",
+      "2026-10-08",
+      "2026-10-15",
+      "2026-10-22",
+      "2026-10-29",
+      "2026-11-05",
+      "2026-11-12"
+    ]
+  }
+}
