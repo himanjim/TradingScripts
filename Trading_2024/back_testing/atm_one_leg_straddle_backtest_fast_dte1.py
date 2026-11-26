@@ -117,9 +117,11 @@ def build_session_cache(session, step):
 
 
 def load_sessions(data_dirs, cache_root, calendar, strike_steps, file_glob='*.sqlite3', log=print,
-                  selected_dtes=(0, 1, 2)):
-    """List of session dicts (one per index/day) with DTE computed from `calendar`."""
-    out, seen = [], set()
+                  selected_dtes=(0, 1, 2), one_per_day=True):
+    """List of session dicts (one per index/day) with DTE computed from `calendar`.
+    one_per_day: a day is traded only by its lowest-DTE session over ALL DTEs found
+    (ties -> NIFTY), so e.g. a DTE=1 run skips days where the other index is on expiry."""
+    out, seen, found = [], set(), []
     for data_dir in data_dirs:
         data_dir = Path(data_dir)
         cdir = Path(cache_root) / hashlib.sha1(str(data_dir.resolve()).encode()).hexdigest()[:10]
@@ -140,31 +142,38 @@ def load_sessions(data_dirs, cache_root, calendar, strike_steps, file_glob='*.sq
                 except ValueError as exc:
                     log(f'  ERROR {path.name} {s.index}: {exc}')
                     continue
-                if dte not in selected_dtes:
-                    continue
                 key = (s.day, s.index)
                 if key in seen:
-                    log(f'  duplicate {key} in {path.name}: kept the first data dir')
+                    if dte in selected_dtes:
+                        log(f'  duplicate {key} in {path.name}: kept the first data dir')
                     continue
                 seen.add(key)
-                step = strike_steps[s.index]
-                cf = cdir / f'{path.stem}__{s.index}.npz'
-                data = None
-                if cf.exists():
-                    z = np.load(cf)
-                    if str(z['stamp']) == stamp and int(z['step']) == step:
-                        data = dict(spot=z['spot'].astype(np.int64), opt=z['opt'].astype(np.int64),
-                                    strikes=z['strikes'].astype(np.int64))
-                if data is None:
-                    log(f'  caching [{n}/{len(files)}] {path.name} {s.index}')
-                    data = build_session_cache(s, step)
-                    tmp = cf.with_suffix('.tmp.npz')
-                    np.savez_compressed(tmp, spot=data['spot'].astype(np.int32),
-                                        opt=data['opt'].astype(np.int32), strikes=data['strikes'],
-                                        step=step, stamp=stamp)
-                    tmp.replace(cf)
-                out.append(dict(source_file=path.name, date=s.day, index=s.index, expiry=s.expiry,
-                                dte=dte, step=step, last=s.last_second, **data))
+                found.append((dte, s, path, stamp, cdir, n, len(files)))
+    best = {}
+    for dte, s, *_ in found:
+        if (dte, s.index) < best.get(s.day, (99, '')):
+            best[s.day] = (dte, s.index)
+    for dte, s, path, stamp, cdir, n, nfiles in found:
+        if dte not in selected_dtes or (one_per_day and best[s.day] != (dte, s.index)):
+            continue
+        step = strike_steps[s.index]
+        cf = cdir / f'{path.stem}__{s.index}.npz'
+        data = None
+        if cf.exists():
+            z = np.load(cf)
+            if str(z['stamp']) == stamp and int(z['step']) == step:
+                data = dict(spot=z['spot'].astype(np.int64), opt=z['opt'].astype(np.int64),
+                            strikes=z['strikes'].astype(np.int64))
+        if data is None:
+            log(f'  caching [{n}/{nfiles}] {path.name} {s.index}')
+            data = build_session_cache(s, step)
+            tmp = cf.with_suffix('.tmp.npz')
+            np.savez_compressed(tmp, spot=data['spot'].astype(np.int32),
+                                opt=data['opt'].astype(np.int32), strikes=data['strikes'],
+                                step=step, stamp=stamp)
+            tmp.replace(cf)
+        out.append(dict(source_file=path.name, date=s.day, index=s.index, expiry=s.expiry,
+                        dte=dte, step=step, last=s.last_second, **data))
     out.sort(key=lambda r: (r['date'], r['index']))
     return out
 
@@ -842,7 +851,8 @@ def main(argv=None):
         args.data_dir = [Path(v) for v in ([value] if isinstance(value, str) else value)]
     print(f'numba: {"on" if HAVE_NUMBA else "OFF (pure Python, slow)"}', flush=True)
     sessions = load_sessions(args.data_dir, args.cache_dir, base['calendar'],
-                             base['strike_step'], args.file, selected_dtes=profiles)
+                             base['strike_step'], args.file, selected_dtes=profiles,
+                             one_per_day=args.one_dte_per_day)
     if args.one_dte_per_day:      # decided before index/date filters, like the original
         sessions = one_dte_per_day(sessions)
     sessions = [s for s in sessions if not (args.index and s['index'] != args.index or

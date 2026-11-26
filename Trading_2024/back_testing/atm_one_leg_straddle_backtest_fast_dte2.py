@@ -120,7 +120,8 @@ def load_weekly_sessions(manifest, cache_root, cfg, first_date=None, last_date=N
         week = day.isocalendar()[:2]
         dtes = row['index_dte']
         if (week in weeks or row['dte'] != 2 or set(dtes) != {'NIFTY', 'SENSEX'}
-                or dtes[row['index']] != 2 or min(dtes.values()) != 2):
+                or dtes[row['index']] != 2 or min(dtes.values()) != 2
+                or (row['index'] != 'NIFTY' and dtes['NIFTY'] == 2)):   # tie -> NIFTY
             raise ValueError(f"Ineligible or duplicate weekly session: {row['date']} {row['index']}")
         weeks.add(week)
     cache_root = Path(cache_root)
